@@ -8,10 +8,13 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
 - `redsmaller.stl` is repaired (watertight, 46.51 × 45.02 × 21.06 mm, 3350.9 mm³).
   The unrepaired export is in commit `6fe8dd9`.
 
-## Avoiding broken exports (SketchUp 2017 Pro)
+## Avoiding broken exports (SketchUp 2017 Make — no built-in Solid Tools)
 - Defects in both redsmaller/redsphere sit at the flat-spot cut: leftover sphere cap below
   the plane, coincident stray faces, holes ⇒ the flat spot was made with a plane +
-  Intersect Faces + manual delete. Cut with Solid Tools (Trim/Subtract) on solid groups.
+  Intersect Faces + manual delete. Cut with **Eneroth Solid Tools** instead (installed
+  2026-10-07 from github.com/Eneroth3/eneroth-solid-tools 3.0.1; Tools → Eneroth Solid
+  Tools → Union/Subtract/Trim/Intersect, plus a toolbar). Click target first, then
+  modifier; Subtract deletes the modifier, Trim keeps it. Both must be solid groups.
 - Entity Info must read "Solid Group" (with a volume) before export; if not, run
   Tools → Solid Inspector² (installed 2026-10-07 from github.com/thomthom/solid-inspector
   v2.5.1, no TT_Lib² needed).
