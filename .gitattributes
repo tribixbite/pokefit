@@ -1,0 +1,5 @@
+# SketchUp exports and meshes: store bytes exactly (ASCII STL exports are CRLF)
+*.stl binary
+*.skp binary
+*.skb binary
+*.dae binary
