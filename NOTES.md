@@ -15,6 +15,10 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
   2026-10-07 from github.com/Eneroth3/eneroth-solid-tools 3.0.1; Tools → Eneroth Solid
   Tools → Union/Subtract/Trim/Intersect, plus a toolbar). Click target first, then
   modifier; Subtract deletes the modifier, Trim keeps it. Both must be solid groups.
+  Its menu.rb hides the tools on Make (`if Sketchup.is_pro?`, an Extension Warehouse
+  hosting rule; the booleans are pure Ruby). Installed copy is patched; patched package at
+  `%USERPROFILE%\Downloads\ene_solids_v3.0.1_make.rbz`. After any reinstall/update:
+  `python scripts/patch_ene_solids.py "%APPDATA%/SketchUp/SketchUp 2017/SketchUp/Plugins/ene_solids/menu.rb"`.
 - Entity Info must read "Solid Group" (with a volume) before export; if not, run
   Tools → Solid Inspector² (installed 2026-10-07 from github.com/thomthom/solid-inspector
   v2.5.1, no TT_Lib² needed).
