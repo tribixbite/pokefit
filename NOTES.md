@@ -8,6 +8,19 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
 - `redsmaller.stl` is repaired (watertight, 46.51 × 45.02 × 21.06 mm, 3350.9 mm³).
   The unrepaired export is in commit `6fe8dd9`.
 
+## pokeball.3mf (MakerWorld "functional Pokéball - no glue", Bambu project)
+- Parts: `python scripts/extract_3mf.py pokeball.3mf parts` → one STL per object in
+  `parts/` (git-ignored, derivable). Shell = `0_ball_shell_2x` (ids 2 and 8 are the same
+  mesh, printed twice). Native shell: outer R 38.74, inner R 36.81, wall 1.93 mm;
+  ×0.6 = the 60% size of red.stl. Model's assemble_item transforms are an exploded
+  layout, not the assembled ball.
+- Flat bottom: `python scripts/flat_spot.py parts/0_ball_shell_2x_id2.stl <out> --scale 0.6 --disk 8 --fill 10`
+  (final-mm diameters). Outputs `shell_flatbottom_60.stl` / `_100.stl`: 8 mm outer disk,
+  10 mm inner flat ceiling, pole wall 1.39 mm @60% (orig 1.16) / 2.07 @100% (orig 1.93).
+  Print ONE of these (bottom half) + one original shell. Rim on z=0 like the 3MF.
+- In SketchUp 2017 a 3MF opens only via Extensions → Universal Importer (installed);
+  for one part, import the extracted STL instead.
+
 ## Avoiding broken exports (SketchUp 2017 Make — no built-in Solid Tools)
 - Defects in both redsmaller/redsphere sit at the flat-spot cut: leftover sphere cap below
   the plane, coincident stray faces, holes ⇒ the flat spot was made with a plane +
