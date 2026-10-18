@@ -82,6 +82,8 @@ class Session:
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
     _frames: dict[tuple[str, int, int], list[Part]] = field(default_factory=dict)
     _points: dict[tuple[str, int, int], HullPoints] = field(default_factory=dict)
+    # Auto-placement results per configuration (the figure-scale-independent search).
+    _auto: dict[tuple, Any] = field(default_factory=dict)
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -156,14 +158,19 @@ class Report:
         return asdict(self)
 
 
-def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float
+def _steel_band(washer: Washer, diameter: float, relaxed: bool) -> tuple[float, float]:
+    """Radii allowed for pocket centres: magnet fully on steel, or (relaxed) centre on steel."""
+    return (washer.id / 2, washer.od / 2) if relaxed else washer.annulus(diameter)
+
+
+def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float, relaxed: bool = False
            ) -> tuple[list[Pocket], list[Check], tuple[float, float]]:
     """Pockets at figure scale `s` that sit on the steel ring while the figure fits.
 
     The figure frame's origin is at offset o in the ball frame, so the washer
     (on the ball axis) is centred at -o in the figure frame. The fit margin is
     1-Lipschitz in o, so every offset within the best margin m* of the best
-    offset o* still fits: a few such offsets are tried.
+    offset o* still fits; o* and 36 such offsets are tried.
     """
     spec = params.spec
     meshes = [p.mesh() for p in scaled(session.unit_parts(params), s)]
@@ -172,9 +179,9 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
     o0 = (float(o_star[0]), float(o_star[1]))
     if m_star < 0:
         return [], [Check("pockets:feet", "Feet", "fail", "Figure does not fit at this size.")], o0
-    lo, hi = washer.annulus(spec.diameter)
+    lo, hi = _steel_band(washer, spec.diameter, relaxed)
     cands = [o_star] + [o_star + m_star * f * np.array([np.cos(a), np.sin(a)])
-                        for f in (0.5, 0.95) for a in np.linspace(0, 2 * np.pi, 8, endpoint=False)]
+                        for f in (0.33, 0.66, 0.95) for a in np.linspace(0, 2 * np.pi, 12, endpoint=False)]
     first: list[Check] = []
     for o in cands:
         pockets, checks = choose_pockets(feet, region, spec, (-float(o[0]), -float(o[1]), lo, hi),
@@ -183,6 +190,34 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
             return pockets, checks, (float(o[0]), float(o[1]))
         first = first or checks
     return [], first, o0
+
+
+def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s_fit: float,
+                          relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
+    """Largest scale <= s_fit where two pockets fit the feet AND sit on the steel.
+
+    Not monotone at the small end (walls are absolute mm), so scan down in 4 %
+    steps from the fit limit, then bisect between the last failure and the first success.
+    """
+    best = None
+    prev_fail = None
+    s = s_fit
+    while s >= max(0.05, 0.25 * s_fit):
+        pk, ch, off = _place(session, params, cavity, washer, s, relaxed)
+        if pk:
+            best = (s, pk, ch, off)
+            break
+        prev_fail, s = s, s * 0.96
+    if best is not None and prev_fail is not None:
+        a, b = best[0], prev_fail
+        for _ in range(6):
+            mid = (a + b) / 2
+            pk, ch, off = _place(session, params, cavity, washer, mid, relaxed)
+            if pk:
+                best, a = (mid, pk, ch, off), mid
+            else:
+                b = mid
+    return best
 
 
 def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
@@ -213,50 +248,37 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
         o, _ = best_offset(hp, cavity, scale, np.array([[p.x, p.y] for p in manual]) / scale, annulus)
         return scale, s_fit, manual, [Check("pockets:feet", "Feet", "info", "Pockets placed by hand.")],             (float(o[0]), float(o[1]))
 
-    # Largest scale <= s_fit where two pockets fit the feet AND sit on the steel.
-    # Not monotone at the small end (walls are absolute mm), so scan down in 4 %
-    # steps from the fit limit, then bisect between the last failure and the first success.
-    best: tuple[float, list[Pocket], list[Check], tuple[float, float]] | None = None
-    fail_checks: list[Check] = []
-    prev_fail = None
-    s = s_fit
-    while s >= max(0.05, 0.25 * s_fit):
-        pk, ch, off = _place(session, params, cavity, washer, s)
-        if pk:
-            best = (s, pk, ch, off)
-            break
-        fail_checks = fail_checks or ch
-        prev_fail, s = s, s * 0.96
-    if best is not None and prev_fail is not None:
-        a, b = best[0], prev_fail
-        for _ in range(6):
-            mid = (a + b) / 2
-            pk, ch, off = _place(session, params, cavity, washer, mid)
-            if pk:
-                best, a = (mid, pk, ch, off), mid
-            else:
-                b = mid
-    s_max = best[0] if best else s_fit
+    def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
+        key = (session.obj(params).id, params.rotate_x % 360, params.rotate_y % 360, params.ball_scale,
+               washer.key, params.clearance, spec, relaxed)
+        if key not in session._auto:
+            session._auto[key] = _largest_with_pockets(session, params, cavity, washer, s_fit, relaxed)
+        return session._auto[key]
 
-    if params.figure_scale is not None and (best is None or abs(params.figure_scale - best[0]) > 1e-9):
-        pk, ch, off = _place(session, params, cavity, washer, params.figure_scale)
-        if pk:
-            return params.figure_scale, s_max, pk, ch, off
-        # Fall back to the best unconstrained spot so the user sees why.
-        meshes = [p.mesh() for p in scaled(session.unit_parts(params), params.figure_scale)]
+    if params.figure_scale is not None:
+        sc = params.figure_scale
+        for relaxed in (False, True):
+            pk, ch, off = _place(session, params, cavity, washer, sc, relaxed)
+            if pk:
+                best = largest(relaxed)
+                return sc, best[0] if best else s_fit, pk, ch, off
+        # Nothing on steel: show the best unconstrained spots so the user sees why.
+        meshes = [p.mesh() for p in scaled(session.unit_parts(params), sc)]
         pk1, ch1 = auto_pockets(meshes, spec)
-        return params.figure_scale, s_max, pk1, ch + ch1[1:], fit_offset(params.figure_scale)
-    if best is None:
-        meshes = [p.mesh() for p in scaled(session.unit_parts(params), s_fit)]
-        pk1, ch1 = auto_pockets(meshes, spec)
-        note = fail_checks or ch1
-        return s_fit, s_fit, pk1, note, fit_offset(s_fit)
-    scale, pk, ch, off = best
-    if scale < s_fit * 0.999:
-        ch = ch + [Check("pockets:scale", "Size vs. magnets", "info",
-                         f"Reduced from {s_fit:.1%} to {scale:.1%} so both magnets sit on the washer's steel "
-                         f"ring; a larger washer may allow more (see the washer table).")]
-    return scale, s_max, pk, ch, off
+        return sc, s_fit, pk1, ch1, fit_offset(sc)
+
+    for relaxed in (False, True):
+        best = largest(relaxed)
+        if best is not None:
+            scale, pk, ch, off = best
+            if scale < s_fit * 0.999:
+                ch = ch + [Check("pockets:scale", "Size vs. magnets", "info",
+                                 f"Reduced from {s_fit:.1%} to {scale:.1%} so both magnets sit on the washer's "
+                                 f"steel; a larger washer may allow more (see the washer table).")]
+            return scale, scale, pk, ch, off
+    meshes = [p.mesh() for p in scaled(session.unit_parts(params), s_fit)]
+    pk1, ch1 = auto_pockets(meshes, spec)
+    return s_fit, s_fit, pk1, ch1, fit_offset(s_fit)
 
 
 def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
@@ -266,12 +288,18 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
         cav = Cavity(session.ball, params.ball_scale, w, params.clearance)
         p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
-        on_steel = bool(pockets) and annulus_margin(np.array([[q.x, q.y] for q in pockets]), 1.0,
-                                                    np.array(off), w.annulus(p.pocket_diameter)) >= -1e-6
+        steel = "off"
+        if len(pockets) == 2:
+            pxy = np.array([[q.x, q.y] for q in pockets])
+            if annulus_margin(pxy, 1.0, np.array(off), w.annulus(p.pocket_diameter)) >= -1e-6:
+                steel = "full"
+            elif annulus_margin(pxy, 1.0, np.array(off), (w.id / 2, w.od / 2)) >= -1e-6:
+                steel = "partial"
         rows.append({"key": key, "label": w.label, "max_scale": round(s_max, 4),
                      "height_mm": round(s_max * session.points(params).height, 2),
-                     "pockets_on_steel": on_steel, "floor_z": round(cav.floor_z, 2)})
-    rows.sort(key=lambda r: (not r["pockets_on_steel"], -float(r["max_scale"])))
+                     "pockets_on_steel": steel == "full", "steel": steel, "floor_z": round(cav.floor_z, 2)})
+    rank = {"full": 0, "partial": 1, "off": 2}
+    rows.sort(key=lambda r: (rank[r["steel"]], -float(r["max_scale"])))
     return rows
 
 
@@ -322,10 +350,17 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
         if pockets:
             checks.extend(validate_pockets(meshes, pockets, params.spec))
             lo, hi = washer.annulus(params.pocket_diameter)
-            am = annulus_margin(np.array([[p.x, p.y] for p in pockets]), 1.0, np.array(off), (lo, hi))
+            pxy = np.array([[p.x, p.y] for p in pockets])
+            am = annulus_margin(pxy, 1.0, np.array(off), (lo, hi))
+            am_centre = annulus_margin(pxy, 1.0, np.array(off), (washer.id / 2, washer.od / 2))
             if am >= -1e-6:
                 checks.append(Check("steel", "Magnets on the washer", "pass",
                                     f"Both pockets sit on the steel ring ({lo:.1f}–{hi:.1f} mm from the centre)."))
+            elif am_centre >= -1e-6:
+                checks.append(Check("steel", "Magnets on the washer", "warn",
+                                    "Pocket centres are on the steel but the magnets overhang its edge "
+                                    f"by up to {-am:.1f} mm, so they hold with roughly half force. "
+                                    "A larger washer avoids this (Compare washers).", round(am, 2)))
             else:
                 od, idd = required_washer(pockets, params.spec)
                 checks.append(Check("steel", "Magnets on the washer", "fail",

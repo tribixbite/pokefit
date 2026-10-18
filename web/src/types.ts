@@ -91,6 +91,8 @@ export interface WasherRow {
   max_scale: number;
   height_mm: number;
   pockets_on_steel: boolean;
+  /** full = magnets wholly on steel, partial = centres on steel, off = not on steel. */
+  steel: "full" | "partial" | "off";
   floor_z: number;
 }
 

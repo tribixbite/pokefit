@@ -323,7 +323,8 @@ async function compareWashers(): Promise<void> {
         });
         const tr = h("tr", { cls: `${r.key === best ? "best" : ""} ${r.key === state.params.washer ? "current" : ""}` },
           h("td", { textContent: r.key }), h("td", { textContent: `${r.height_mm.toFixed(1)} mm` }),
-          h("td", { textContent: r.pockets_on_steel ? "on steel" : "off steel" }), h("td", {}, use));
+          h("td", { textContent: { full: "on steel", partial: "half on steel", off: "off steel" }[r.steel] }),
+          h("td", {}, use));
         tr.title = r.label;
         return tr;
       }))));
