@@ -38,17 +38,31 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
 - Vertices ~0.02 units apart on the rim at 16× ⇒ still near SketchUp's merge tolerance;
   a larger working scale (model mm as metres, ×1000) gives more margin.
 
+## pokefit — fit a figure in the ball, magnet pockets, printability
+Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowers/plans/2026-10-17-pokefit.md`.
+- Setup once: `pip install -e .` (repo root) and `cd web && bun install && bun run build`.
+- UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj, or
+  `?path=C:/path/to/file.3mf` with `+` written as `%2B`). Outputs land in `pokefit_out/<name>/`.
+- CLI: `python -m pokefit fit <figure.3mf> --ball 0.6 --washer M6 [--scale 85%] [--washers]
+  [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
+- Gates: `python -m mypy`, `python -m pytest` (64 incl. slow real-file/Bambu tests, ~1 min;
+  `-m "not slow"` 61 in 20 s), `cd web && bun run typecheck && bun test`.
+- Slicing uses the user's X2D/PETG/0.16 project settings (`pokeball60goodPrinted.3mf`, or the
+  bundled copy `pokefit/profiles/x2d_petg_printed_ball_shells.json`), reduced to the figure's
+  filament count. Bambu CLI facts: needs `Application=BambuStudio-…` in 3dmodel.model or it
+  ignores embedded settings; writes result.json to its cwd; sometimes hangs AFTER writing
+  result.json (killed after a 5 s grace).
+- Dragon (`~/Downloads/dragonwithegg+eyes+multicolor.3mf`) at the 60 % ball, M6: 94.8 % =
+  34.1 mm, pockets on steel, Bambu 1× 1h04 / 10.8 g (prime tower 19 min of it), 10× 4h16 /
+  38.9 g, no supports generated. Washer table: US 1/4″×1″ fender 34.3 mm, M6 34.1, M8 33.9,
+  US #10×3/4″ 33.6, M5 off steel.
+
 ## Open
-- **pokefit** — IN PROGRESS. Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`,
-  plan `docs/superpowers/plans/2026-10-17-pokefit.md`. Done: tasks 1–8 engine (`pokefit/`
-  shell, washer, ball, model3mf, paint, fit, magnets, checks, slicer, pipeline; `python -m
-  pytest -m "not slow"` 52 pass, `python -m mypy` clean). Remaining: CLI (`pokefit/cli.py`,
-  `__main__.py`), server (`pokefit/server.py`) + web UI (`web/`, bun + TS + three.js),
-  Chrome UI test, real-file run (dragon 0.6 → 94.8 %, 34.1 mm, M6 pockets on steel; Bambu
-  1× 1h04 / 10.8 g, 10× 4h15 / 38.8 g, no supports generated), Zelda pot check, docs.
-  Bambu CLI facts: needs `Application=BambuStudio-…` in 3dmodel.model or it ignores the
-  embedded settings; writes result.json to its cwd; sometimes hangs AFTER writing
-  result.json (handled: killed after 5 s grace).
+- pokefit known limits (not bugs): ring radius is the minimum over all angles (the latch
+  notch sets it, so a figure could be a little bigger turned away from the latch — would need
+  yaw-dependent ring profile); manual pockets stay at absolute mm when the size changes;
+  analysis ~6–10 s per change on a 350k-face figure (islands section ~2.4 s, mesh checks
+  4.4 s once per file).
 - **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
   `%APPDATA%\SketchUp\SketchUp 2017\SketchUp\Plugins\tt_cleanup`, but TT_Lib² is not
   installed. Not on GitHub (`thomthom/tt-lib` is the different tt-lib³; `thomthom/cleanup`

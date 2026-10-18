@@ -1,6 +1,6 @@
 # pokefit — fit a figure inside a scaled Pokéball, add magnet pockets, verify printability
 
-Date: 2026-10-16 · Status: approved in conversation, pending spec review
+Date: 2026-10-16 · Status: implemented 2026-10-18 (see "Implementation notes" at the end)
 
 ## Goal
 
@@ -145,3 +145,19 @@ tests/          pytest
 ## Out of scope
 - Orientation optimisation for minimum supports, hollowing, auto-splitting a figure,
   modifying shells beyond the washer seat.
+
+## Implementation notes (2026-10-18)
+Decisions made while building, where the code differs from or adds to the text above:
+- Output 3MF holds only the chosen figure object (one plate), not the other objects of the
+  source project (e.g. the egg halves); settings default to the user's printer profile
+  (`settings_source="reference"`), the source project's settings with `"original"`.
+- Washer seat diameter = washer OD + 0.4 mm so the washer drops in.
+- Beyond the ring span the allowed radius is also capped by the ring aperture (the figure
+  must pass through the ring when the ball closes).
+- Pockets are placed inside (walled foot area ∩ washer steel ring) at the fit offset or any
+  offset within the fit margin; the scale only steps down (to ≥ 60 % of the fit size) when
+  no such pair exists; then pocket centres on steel (magnets about half over it) is a warning.
+- Wall-thickness `fail` only when > 5 % of the surface is under 0.4 mm (Arachne prints
+  isolated thin features); otherwise `warn`.
+- Supports verdict: geometric estimate, replaced by Bambu's auto-support result after slicing.
+- Overlapping parts are clipped in list order for the preview (as the slicers do).
