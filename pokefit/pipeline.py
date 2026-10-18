@@ -267,6 +267,14 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
             return scale, s_fit, [], [], fit_offset(scale)
         return scale, s_fit, manual, [Check("pockets:feet", "Feet", "info", "Pockets placed by hand.")],             _offset_for_pockets(session, params, cavity, washer, scale, manual)
 
+    # Shrinking the figure only shrinks the area that can hold a walled pocket
+    # (walls are absolute mm). If two pockets do not fit even without the steel
+    # ring at the size being asked for (or the largest that fits), skip the search.
+    probe = params.figure_scale or s_fit
+    free_pk, free_ch = auto_pockets([p.mesh() for p in scaled(session.unit_parts(params), probe)], spec)
+    if len(free_pk) < 2:
+        return probe, s_fit, free_pk, free_ch, fit_offset(probe)
+
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
         key = (session.obj(params).id, params.rotate_x % 360, params.rotate_y % 360, params.ball_scale,
                washer.key, params.clearance, spec, relaxed)

@@ -91,9 +91,10 @@ export class Viewer {
     });
   }
 
-  /** Load (or reuse) the figure GLB. */
+  /** Load (or reuse) the figure GLB. A new figure stays hidden until the next `update` places it. */
   async setFigure(url: string): Promise<void> {
     if (url === this.figureUrl && this.figure) return;
+    this.figureFrame.visible = false;
     const gltf = await this.loader.loadAsync(url);
     if (this.figure) {
       this.figureScaled.remove(this.figure);
@@ -118,6 +119,7 @@ export class Viewer {
   update(rep: Report, focus: Check | null = null): void {
     this.buildBall(rep);
     this.ballRadius = rep.ball.r_outer;
+    this.figureFrame.visible = true;
     const s = rep.fit.scale || rep.fit.max_scale;
     this.figureFrame.position.set(rep.fit.offset[0], rep.fit.offset[1], rep.ball.floor_z);
     this.figureScaled.scale.setScalar(s);
