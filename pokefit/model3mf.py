@@ -22,6 +22,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 from xml.sax.saxutils import quoteattr
 
 import numpy as np
@@ -67,12 +68,24 @@ class FigureObject:
     id: str
     name: str
     extruder: int
-    parts: list[Part]
+    _parts: list[Part] | None           # None until `loader` has run
     transform: np.ndarray               # build item transform (4x4), first instance
+    loader: Callable[[], list[Part]] | None = None
+    n_faces: int | None = None          # known without parsing (counted in the XML)
+
+    @property
+    def parts(self) -> list[Part]:
+        """Meshes are parsed on first use: a file of 14 figures only parses the one being fitted."""
+        if self._parts is None:
+            assert self.loader is not None
+            self._parts, self.loader = self.loader(), None
+        return self._parts
 
     @property
     def face_count(self) -> int:
-        return sum(len(p.faces) for p in self.parts)
+        if self.n_faces is None:
+            self.n_faces = sum(len(p.faces) for p in self.parts)
+        return self.n_faces
 
 
 @dataclass
@@ -111,7 +124,8 @@ def format_transform(m: np.ndarray) -> str:
 
 def _parse_mesh_fast(body: bytes) -> tuple[np.ndarray, np.ndarray, dict[int, str]] | None:
     """Regex parse of one <object> body; None when the layout is not the fast-path one."""
-    nv, nt = body.count(b"<vertex"), body.count(b"<triangle")
+    # "<triangle" also prefixes the "<triangles>" container tag.
+    nv, nt = body.count(b"<vertex"), body.count(b"<triangle") - body.count(b"<triangles")
     verts = _VERTEX_RE.findall(body)
     tris = _TRI_RE.findall(body)
     if len(verts) != nv or len(tris) != nt:
@@ -142,10 +156,22 @@ class _ModelFile:
         self._bodies: dict[str, bytes] | None = None
         self._tree: etree._Element | None = None
 
-    def mesh(self, oid: str) -> tuple[np.ndarray, np.ndarray, dict[int, str]]:
+    def _body(self, oid: str) -> bytes | None:
         if self._bodies is None:
             self._bodies = {m.group(1).decode(): m.group(2) for m in _OBJ_RE.finditer(self.data)}
-        body = self._bodies.get(oid)
+        return self._bodies.get(oid)
+
+    def face_count(self, oid: str) -> int:
+        if self._bodies is None and self.data.count(b"<object") == 1 and b"<components" not in self.data:
+            # The usual Bambu layout (one mesh per file): count without splitting into objects.
+            return self.data.count(b"<triangle") - self.data.count(b"<triangles")
+        body = self._body(oid)
+        if body is None:
+            return len(self.mesh(oid)[1])
+        return body.count(b"<triangle") - body.count(b"<triangles")
+
+    def mesh(self, oid: str) -> tuple[np.ndarray, np.ndarray, dict[int, str]]:
+        body = self._body(oid)
         if body is not None:
             fast = _parse_mesh_fast(body)
             if fast is not None:
@@ -158,6 +184,11 @@ class _ModelFile:
         return _parse_mesh_xml(obj)
 
     def components(self, oid: str) -> list[etree._Element]:
+        if b"<components" not in self.data:
+            return []
+        body = self._body(oid)
+        if body is not None and b"<components" not in body:
+            return []                  # a mesh object: no need to build the (huge) XML tree
         if self._tree is None:
             self._tree = etree.fromstring(self.data, parser=etree.XMLParser(huge_tree=True))
         obj = self._tree.find(f".//m:object[@id='{oid}']", NS)
@@ -197,17 +228,6 @@ def read_project(path: str | Path) -> Project:
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         root_data = z.read("3D/3dmodel.model")
-        root = etree.fromstring(root_data, parser=etree.XMLParser(huge_tree=True))
-        files: dict[str, _ModelFile] = {"3D/3dmodel.model": _ModelFile(root_data)}
-
-        def model_file(p: str) -> _ModelFile:
-            p = p.lstrip("/")
-            if p not in files:
-                if p not in names:
-                    raise ValueError(f"{path.name}: component file {p} missing")
-                files[p] = _ModelFile(z.read(p))
-            return files[p]
-
         settings_meta = _model_settings(z)
         settings = None
         if "Metadata/project_settings.config" in names:
@@ -215,41 +235,68 @@ def read_project(path: str | Path) -> Project:
                 settings = json.loads(z.read("Metadata/project_settings.config"))
             except json.JSONDecodeError:
                 settings = None
+        root = etree.fromstring(root_data, parser=etree.XMLParser(huge_tree=True))
+        files: dict[str, _ModelFile] = {"3D/3dmodel.model": _ModelFile(root_data)}
 
-        def collect(mf_path: str, oid: str, xf: np.ndarray, part_meta: dict, out: list[Part]) -> None:
-            """Recursively gather meshes below object `oid`, applying component transforms."""
-            mfile = model_file(mf_path)
-            comps = mfile.components(oid)
+        # Pass 1 (every object): walk the component tree to its mesh leaves and
+        # count their triangles. Meshes themselves are parsed later, per object.
+        Leaf = tuple[str, str, np.ndarray]                 # (model file, mesh object id, transform)
+
+        def leaves(mf_path: str, oid: str, xf: np.ndarray, out: list[Leaf]) -> None:
+            mf_path = mf_path.lstrip("/")
+            if mf_path not in files:
+                if mf_path not in names:
+                    raise ValueError(f"{path.name}: component file {mf_path} missing")
+                files[mf_path] = _ModelFile(z.read(mf_path))
+            comps = files[mf_path].components(oid)
             if not comps:
-                v, f, extra = mfile.mesh(oid)
-                meta = part_meta.get(oid, {})
-                out.append(Part(meta.get("name") or f"part_{oid}", meta.get("extruder", 0), v, f, extra,
-                                meta.get("subtype", "normal_part")).transformed(xf))
+                out.append((mf_path, oid, xf))
                 return
             for c in comps:
-                sub_path = c.get(P_PATH) or mf_path
-                collect(sub_path, c.get("objectid"), xf @ parse_transform(c.get("transform")), part_meta, out)
+                leaves(c.get(P_PATH) or mf_path, c.get("objectid"), xf @ parse_transform(c.get("transform")), out)
 
         build: dict[str, np.ndarray] = {}
         for item in root.iterfind("m:build/m:item", NS):
             build.setdefault(item.get("objectid"), parse_transform(item.get("transform")))
 
-        objects = []
+        found: list[tuple[str, str, int, dict, list[Leaf], int]] = []
         for obj in root.iterfind("m:resources/m:object", NS):
             oid = obj.get("id")
             if oid not in build or obj.get("type", "model") != "model":
                 continue
             meta = settings_meta.get(oid, {})
-            parts: list[Part] = []
-            collect("3D/3dmodel.model", oid, np.eye(4), meta.get("parts", {}), parts)
-            name = meta.get("name") or obj.get("name") or f"object_{oid}"
-            objects.append(FigureObject(oid, name, meta.get("extruder", 1), parts, build[oid]))
+            lv: list[Leaf] = []
+            leaves("3D/3dmodel.model", oid, np.eye(4), lv)
+            n = sum(files[f].face_count(i) for f, i, _ in lv)
+            found.append((oid, meta.get("name") or obj.get("name") or f"object_{oid}", meta.get("extruder", 1),
+                          meta.get("parts", {}), lv, n))
+        files.clear()                  # release the XML; loaders re-read their files
+
+    def loader(lv: list[Leaf], part_meta: dict) -> Callable[[], list[Part]]:
+        def load() -> list[Part]:
+            out: list[Part] = []
+            cache: dict[str, _ModelFile] = {}
+            with zipfile.ZipFile(path) as zz:
+                for f, i, xf in lv:
+                    if f not in cache:
+                        cache[f] = _ModelFile(zz.read(f))
+                    v, fc, extra = cache[f].mesh(i)
+                    m = part_meta.get(i, {})
+                    out.append(Part(m.get("name") or f"part_{i}", m.get("extruder", 0), v, fc, extra,
+                                    m.get("subtype", "normal_part")).transformed(xf))
+            return out
+        return load
+
+    objects = [FigureObject(oid, name, ext, None, build[oid], loader(lv, pm), n)
+               for oid, name, ext, pm, lv, n in found]
 
     if not objects:
         raise ValueError(f"{path.name}: no printable objects")
     colours = list(settings.get("filament_colour", [])) if settings else []
     if not colours:
-        n = max([1] + [max(p.extruder, o.extruder) for o in objects for p in o.parts])
+        # From the metadata, so no mesh has to be parsed for it.
+        n = max([1] + [ext for _, _, ext, _, _, _ in found] +
+                [m.get("extruder", 0) for _, _, _, pm, _, _ in found for m in pm.values()])
         colours = (DEFAULT_COLOURS * 4)[:n]
     return Project(path, "3mf", objects, colours, settings)
 

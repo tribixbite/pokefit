@@ -101,3 +101,26 @@ def test_stl_is_merged(tmp_path: Path) -> None:
     box.export(f)
     part = read_project(f).default_object().parts[0]
     assert len(part.vertices) == 8
+
+
+def test_fast_parser_handles_bambu_layout(tmp_path: Path) -> None:
+    """The regex path must accept what Bambu writes (it once never did: the
+    "<triangles>" tag was counted as a triangle, so every file fell back to lxml)."""
+    from pokefit.model3mf import _OBJ_RE, _parse_mesh_fast
+
+    box = trimesh.creation.box([10, 10, 10])
+    proj = read_project(write_inline_3mf(tmp_path / "b.3mf", box, np.eye(4), {0: "8"}))
+    out = write_project(proj, "box", 1, proj.default_object().parts, tmp_path / "o.3mf")
+    with zipfile.ZipFile(out) as z:
+        body = _OBJ_RE.search(z.read("3D/Objects/object_1.model")).group(2)  # type: ignore[union-attr]
+    fast = _parse_mesh_fast(body)
+    assert fast is not None
+    assert len(fast[1]) == 12 and fast[2] == {0: 'paint_color="8"'}
+
+
+def test_objects_parse_lazily(tmp_path: Path) -> None:
+    box = trimesh.creation.box([10, 10, 10])
+    proj = read_project(write_inline_3mf(tmp_path / "b.3mf", box, np.eye(4)))
+    obj = proj.default_object()
+    assert obj.face_count == 12 and obj._parts is None      # counted, not parsed
+    assert len(obj.parts[0].faces) == 12 and obj._parts is not None
