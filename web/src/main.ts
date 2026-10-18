@@ -155,9 +155,7 @@ function show(rep: Report): void {
     ? `${pct(f.scale)} of the file · max ${pct(f.max_scale)} (${f.max_height_mm.toFixed(1)} mm)`
     : "does not fit";
   $("sumLimit").textContent = f.limit_kind ? `Tightest at the ${limitText(f.limit_kind)}` : "";
-  const chip = $("sumStatus");
-  chip.className = `status-chip ${rep.status}`;
-  chip.textContent = { pass: "ready", warn: "check warnings", fail: "problems", info: "info" }[rep.status];
+  renderStatus(rep);
 
   const pill = $("fitPill");
   pill.hidden = false;
@@ -191,6 +189,12 @@ function show(rep: Report): void {
   $("pocketInfo").textContent = rep.params.pockets ? "placed by hand" : rep.pockets.length ? "automatic" : "";
   $("timing").textContent = `analysed in ${rep.timings.total?.toFixed(1)} s`;
   viewer.update(rep);
+}
+
+function renderStatus(rep: Report): void {
+  const chip = $("sumStatus");
+  chip.className = `status-chip ${rep.status}`;
+  chip.textContent = { pass: "ready", warn: "check warnings", fail: "problems", info: "info" }[rep.status];
 }
 
 function limitText(kind: string): string {
@@ -274,6 +278,7 @@ async function doSlice(): Promise<void> {
         sliceLine("1× no supports", res.off),
         sliceLine("1× auto supports", res.auto),
         res.x10 ? sliceLine(`10× ${needs ? "with" : "no"} supports`, res.x10) : h("tr")));
+    applySlicerVerdict(res);
     const warn = [...res.off.warnings, ...res.auto.warnings].filter(Boolean);
     out.replaceChildren(verdict, tbl, per, ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
@@ -281,6 +286,24 @@ async function doSlice(): Promise<void> {
   } finally {
     btn.disabled = !state.config?.slicer;
   }
+}
+
+/** The slicer has the final word on supports: replace the geometric estimate in the checklist. */
+function applySlicerVerdict(res: SliceVariants): void {
+  const rep = state.report;
+  if (!rep || res.supports_needed === null) return;
+  const c = rep.checks.find((x) => x.id === "supports");
+  if (!c) return;
+  const estimate = c.message;
+  c.status = res.supports_needed ? "warn" : "pass";
+  c.value = res.supports_needed ? "yes" : "no";
+  c.message = res.supports_needed
+    ? `Yes — Bambu auto supports add ${formatDuration(res.auto.support_seconds)} of support printing.`
+    : `No — Bambu's auto supports generated none. (Geometry estimate: ${estimate.replace(/\.$/, "")}.)`;
+  renderChecks(rep);
+  rep.status = rep.checks.some((x) => x.status === "fail") ? "fail"
+    : rep.checks.some((x) => x.status === "warn") ? "warn" : "pass";
+  renderStatus(rep);
 }
 
 async function doExport(): Promise<void> {

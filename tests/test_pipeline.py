@@ -87,3 +87,16 @@ def test_real_dragon_end_to_end(tmp_path: Path) -> None:
     out = export(s, Params(ball_scale=0.6, washer="M6"), tmp_path / "out")
     with zipfile.ZipFile(out["figure_3mf"]) as z:
         assert "3D/Objects/object_1.model" in z.namelist()
+
+
+def test_manual_pockets_keep_fit_and_bad_pocket_not_cut(critter: Path, tmp_path: Path) -> None:
+    s = open_session(critter, BALL_3MF, None, tmp_path)
+    auto, _ = analyse(s, Params(washer="US1/4x1"))
+    good = auto.pockets[0]
+    rep, final = analyse(s, Params(washer="US1/4x1", figure_scale=auto.fit["scale"],
+                                   pockets=[good, {"x": 40.0, "y": 0.0}]))
+    c = _by_id(rep)
+    assert c["fit"]["status"] == "pass"                      # the fit is never traded for the steel ring
+    assert c["pocket:2"]["status"] == "fail" and "Not cut" in c["pocket:2"]["message"]
+    removed = c[next(k for k in c if k.startswith("cut:"))]["value"]
+    assert removed == pytest.approx(np.pi * 2.09 ** 2 * 2.2, rel=0.05)   # only one pocket cut

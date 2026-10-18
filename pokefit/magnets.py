@@ -31,6 +31,7 @@ from .shell import from_manifold, to_manifold
 
 Z_PROBE = 0.3        # height of the "feet" section above the bed, mm
 SEGMENTS = 48        # polygon sides of the pocket cylinder (as in the Zelda pot)
+MIN_CUT_WALL = 0.2   # mm; thinner than this the pocket would break through the foot, so it is not cut
 
 
 @dataclass(frozen=True)
@@ -213,12 +214,19 @@ def validate_pockets(meshes: list[trimesh.Trimesh], pockets: list[Pocket], spec:
         wall = min((s.boundary.distance(pt) - r) if s.contains(pt) else -r for s in secs) if secs else -r
         disc = pt.buffer(r, quad_segs=12)
         covered = min((s.intersection(disc).area / disc.area) for s in ceil_secs) if ceil_secs else 0.0
-        ok_wall = wall >= spec.wall - 1e-3
         ok_ceil = covered > 0.999
-        status: Status = "pass" if ok_wall and ok_ceil else "fail"
+        status: Status
+        if wall < MIN_CUT_WALL or not ok_ceil:
+            status = "fail"            # breaks through the side or the top: not cut
+        elif wall < spec.wall - 1e-3:
+            status = "warn"            # cut, but the wall is thin
+        else:
+            status = "pass"
         msg = f"Wall {wall:.2f} mm (min {spec.wall:.1f}), ceiling {'covered' if ok_ceil else f'only {covered:.0%} covered'}."
         if wall < 0:
             msg = "Pocket centre is outside the foot."
+        if status == "fail":
+            msg += " Not cut."
         checks.append(Check(f"pocket:{i + 1}", f"Pocket {i + 1}", status, msg, round(float(wall), 2),
                             [[p.x, p.y, 0.0]]))
     if len(pockets) == 2:

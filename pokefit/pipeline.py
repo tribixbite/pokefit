@@ -192,6 +192,27 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
     return [], first, o0
 
 
+def _offset_for_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float,
+                        pockets: list[Pocket]) -> tuple[float, float]:
+    """Offset that keeps the figure fitting and puts the given pockets as well on the steel as it can.
+
+    The fit comes first: only offsets within the best fit margin m* of the best
+    offset o* are considered (the margin is 1-Lipschitz in the offset).
+    """
+    o_star, m_star = best_offset(session.points(params), cavity, s)
+    if m_star <= 0:
+        return float(o_star[0]), float(o_star[1])
+    g = np.linspace(-m_star, m_star, 21)
+    grid = np.stack(np.meshgrid(g, g), axis=-1).reshape(-1, 2)
+    grid = grid[np.linalg.norm(grid, axis=1) <= m_star] + o_star
+    pxy = np.array([[p.x, p.y] for p in pockets])
+    lo, hi = washer.annulus(params.pocket_diameter)
+    r = np.linalg.norm(pxy[None, :, :] + grid[:, None, :], axis=2)
+    score = np.min(np.minimum(r - lo, hi - r), axis=1)
+    best = grid[int(np.argmax(score))]
+    return float(best[0]), float(best[1])
+
+
 def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s_fit: float,
                           relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
     """Largest scale <= s_fit where two pockets fit the feet AND sit on the steel.
@@ -225,7 +246,6 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
     """(scale, max scale, pockets in the figure frame, pocket checks, XY offset)."""
     hp = session.points(params)
     spec = params.spec
-    annulus = washer.annulus(spec.diameter)
     free = max_scale(hp, cavity)
     if free is None:
         return 0.0, 0.0, [], [], (0.0, 0.0)
@@ -245,8 +265,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
         manual = [Pocket(float(p["x"]), float(p["y"])) for p in params.pockets]
         if not manual:
             return scale, s_fit, [], [], fit_offset(scale)
-        o, _ = best_offset(hp, cavity, scale, np.array([[p.x, p.y] for p in manual]) / scale, annulus)
-        return scale, s_fit, manual, [Check("pockets:feet", "Feet", "info", "Pockets placed by hand.")],             (float(o[0]), float(o[1]))
+        return scale, s_fit, manual, [Check("pockets:feet", "Feet", "info", "Pockets placed by hand.")],             _offset_for_pockets(session, params, cavity, washer, scale, manual)
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
         key = (session.obj(params).id, params.rotate_x % 360, params.rotate_y % 360, params.ball_scale,
@@ -348,7 +367,8 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     if params.magnets:
         checks.extend(pchecks)
         if pockets:
-            checks.extend(validate_pockets(meshes, pockets, params.spec))
+            pocket_checks = validate_pockets(meshes, pockets, params.spec)  # pocket:N (+ pocket:gap)
+            checks.extend(pocket_checks)
             lo, hi = washer.annulus(params.pocket_diameter)
             pxy = np.array([[p.x, p.y] for p in pockets])
             am = annulus_margin(pxy, 1.0, np.array(off), (lo, hi))
@@ -366,7 +386,9 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                 checks.append(Check("steel", "Magnets on the washer", "fail",
                                     f"Pockets miss the steel by {-am:.1f} mm with this washer; needs OD ≥ {od:.1f} mm "
                                     f"and hole ≤ {idd:.1f} mm.", round(am, 2)))
-            final, cut_checks = cut_pockets(final, pockets, params.spec)
+            # Per-pocket checks come first, in pocket order; a failed one is not cut.
+            cuttable = [p for p, c in zip(pockets, pocket_checks) if c.status != "fail"]
+            final, cut_checks = cut_pockets(final, cuttable, params.spec)
             checks.extend(cut_checks)
     t["pockets"] = time.time() - t2
 

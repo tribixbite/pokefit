@@ -164,7 +164,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .verdict.no { color: var(--ok); }
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }
-.tbl td { padding: 6px; border-bottom: 1px solid #1e2734; }
+.tbl td { padding: 6px; border-bottom: 1px solid #1e2734; white-space: nowrap; }
+.tbl td.muted { white-space: normal; font-size: 12px; }
 .tbl tr.best td { color: var(--ok); }
 .tbl tr.current td:first-child { font-weight: 700; }
 .tbl button { min-height: 30px; padding: 0 10px; font-size: 12px; }
