@@ -92,3 +92,12 @@ def test_required_washer() -> None:
     od, id_ = required_washer([Pocket(-10, 0), Pocket(10, 0)], SPEC)
     assert od == pytest.approx(20 + 4.18)
     assert id_ == pytest.approx(2 * (10 - 2.09))
+
+
+def test_cut_unmerged_soup(box_feet: trimesh.Trimesh) -> None:
+    """A triangle soup (as read from STL) is merged before the boolean cut."""
+    soup = Part("soup", 1, box_feet.vertices[box_feet.faces].reshape(-1, 3),
+                np.arange(len(box_feet.faces) * 3).reshape(-1, 3))
+    pockets, _ = auto_pockets([box_feet], SPEC)
+    (new,), checks = cut_pockets([soup], pockets, SPEC)
+    assert checks[0].status == "pass" and new.mesh().is_watertight

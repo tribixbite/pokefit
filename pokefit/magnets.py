@@ -261,7 +261,9 @@ def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> t
             out.append(part)
             continue
         try:
-            body = to_manifold(part.mesh())
+            mesh = part.mesh()
+            mesh.merge_vertices()      # STL soups and some 3MF writers duplicate shared vertices
+            body = to_manifold(mesh)
         except RuntimeError as exc:
             checks.append(Check(f"cut:{part.name}", f"Cut {part.name}", "fail",
                                 f"Cannot cut pockets: part is not a closed solid ({exc}). Repair it first."))

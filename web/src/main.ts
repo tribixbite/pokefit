@@ -42,6 +42,7 @@ const underside = new UndersideEditor($("underside"), (pockets) => {
 // ------------------------------------------------------------------ helpers
 
 function toast(msg: string): void {
+  console.warn("[pokefit]", msg);
   const t = $("toast");
   t.textContent = msg;
   t.hidden = false;

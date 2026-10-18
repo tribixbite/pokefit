@@ -67,6 +67,13 @@ button, select, input { font: inherit; color: inherit; }
 .fit-pill.warn { color: var(--warn); border-color: rgba(255, 179, 71, .4); }
 .fit-pill.fail { color: var(--fail); border-color: rgba(255, 77, 94, .5); }
 
+.view-legend { position: absolute; left: 12px; bottom: 14px; z-index: 2; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.view-legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.dot.lim { background: #ffe14d; }
+.dot.pk { background: #ff3355; }
+.dot.sp { background: rgba(55, 194, 255, .5); }
+@media (max-width: 860px) { .view-legend { display: none; } }
+
 .drop {
   position: absolute; inset: 0; display: grid; place-items: center; z-index: 3; padding: 24px; text-align: center;
   background: rgba(13, 17, 23, .72); border: 2px dashed transparent; transition: border-color .15s, background .15s;

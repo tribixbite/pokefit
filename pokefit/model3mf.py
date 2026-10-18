@@ -189,6 +189,7 @@ def read_project(path: str | Path) -> Project:
     if path.suffix.lower() != ".3mf":
         m = trimesh.load(path, force="mesh", process=False)
         assert isinstance(m, trimesh.Trimesh)
+        m.merge_vertices()             # STL stores every triangle's corners separately
         part = Part(path.stem, 0, np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
         obj = FigureObject("1", path.stem, 1, [part], np.eye(4))
         return Project(path, "mesh", [obj], DEFAULT_COLOURS[:1], None)

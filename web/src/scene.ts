@@ -33,12 +33,15 @@ export class Viewer {
   private figureScaled = new THREE.Group();
   private markers = new THREE.Group();
   private figure: THREE.Object3D | null = null;
-  private clip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  // Keeps y >= 0: removes the half facing the default (front, -y) camera.
+  private clip = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private clipped = false;
   private showAllowed = true;
   private loader = new GLTFLoader();
   private figureUrl = "";
   private frameRequested = false;
+  /** Outer radius of the ball (final mm), for framing the camera. */
+  private ballRadius = 25;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
@@ -114,6 +117,7 @@ export class Viewer {
   /** Rebuild the ball and markers from a report; place and scale the figure. */
   update(rep: Report, focus: Check | null = null): void {
     this.buildBall(rep);
+    this.ballRadius = rep.ball.r_outer;
     const s = rep.fit.scale || rep.fit.max_scale;
     this.figureFrame.position.set(rep.fit.offset[0], rep.fit.offset[1], rep.ball.floor_z);
     this.figureScaled.scale.setScalar(s);
@@ -148,7 +152,10 @@ export class Viewer {
   }
 
   view(kind: "front" | "side" | "top" | "bottom" | "iso"): void {
-    const d = 150;
+    // Frame the ball to ~75 % of the shorter screen side: visible height at
+    // distance d is 2·d·tan(fov/2); narrow (portrait) views are limited by width.
+    const visible = 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const d = (2 * this.ballRadius) / (0.75 * visible * Math.min(1, this.camera.aspect));
     const pos: Record<typeof kind, [number, number, number]> = {
       front: [0, -d, 0],
       side: [d, 0, 0],

@@ -93,3 +93,11 @@ def test_real_dragon() -> None:
     # Native ~80 x 80 x 120 mm placed at build scale 0.3.
     assert np.ptp(v[:, 2]) == pytest.approx(36.0, abs=0.1)
     assert sum(len(p.tri_extra) for p in obj.parts) == 1306
+
+
+def test_stl_is_merged(tmp_path: Path) -> None:
+    box = trimesh.creation.box([10, 10, 10])
+    f = tmp_path / "box.stl"
+    box.export(f)
+    part = read_project(f).default_object().parts[0]
+    assert len(part.vertices) == 8
