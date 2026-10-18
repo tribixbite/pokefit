@@ -101,3 +101,26 @@ def test_slice_job_reports(base_url: str, loaded: dict[str, Any], monkeypatch: p
         time.sleep(0.2)
     assert job["state"] == "done"
     assert job["result"]["off"]["ok"] is False and "not found" in job["result"]["off"]["error"]
+
+
+def test_reference_project_sets_slots(base_url: str, tmp_path: Path) -> None:
+    """Uploading the user's own Bambu project makes its filament slots the import targets."""
+    import trimesh
+
+    from pokefit.model3mf import read_project, write_project
+
+    box = trimesh.creation.box([10, 10, 10])
+    src = read_project(write_inline_3mf(tmp_path / "b.3mf", box, np.eye(4)))
+    settings = {"filament_colour": ["#112233", "#445566"], "filament_settings_id": ["A", "B"],
+                "filament_type": ["PLA", "PETG"], "printer_settings_id": "My printer"}
+    proj = write_project(src, "box", 1, src.default_object().parts, tmp_path / "mine.3mf", settings=settings)
+    try:
+        code, body = _req(base_url + "/api/reference", proj.read_bytes(), {"X-Filename": "mine.3mf"})
+        assert code == 200
+        cfg = json.loads(body)
+        assert cfg["reference"] == "mine.3mf" and [s["colour"] for s in cfg["slots"]] == ["#112233", "#445566"]
+        assert cfg["printer"] == "My printer" and cfg["engine"] == "local"
+        code, _ = _req(base_url + "/api/reference", b"not a zip", {"X-Filename": "junk.3mf"})
+        assert code == 400
+    finally:
+        server._reference, server._reference_name = None, ""      # module state: do not leak into other tests

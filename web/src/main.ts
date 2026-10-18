@@ -115,7 +115,12 @@ function renderPrinter(cfg: Config): void {
       ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
       : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
   ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
-  $("refInfo").textContent = cfg.reference ? `slots from ${cfg.reference}` : "";
+  // Slicing controls only where a slicer exists (the local version).
+  $("slotRow").hidden = $("sliceRow").hidden = cfg.engine === "browser";
+  $("engineWhere").textContent = cfg.engine === "browser" ? "in your browser" : "local";
+  // The bundled default project is a JSON profile: name it as such rather than by file name.
+  $("refInfo").textContent = !cfg.reference ? "" : cfg.reference.endsWith(".json")
+    ? "default slots — load your project to match its filaments" : `slots from ${cfg.reference}`;
   $("ballModelRow").hidden = cfg.engine !== "browser";
 }
 

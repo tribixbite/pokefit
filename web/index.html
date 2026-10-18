@@ -114,7 +114,7 @@
       <div id="drop" class="drop">
         <div>
           <p class="drop-title">Drop a Pokémon 3MF / STL here</p>
-          <p class="drop-sub">or use <b>Open figure</b>. It is scaled to fit the ball, gets two magnet pockets in its feet, and is checked for printing.</p>
+          <p class="drop-sub">or use <b>Open figure</b>. It is scaled to fit the ball, gets magnet pockets in its underside, and is checked for printing. Everything runs on your device.</p>
         </div>
       </div>
       <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Analysing…</span></div>
@@ -229,10 +229,10 @@
       <section class="card">
         <h2>Print (Bambu Studio)</h2>
         <p id="printerInfo" class="hint"></p>
-        <label>Filament for every colour
+        <label id="slotRow">Filament for every colour
           <select id="slotSelect"></select>
         </label>
-        <div class="row">
+        <div class="row" id="sliceRow">
           <label class="check"><input id="x10Toggle" type="checkbox" checked /> also a plate of 10</label>
           <button id="sliceBtn" class="btn primary">Slice</button>
         </div>
@@ -260,7 +260,7 @@
         <button id="exportBtn" class="btn primary">Export files</button>
         <div id="exportOut" class="export-out"></div>
       </section>
-      <footer class="foot muted">pokefit · local · <span id="timing"></span></footer>
+      <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
     </aside>
   </main>
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import sys
 import threading
 import traceback
 import uuid
@@ -307,8 +308,14 @@ def _jsonable(o: Any) -> Any:
     raise TypeError(f"not JSON serialisable: {type(o).__name__}")
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port that is already serving, and
+    # requests then reach whichever one Windows picks: refuse instead ("address in use").
+    allow_reuse_address = sys.platform != "win32"
+
+
 def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), Handler)
+    return _Server((host, port), Handler)
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
