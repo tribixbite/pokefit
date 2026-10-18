@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 # The engine also runs in the browser (Pyodide): keep this list to packages Pyodide
 # ships (manifold3d is swapped for its WebAssembly build there, see pokefit/geom.py).
 dependencies = [
-    "numpy", "scipy", "trimesh", "manifold3d", "shapely", "lxml", "scikit-image", "pillow", "networkx",
+    "numpy", "scipy", "trimesh", "manifold3d", "shapely", "lxml", "contourpy", "pillow", "networkx",
 ]
 
 [build-system]
