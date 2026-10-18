@@ -15,3 +15,5 @@ pokefit_out/
 *.dae
 original/
 printed/
+web/.pyodide-cache/
+web/.wheel-cache/

@@ -38,6 +38,7 @@ from shapely.ops import unary_union
 
 from .geom import mf
 from .model3mf import Part, remesh_part
+from .planar import regions
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
 
@@ -89,7 +90,7 @@ def section(meshes: list[trimesh.Trimesh], z: float) -> MultiPolygon | Polygon:
             continue
         planar, _ = sec.to_2D(to_2D=np.linalg.inv(trimesh.transformations.translation_matrix([0, 0, z])),
                               check=False)
-        polys.extend(p for p in planar.polygons_full if p.is_valid and p.area > 1e-6)
+        polys.extend(p for p in regions(planar) if p.is_valid and p.area > 1e-6)
     return unary_union(polys) if polys else Polygon()
 
 
@@ -174,10 +175,11 @@ def _crossings(tri: np.ndarray, xs: np.ndarray, ys: np.ndarray,
     nx, ny = len(xs), len(ys)
     gx = (tri[:, :, 0] - xs[0]) / step
     gy = (tri[:, :, 1] - ys[0]) / step
-    j0 = np.clip(np.ceil(gx.min(axis=1)), 0, nx).astype(np.int64)
-    j1 = np.clip(np.floor(gx.max(axis=1)), -1, nx - 1).astype(np.int64)
-    i0 = np.clip(np.ceil(gy.min(axis=1)), 0, ny).astype(np.int64)
-    i1 = np.clip(np.floor(gy.max(axis=1)), -1, ny - 1).astype(np.int64)
+    # np.intp: repeat counts must be the platform index type (int32 under WebAssembly).
+    j0 = np.clip(np.ceil(gx.min(axis=1)), 0, nx).astype(np.intp)
+    j1 = np.clip(np.floor(gx.max(axis=1)), -1, nx - 1).astype(np.intp)
+    i0 = np.clip(np.ceil(gy.min(axis=1)), 0, ny).astype(np.intp)
+    i1 = np.clip(np.floor(gy.max(axis=1)), -1, ny - 1).astype(np.intp)
     a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
     area2 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
     w = np.maximum(j1 - j0 + 1, 0)

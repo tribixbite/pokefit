@@ -28,9 +28,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, export, input_checks,
+from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
+                       input_checks,
                        open_session, preview_glb, safe_stem, slice_variants, washer_table)
-from .slicer import default_slot, filament_slots, find_exe
+from .slicer import find_exe, reference_settings
 from .washer import CATALOGUE, DEFAULT_WASHER
 
 WEB_DIST = ROOT / "web" / "dist"
@@ -75,27 +76,22 @@ def _load(path: Path) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — bad zip, bad XML, no objects...: all are "unreadable file"
         traceback.print_exc()
         raise ApiError(400, f"Cannot read {path.name}: {type(exc).__name__}: {exc}") from exc
+    if _reference is not None:
+        s.reference = _reference
     _register(s)
     with _locks[s.id]:
         rep, _ = analyse(s, Params())
     return {"session": s.id, "file": path.name, "report": rep.to_dict()}
 
 
+# The user's own Bambu project (filament slots + printer settings), once they load one.
+_reference: dict | None = None
+_reference_name = ""
+
+
 def _config() -> dict[str, Any]:
-    from .slicer import reference_settings
-    ref = reference_settings(DEFAULT_REFERENCE) if DEFAULT_REFERENCE.exists() else None
-    return {
-        "washers": [w.to_dict() for w in CATALOGUE.values()],
-        "default_washer": DEFAULT_WASHER,
-        "ball_scales": [0.6, 1.0],
-        "params": Params().__dict__,
-        "slots": filament_slots(ref) if ref else [],
-        "default_slot": default_slot(ref) if ref else 0,
-        "reference": DEFAULT_REFERENCE.name,
-        "printer": (ref or {}).get("printer_settings_id", ""),
-        "process": (ref or {}).get("print_settings_id", ""),
-        "slicer": str(find_exe()) if find_exe() else None,
-    }
+    exe = find_exe()
+    return {**app_config(str(exe) if exe else None, _reference, _reference_name), "engine": "local"}
 
 
 def _run_job(job_id: str, fn: Any) -> None:
@@ -206,6 +202,24 @@ class Handler(BaseHTTPRequestHandler):
         path = d / name
         path.write_bytes(data)
         self._json(_load(path))
+
+    def post_reference(self, q: dict[str, str]) -> None:
+        """Use the filament slots and printer settings of the user's own Bambu project."""
+        global _reference, _reference_name
+        name = Path(unquote(self.headers.get("X-Filename") or "project.3mf")).name
+        d = UPLOAD_DIR / "reference"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / name
+        path.write_bytes(self._body())
+        try:
+            ref = reference_settings(path)
+        except Exception as exc:  # noqa: BLE001 — any unreadable project is a 400
+            raise ApiError(400, f"Cannot read {name}: {exc}") from exc
+        _reference, _reference_name = ref, name
+        with _registry_lock:
+            for s in _sessions.values():
+                s.reference = ref
+        self._json(_config())
 
     def post_load_path(self, q: dict[str, str]) -> None:
         p = Path(str(self._json_body().get("path", ""))).expanduser()

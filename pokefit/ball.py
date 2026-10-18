@@ -33,6 +33,7 @@ import numpy as np
 import trimesh
 
 from .model3mf import Part, read_project
+from .planar import regions
 from .shell import cap_height, fit_sphere, shell_spheres
 from .washer import Washer
 
@@ -89,8 +90,9 @@ def _ring_profile(ring: trimesh.Trimesh) -> tuple[float, np.ndarray, np.ndarray]
     for z, sec in zip(zs, sections):
         if sec is None:
             continue
-        pts = np.vstack([np.asarray(p.exterior.coords) for p in sec.polygons_full] +
-                        [np.asarray(i.coords) for p in sec.polygons_full for i in p.interiors])
+        polys = regions(sec)
+        pts = np.vstack([np.asarray(p.exterior.coords) for p in polys] +
+                        [np.asarray(i.coords) for p in polys for i in p.interiors])
         # section_multiplane returns coordinates relative to plane_origin.
         rs.append(float(np.linalg.norm(pts, axis=1).min()))
         hs.append((z - equator) * toward_pole)

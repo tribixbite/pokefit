@@ -13,12 +13,17 @@ export interface Check {
 }
 
 export interface Params {
+  /** Print scale of the ball model (0.6 = the 60 % ball). */
   ball_scale: number;
+  /** Inner diameter of the ball in mm; overrides ball_scale when set. */
+  ball_diameter: number | null;
   washer: string;
   clearance: number;
   figure_scale: number | null;
+  /** Degrees, any angle; applied about X, then Y, then Z. */
   rotate_x: number;
   rotate_y: number;
+  rotate_z: number;
   /** Number of magnet pockets, 0–3. */
   magnets: number;
   pockets: { x: number; y: number }[] | null;
@@ -47,6 +52,7 @@ export interface Washer {
 
 export interface BallInfo {
   scale: number;
+  inner_diameter: number;
   r_inner: number;
   r_outer: number;
   floor_z: number;
@@ -153,6 +159,10 @@ export interface Config {
   printer: string;
   process: string;
   slicer: string | null;
+  /** "local": the Python server with Bambu slicing; "browser": the in-page engine. */
+  engine: "local" | "browser";
+  /** Native inner radius of the ball model (mm): inner diameter = 2 · this · ball scale. */
+  ball_r_inner: number;
 }
 
 export interface SliceResult {

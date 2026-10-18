@@ -17,6 +17,7 @@
       <span>pokefit</span>
     </div>
     <div id="fileName" class="file-name">no figure loaded</div>
+    <span id="engineChip" class="engine-chip" hidden></span>
     <label class="btn primary" for="fileInput">Open figure</label>
     <input id="fileInput" type="file" accept=".3mf,.stl,.obj" hidden />
   </header>
@@ -76,7 +77,7 @@
         <div class="grid2">
           <label>Ball size
             <select id="ballSelect"></select>
-            <span id="ballCustomRow" class="unit" hidden><input id="ballCustom" type="number" min="10" max="300" step="1" inputmode="decimal" /> %</span>
+            <span id="ballCustomRow" class="unit" hidden title="Inner diameter of the assembled ball shell"><input id="ballCustom" type="number" min="15" max="300" step="0.1" inputmode="decimal" aria-label="Ball inner diameter in mm" /> mm inner Ø</span>
           </label>
           <label>Clearance
             <span class="unit"><input id="clearanceInput" type="number" min="0" max="5" step="0.1" value="1" inputmode="decimal" /> mm</span>
@@ -98,12 +99,19 @@
 
       <section class="card">
         <h2>Figure</h2>
+        <div class="rot-grid" role="group" aria-label="Rotation">
+          <label>X <span class="unit"><input id="rotX" type="number" step="1" inputmode="decimal" /> °</span></label>
+          <label>Y <span class="unit"><input id="rotY" type="number" step="1" inputmode="decimal" /> °</span></label>
+          <label>Z <span class="unit"><input id="rotZ" type="number" step="1" inputmode="decimal" /> °</span></label>
+        </div>
         <div class="row rot">
-          <span class="muted">Turn upright</span>
-          <button class="btn" data-rot="x">↻ X 90°</button>
-          <button class="btn" data-rot="y">↻ Y 90°</button>
+          <button class="btn" data-rot="x" title="Turn 90° about X">↻ X</button>
+          <button class="btn" data-rot="y" title="Turn 90° about Y">↻ Y</button>
+          <button class="btn" data-rot="z" title="Turn 90° about Z">↻ Z</button>
+          <button class="btn" id="rotReset">Reset</button>
           <span id="rotLabel" class="muted"></span>
         </div>
+        <p class="hint">Any angle (e.g. 45°): applied about X, then Y, then Z. The lowest point lands on the bed.</p>
         <div id="partsList" class="parts"></div>
       </section>
 
@@ -158,6 +166,11 @@
       <section class="card">
         <h2>Export</h2>
         <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell.</p>
+        <div class="row">
+          <label class="btn" for="refInput" title="Read the filament slots of a Bambu Studio project you print from">Use my project's filaments</label>
+          <input id="refInput" type="file" accept=".3mf" hidden />
+          <span id="refInfo" class="muted"></span>
+        </div>
         <div id="importMapBox" hidden>
           <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots:</p>
           <table class="tbl" id="importMap"></table>

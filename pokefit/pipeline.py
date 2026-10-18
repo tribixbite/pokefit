@@ -185,6 +185,30 @@ def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
     return Session(sid, proj, wd, load_ball(ball_path, CACHE_DIR), ref)
 
 
+def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "") -> dict[str, Any]:
+    """What the UI needs before a file is loaded: washers, defaults, the reference printer's filament slots.
+
+    `reference` is a project the user loaded (their own filament slots); default: DEFAULT_REFERENCE.
+    """
+    from .slicer import filament_slots
+    ref = reference if reference is not None else (
+        reference_settings(DEFAULT_REFERENCE) if DEFAULT_REFERENCE.exists() else None)
+    ball = load_ball(DEFAULT_BALL)
+    return {
+        "washers": [w.to_dict() for w in CATALOGUE.values()],
+        "default_washer": DEFAULT_WASHER,
+        "ball_scales": [0.6, 1.0],
+        "ball_r_inner": ball.r_inner,             # native: inner diameter = 2 · this · scale
+        "params": asdict(Params()),
+        "slots": filament_slots(ref) if ref else [],
+        "default_slot": default_slot(ref) if ref else 0,
+        "reference": reference_name if reference is not None else DEFAULT_REFERENCE.name,
+        "printer": (ref or {}).get("printer_settings_id", ""),
+        "process": (ref or {}).get("print_settings_id", ""),
+        "slicer": slicer,
+    }
+
+
 def input_checks(session: Session, params: Params) -> list[Check]:
     """Mesh soundness of the source parts (scale-independent, computed once per object)."""
     obj = session.obj(params)
@@ -534,16 +558,18 @@ def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], 
 
 def _mask_rings(mask: np.ndarray, f: HeightField) -> list[list[list[float]]]:
     """Outlines of a boolean grid mask as figure-frame rings (even-odd: holes come out as rings too)."""
-    from skimage.measure import find_contours
+    import contourpy
 
     if not mask.any():
         return []
     padded = np.pad(mask.astype(float), 1)
     rings = []
-    for c in find_contours(padded, 0.5):
+    # contourpy: small, numpy-only, in Pyodide (scikit-image would pull in matplotlib there).
+    for line in contourpy.contour_generator(z=padded, line_type="Separate").lines(0.5):
+        c = np.asarray(line, np.float64)                  # (n, 2): column, row
         if len(c) < 4:
             continue
-        xy = np.c_[f.x0 + (c[:, 1] - 1) * f.step, f.y0 + (c[:, 0] - 1) * f.step]
+        xy = np.c_[f.x0 + (c[:, 0] - 1) * f.step, f.y0 + (c[:, 1] - 1) * f.step]
         poly = Polygon(xy).simplify(f.step / 2)
         if poly.is_empty or poly.geom_type != "Polygon":
             continue

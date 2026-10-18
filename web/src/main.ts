@@ -24,7 +24,8 @@ const state: State = {
   config: null,
   session: null,
   params: {
-    ball_scale: 0.6, washer: "M6", clearance: 1, figure_scale: null, rotate_x: 0, rotate_y: 0, magnets: 2,
+    ball_scale: 0.6, ball_diameter: null, washer: "M6", clearance: 1, figure_scale: null,
+    rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, object_id: null, slot: null, settings_source: "reference",
     filament_map: null,
@@ -69,18 +70,23 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEle
 // ------------------------------------------------------------------ loading
 
 async function init(): Promise<void> {
+  api.onEngineStatus(engineStatus);
   try {
     state.config = await api.getConfig();
   } catch (e) {
-    toast(`Server not reachable: ${(e as Error).message}`);
+    toast(`Engine not reachable: ${(e as Error).message}`);
     return;
   }
   const cfg = state.config;
+  if (cfg.engine === "local") engineStatus("local");
   state.params.washer = cfg.default_washer;
   state.params.slot = cfg.default_slot;
   const ballSel = $<HTMLSelectElement>("ballSelect");
-  for (const s of cfg.ball_scales) ballSel.append(h("option", { value: String(s), textContent: `${Math.round(s * 100)} % ball` }));
-  ballSel.append(h("option", { value: "custom", textContent: "Other…" }));
+  for (const s of cfg.ball_scales) {
+    const d = 2 * cfg.ball_r_inner * s;
+    ballSel.append(h("option", { value: String(s), textContent: `${Math.round(s * 100)} % ball · Ø ${d.toFixed(1)} mm` }));
+  }
+  ballSel.append(h("option", { value: "custom", textContent: "Inner diameter…" }));
   const ws = $<HTMLSelectElement>("washerSelect");
   for (const w of cfg.washers) ws.append(h("option", { value: w.key, textContent: w.label }));
   ws.append(h("option", { value: "custom", textContent: "Custom size…" }));
@@ -94,13 +100,39 @@ async function init(): Promise<void> {
     ss.append(h("option", { value: s.slot, textContent: s.name }));
   }
   ss.value = String(cfg.default_slot);
-  $("printerInfo").textContent = cfg.slicer
-    ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
-    : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
-  ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
+  renderPrinter(cfg);
 
   const path = new URLSearchParams(location.search).get("path");
   if (path) await load(() => api.loadPath(path), path.split(/[\\/]/).pop() ?? path);
+}
+
+/** Print card: Bambu slicing needs the desktop slicer, so it only exists in the local version. */
+function renderPrinter(cfg: Config): void {
+  $("printerInfo").textContent = cfg.engine === "browser"
+    ? "Print time and filament come from Bambu Studio itself, which only runs on your computer: install pokefit " +
+      "locally (see About) to slice. Everything else runs here in your browser."
+    : cfg.slicer
+      ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
+      : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
+  ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
+  $("refInfo").textContent = cfg.reference ? `slots from ${cfg.reference}` : "";
+}
+
+/** Header chip: where the engine runs and, in the browser, its start-up progress. */
+function engineStatus(text: string): void {
+  const chip = $("engineChip");
+  chip.hidden = false;
+  if (text === "local") {
+    chip.className = "engine-chip ready";
+    chip.textContent = "local engine · Bambu slicing";
+    return;
+  }
+  const failed = text.startsWith("failed");
+  chip.className = `engine-chip ${text === "ready" ? "ready" : failed ? "failed" : "loading"}`;
+  chip.textContent = text === "ready" ? "runs in your browser" : failed ? "engine failed to start" : "starting engine…";
+  chip.title = text === "ready" ? "Your files never leave this device." : text;
+  if (!$("busy").hidden && text !== "ready" && !failed) $("busyText").textContent = text;
+  if (failed) toast(`The engine could not start (${text.slice(8)}). Reload to retry.`);
 }
 
 async function load(fn: () => Promise<import("./types").LoadResponse>, name: string): Promise<void> {
@@ -108,8 +140,8 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
   try {
     const res = await fn();
     state.session = res.session;
-    state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, object_id: null,
-      filament_map: null };
+    state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
+      object_id: null, filament_map: null };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
@@ -118,8 +150,9 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
     // Initial analysis used server defaults; re-run if the UI's settings differ.
     const r = res.report;
     const differs = r.params.washer !== state.params.washer || r.params.ball_scale !== state.params.ball_scale ||
+      r.params.ball_diameter !== state.params.ball_diameter ||
       r.params.clearance !== state.params.clearance || r.params.magnets !== state.params.magnets;
-    await viewer.setFigure(api.previewUrl(res.session, state.params));
+    await viewer.setFigure(await api.previewSource(res.session, state.params));
     if (differs) await runAnalyse();
     else show(r);
     viewer.view("iso");
@@ -131,6 +164,19 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
 }
 
 // ------------------------------------------------------------------ analysis
+
+/** Reload the 3D preview for the current object/orientation (seconds in the browser engine). */
+async function refreshFigure(): Promise<void> {
+  if (!state.session) return;
+  busy(true, "Preparing the preview…");
+  try {
+    await viewer.setFigure(await api.previewSource(state.session, state.params));
+  } catch (e) {
+    toast((e as Error).message);
+  } finally {
+    busy(false);
+  }
+}
 
 async function runAnalyse(): Promise<void> {
   if (!state.session) return;
@@ -179,12 +225,14 @@ function show(rep: Report): void {
   mark.style.left = `calc(${(frac * 100).toFixed(2)}% + ${(8 - frac * 16).toFixed(1)}px)`;
   $<HTMLInputElement>("heightInput").value = f.height_mm.toFixed(1);
 
-  const preset = state.config?.ball_scales.includes(rep.params.ball_scale) ?? false;
+  const preset = !rep.params.ball_diameter && (state.config?.ball_scales.includes(rep.params.ball_scale) ?? false);
   $<HTMLSelectElement>("ballSelect").value = preset ? String(rep.params.ball_scale) : "custom";
   $("ballCustomRow").hidden = preset;
-  if (!preset) $<HTMLInputElement>("ballCustom").value = String(Math.round(rep.params.ball_scale * 100));
-  $("rotLabel").textContent = rep.params.rotate_x || rep.params.rotate_y
-    ? `X ${rep.params.rotate_x}° · Y ${rep.params.rotate_y}°` : "";
+  if (!preset) $<HTMLInputElement>("ballCustom").value = rep.ball.inner_diameter.toFixed(1);
+  $<HTMLInputElement>("rotX").value = String(rep.params.rotate_x);
+  $<HTMLInputElement>("rotY").value = String(rep.params.rotate_y);
+  $<HTMLInputElement>("rotZ").value = String(rep.params.rotate_z);
+  $("rotLabel").textContent = "";
 
   renderObjects(rep);
   renderChecks(rep);
@@ -385,7 +433,9 @@ async function doExport(): Promise<void> {
     const res = await api.exportFiles(state.session, state.params);
     $("exportOut").replaceChildren(
       ...res.files.map((f) => h("a", { href: f.url, textContent: `⬇ ${f.name}`, download: f.name })),
-      h("div", { cls: "muted", textContent: `Also saved in ${res.files[0]?.path.replace(/[\\/][^\\/]+$/, "") ?? ""}` }),
+      h("div", { cls: "muted", textContent: res.files[0]?.path
+        ? `Also saved in ${res.files[0].path.replace(/[\\/][^\\/]+$/, "")}`
+        : "Made in your browser: click each file to save it." }),
       ...(res.note ? [h("div", { cls: "err", textContent: res.note })] : []),
     );
   } catch (e) {
@@ -400,7 +450,8 @@ async function compareWashers(): Promise<void> {
   if (!state.session) return;
   const btn = $<HTMLButtonElement>("washerCompare");
   btn.disabled = true;
-  $("washerTable").replaceChildren(h("div", { cls: "muted", textContent: "Trying every washer (≈ 30 s)…" }));
+  $("washerTable").replaceChildren(h("div", { cls: "muted", textContent:
+    api.engineMode() === "browser" ? "Trying every washer (about a minute in the browser)…" : "Trying every washer (≈ 30 s)…" }));
   try {
     const rows: WasherRow[] = await api.washers(state.session, state.params);
     const best = rows.find((r) => r.pockets_on_steel)?.key;
@@ -485,8 +536,10 @@ function bind(): void {
     void runAnalyse();
   });
 
-  const setBall = (v: number): void => {
-    state.params.ball_scale = v;
+  /** A preset ball (print scale) or a custom inner diameter in mm. */
+  const setBall = (scale: number, diameter: number | null): void => {
+    state.params.ball_scale = scale;
+    state.params.ball_diameter = diameter;
     state.params.figure_scale = null;
     state.params.pockets = null;
     void runAnalyse();
@@ -497,14 +550,14 @@ function bind(): void {
     $("ballCustomRow").hidden = !custom;
     if (custom) {
       const inp = $<HTMLInputElement>("ballCustom");
-      inp.value = String(Math.round(state.params.ball_scale * 100));
+      inp.value = (state.report?.ball.inner_diameter ?? 44.2).toFixed(1);
       inp.focus();
-    } else setBall(+sel.value);
+    } else setBall(+sel.value, null);
   });
   $<HTMLInputElement>("ballCustom").addEventListener("change", (e) => {
     const v = +(e.target as HTMLInputElement).value;
-    if (v >= 10 && v <= 300) setBall(v / 100);
-    else toast("Ball scale must be between 10 and 300 %.");
+    if (v >= 15 && v <= 300) setBall(state.params.ball_scale, v);
+    else toast("Inner diameter must be between 15 and 300 mm.");
   });
   $<HTMLSelectElement>("washerSelect").addEventListener("change", (e) => {
     const sel = e.target as HTMLSelectElement;
@@ -539,18 +592,50 @@ function bind(): void {
     state.params.figure_scale = null;
     state.params.pockets = null;
     state.params.filament_map = null;
-    if (state.session) await viewer.setFigure(api.previewUrl(state.session, state.params));
+    await refreshFigure();
     void runAnalyse();
   });
+  /** New orientation: reset size and pockets, reload the preview, re-analyse. */
+  const rotate = async (x: number, y: number, z: number): Promise<void> => {
+    const norm = (a: number): number => +(((a % 360) + 360) % 360).toFixed(3);
+    state.params.rotate_x = norm(x);
+    state.params.rotate_y = norm(y);
+    state.params.rotate_z = norm(z);
+    state.params.figure_scale = null;
+    state.params.pockets = null;
+    await refreshFigure();
+    void runAnalyse();
+  };
   document.querySelectorAll<HTMLButtonElement>("[data-rot]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      if (b.dataset.rot === "x") state.params.rotate_x = (state.params.rotate_x + 90) % 360;
-      else state.params.rotate_y = (state.params.rotate_y + 90) % 360;
-      state.params.figure_scale = null;
-      state.params.pockets = null;
-      if (state.session) await viewer.setFigure(api.previewUrl(state.session, state.params));
-      void runAnalyse();
+    b.addEventListener("click", () => {
+      const p = state.params;
+      const ax = b.dataset.rot;
+      void rotate(p.rotate_x + (ax === "x" ? 90 : 0), p.rotate_y + (ax === "y" ? 90 : 0), p.rotate_z + (ax === "z" ? 90 : 0));
     }));
+  $("rotReset").addEventListener("click", () => void rotate(0, 0, 0));
+  for (const id of ["rotX", "rotY", "rotZ"]) {
+    $<HTMLInputElement>(id).addEventListener("change", () => {
+      const v = (k: string): number => +$<HTMLInputElement>(k).value || 0;
+      void rotate(v("rotX"), v("rotY"), v("rotZ"));
+    });
+  }
+  $<HTMLInputElement>("refInput").addEventListener("change", async (e) => {
+    const inp = e.target as HTMLInputElement;
+    const f = inp.files?.[0];
+    inp.value = "";
+    if (!f) return;
+    busy(true, `Reading ${f.name}…`);
+    try {
+      state.config = await api.setReference(f);
+      renderPrinter(state.config);
+      state.params.filament_map = null;
+      if (state.session) await runAnalyse();
+    } catch (err) {
+      toast((err as Error).message);
+    } finally {
+      busy(false);
+    }
+  });
   document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
     b.addEventListener("click", () => {
       const n = +(b.dataset.n ?? 2);

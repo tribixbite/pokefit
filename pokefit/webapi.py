@@ -1,0 +1,101 @@
+"""The pokefit engine as called from the browser (Pyodide in a Web Worker).
+
+Mirrors the local server's JSON API (server.py) without HTTP: the worker
+passes JSON strings and file bytes in, and gets JSON strings and bytes back.
+Sessions live in memory; files are written to Pyodide's in-memory filesystem.
+Bambu slicing needs the desktop slicer and is only available in the local
+version (`python -m pokefit serve`).
+"""
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .pipeline import (Params, Session, analyse, app_config, export, open_session, preview_glb, safe_stem,
+                       washer_table)
+from .slicer import reference_settings
+
+WORK = Path("/tmp/pokefit")
+_sessions: dict[str, Session] = {}
+_reference: dict | None = None          # the user's own Bambu project settings, if they loaded one
+_reference_name = ""
+
+
+def _dump(o: Any) -> str:
+    import numpy as np
+
+    def default(x: Any) -> Any:
+        if isinstance(x, (np.floating, np.integer)):
+            return x.item()
+        if isinstance(x, np.ndarray):
+            return x.tolist()
+        if isinstance(x, Path):
+            return str(x)
+        raise TypeError(f"not JSON serialisable: {type(x).__name__}")
+
+    return json.dumps(o, default=default)
+
+
+def _raw(data: Any) -> bytes:
+    """Bytes from a JS Uint8Array / ArrayBuffer proxy (or Python bytes in tests)."""
+    return data.to_bytes() if hasattr(data, "to_bytes") else bytes(data)
+
+
+def _session(sid: str) -> Session:
+    if sid not in _sessions:
+        raise KeyError("Unknown session — load a file first.")
+    return _sessions[sid]
+
+
+def config() -> str:
+    return _dump({**app_config(None, _reference, _reference_name), "engine": "browser"})
+
+
+def load(name: str, data: Any) -> str:
+    """Open an uploaded .3mf / .stl / .obj (bytes) and analyse it with default settings."""
+    folder = WORK / uuid.uuid4().hex[:8]
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / Path(name).name
+    path.write_bytes(_raw(data))
+    s = open_session(path, work_dir=folder / "work")
+    if _reference is not None:
+        s.reference = _reference
+    _sessions[s.id] = s
+    rep, _ = analyse(s, Params())
+    return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
+
+
+def set_reference(name: str, data: Any) -> str:
+    """Use the filament slots (and printer settings) of the user's own Bambu project."""
+    global _reference, _reference_name
+    path = WORK / "reference" / Path(name).name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_raw(data))
+    _reference, _reference_name = reference_settings(path), path.name
+    for s in _sessions.values():
+        s.reference = _reference
+    return config()
+
+
+def run_analyse(sid: str, params_json: str) -> str:
+    rep, _ = analyse(_session(sid), Params.from_dict(json.loads(params_json)))
+    return _dump(rep.to_dict())
+
+
+def washers(sid: str, params_json: str) -> str:
+    return _dump(washer_table(_session(sid), Params.from_dict(json.loads(params_json))))
+
+
+def preview(sid: str, params_json: str) -> bytes:
+    return preview_glb(_session(sid), Params.from_dict(json.loads(params_json)))
+
+
+def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:
+    """(result JSON, [(file name, bytes)]) — the files are offered as downloads by the page."""
+    s = _session(sid)
+    out = WORK / "out" / uuid.uuid4().hex[:8] / safe_stem(s.project.path.name)
+    res = export(s, Params.from_dict(json.loads(params_json)), out)
+    files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["shell_stl"], res["report"]) if p]
+    return _dump(res), [(f.name, f.read_bytes()) for f in files]

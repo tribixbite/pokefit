@@ -10,6 +10,7 @@ import numpy as np
 import trimesh
 
 from .model3mf import Part
+from .planar import regions
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
 
@@ -156,14 +157,15 @@ def ray_distances(m: trimesh.Trimesh, origins: np.ndarray, dirs: np.ndarray, max
         idx = np.nonzero(size_class == k)[0]
         r_max = float(rad[idx].max())
         found = cKDTree(cen[idx]).query_ball_point(probes, seg / 2 + r_max)
-        lens = np.fromiter((len(f) for f in found), np.int64, len(found))
+        lens = np.fromiter((len(f) for f in found), np.intp, len(found))   # platform index type (int32 in WASM)
         if lens.sum():
             rays.append(np.repeat(np.arange(len(probes)) // n_seg, lens))
             cands.append(idx[np.concatenate([np.asarray(f, np.int64) for f in found if len(f)])])
     ray = np.concatenate(rays) if rays else np.zeros(0, np.int64)
     cand = np.concatenate(cands) if cands else np.zeros(0, np.int64)
-    key = np.unique(ray * len(tri) + cand)                  # a triangle near two probes is tested once
-    ray, cand = key // max(len(tri), 1), key % max(len(tri), 1)
+    # One test per (ray, triangle) even if it is near two probes; int64 so the key cannot overflow in WASM.
+    key = np.unique(ray.astype(np.int64) * len(tri) + cand)
+    ray, cand = (key // max(len(tri), 1)).astype(np.intp), (key % max(len(tri), 1)).astype(np.intp)
     out = np.full(len(origins), np.inf)
     if not len(ray):
         return out
@@ -254,7 +256,7 @@ def islands_check(m: trimesh.Trimesh, layer: float = 0.2) -> Check:
     prev = None
     found: list[list[float]] = []
     for z, sec in zip(heights, sections):
-        polys = list(sec.polygons_full) if sec is not None else []
+        polys = regions(sec) if sec is not None else []
         cur = unary_union(polys) if polys else None
         if prev is not None and cur is not None:
             for p in polys:
@@ -277,7 +279,7 @@ def bed_contact_check(m: trimesh.Trimesh) -> Check:
     if sec is not None:
         planar, _ = sec.to_2D(to_2D=np.linalg.inv(trimesh.transformations.translation_matrix([0, 0, 0.1])),
                               check=False)
-        area = float(sum(p.area for p in planar.polygons_full))
+        area = float(sum(p.area for p in regions(planar)))
     h = float(m.extents[2])
     ratio = h / np.sqrt(area) if area > 0 else np.inf
     if area <= 0:
