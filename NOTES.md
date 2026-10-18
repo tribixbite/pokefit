@@ -72,7 +72,7 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   upstream Sep 2026) — harmless.
 - Multi-figure 3MFs: picker card at the top of the panel; meshes are parsed per object on demand
   (14 × 500k-face file opens in ~6 s; was 99 s because the regex fast path never matched).
-- Gates: `python -m mypy`, `python -m pytest` (85 incl. slow real-file/Bambu tests, ~1 min),
+- Gates: `python -m mypy`, `python -m pytest` (86 incl. slow real-file/Bambu tests, ~1 min),
   `cd web && bun run typecheck && bun test && bun run build && bun run smoke` (engine under Node).
 - Social preview: `cd web && bun run og`, open http://127.0.0.1:8791/ → writes public/og.gif + og.jpg
   (original creature; no third-party model). Icons: `python scripts/make_icons.py`.

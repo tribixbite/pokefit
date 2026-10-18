@@ -247,3 +247,11 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .about a { color: var(--accent2); }
 .about-close { position: absolute; top: 14px; right: 14px; }
 @media (max-width: 520px) { .about-inner { padding: 20px 16px; } .about h1 { font-size: 20px; } }
+
+/* Phone header: short engine label, buttons on one line. */
+.engine-chip .short { display: none; }
+@media (max-width: 520px) {
+  .engine-chip .long { display: none; }
+  .engine-chip .short { display: inline; }
+  .top .btn { white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+}

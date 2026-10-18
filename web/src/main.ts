@@ -128,14 +128,19 @@ function renderPrinter(cfg: Config): void {
 function engineStatus(text: string): void {
   const chip = $("engineChip");
   chip.hidden = false;
+  /** Long label for wide screens, short one for phones (CSS picks). */
+  const label = (long: string, short: string): void =>
+    chip.replaceChildren(h("span", { cls: "long", textContent: long }), h("span", { cls: "short", textContent: short }));
   if (text === "local") {
     chip.className = "engine-chip ready";
-    chip.textContent = "local engine · Bambu slicing";
+    label("local engine · Bambu slicing", "local");
     return;
   }
   const failed = text.startsWith("failed");
   chip.className = `engine-chip ${text === "ready" ? "ready" : failed ? "failed" : "loading"}`;
-  chip.textContent = text === "ready" ? "runs in your browser" : failed ? "engine failed to start" : "starting engine…";
+  if (text === "ready") label("runs in your browser", "ready");
+  else if (failed) label("engine failed to start", "failed");
+  else label("starting engine…", "starting…");
   chip.title = text === "ready" ? "Your files never leave this device." : text;
   if (!$("busy").hidden && text !== "ready" && !failed) $("busyText").textContent = text;
   if (failed) toast(`The engine could not start (${text.slice(8)}). Reload to retry.`);
