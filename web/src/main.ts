@@ -84,7 +84,7 @@ async function init(): Promise<void> {
   const ballSel = $<HTMLSelectElement>("ballSelect");
   for (const s of cfg.ball_scales) {
     const d = 2 * cfg.ball_r_inner * s;
-    ballSel.append(h("option", { value: String(s), textContent: `${Math.round(s * 100)} % ball · Ø ${d.toFixed(1)} mm` }));
+    ballSel.append(h("option", { value: String(s), textContent: `${Math.round(s * 100)} % · Ø ${d.toFixed(1)} mm` }));
   }
   ballSel.append(h("option", { value: "custom", textContent: "Inner diameter…" }));
   const ws = $<HTMLSelectElement>("washerSelect");

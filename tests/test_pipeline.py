@@ -152,3 +152,12 @@ def test_inner_diameter_and_free_rotation(critter: Path, tmp_path: Path) -> None
     assert ext[0] == pytest.approx(ext[1], abs=1e-6) and ext[0] == pytest.approx(35 / np.sqrt(2), abs=1e-3)
     lean, _ = analyse(s, Params(rotate_x=30, magnets=0))
     assert lean.fit["scale"] > 0
+
+
+def test_units_hint_for_tiny_files(tmp_path: Path) -> None:
+    """A figure 0.9 mm tall as saved was modelled in metres/cm: an info check says so; mm figures get none."""
+    tiny = write_inline_3mf(tmp_path / "tiny.3mf", trimesh.creation.box([0.6, 0.4, 0.9]), np.eye(4))
+    rep, _ = analyse(open_session(tiny, BALL_3MF, None, tmp_path / "w"), Params(magnets=0))
+    c = _by_id(rep)
+    assert c["units"]["status"] == "info" and "metres" in c["units"]["message"]
+    assert rep.fit["height_mm"] > 10                     # still fitted to the ball in mm

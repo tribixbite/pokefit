@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <!-- The host serves plain http too: move visitors to https (not on a local dev server). -->
+  <script>if (location.protocol === "http:" && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) location.replace("https:" + location.href.slice(5));</script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <!-- The UI is dark already; stop the Dark Reader extension from re-tinting it. -->

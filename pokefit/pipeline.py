@@ -452,6 +452,9 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
         return rep, unit
 
     final = scaled(unit, scale)
+    units = _units_hint(hp.height)
+    if units:
+        checks.append(units)
     fc = check_fit(hp, cavity, scale, off)
     limit = [fc.point[0] - off[0], fc.point[1] - off[1], fc.point[2] - cavity.floor_z]
     fit_dict.update({"margin": fc.margin, "limit_kind": fc.kind, "limit_point": limit})
@@ -601,6 +604,20 @@ def _height_image(f: HeightField) -> dict[str, Any]:
     return {"height_png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
             "extent": [f.x0 - f.step / 2, f.y0 - f.step / 2, f.x0 + (nx - 0.5) * f.step, f.y0 + (ny - 0.5) * f.step],
             "height_span": round(span, 2)}
+
+
+def _units_hint(height: float) -> Check | None:
+    """STL/OBJ carry no units: a figure a few mm or several metres tall as saved was probably not modelled in mm.
+
+    The fitted size in mm is right either way; only the "% of the file" figures look odd.
+    """
+    if 2.0 <= height <= 2000.0:
+        return None
+    guess = "metres or centimetres" if height < 2.0 else "micrometres"
+    return Check("units", "File units", "info",
+                 f"The figure is {height:.3g} mm tall as saved, so the file was probably modelled in {guess}. "
+                 "The fitted size in mm is still right; only the percentages of the file look unusual.",
+                 round(height, 4))
 
 
 def _kind_text(kind: str) -> str:

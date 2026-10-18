@@ -40,12 +40,27 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
 
 ## pokefit — fit a figure in the ball, magnet pockets, printability
 Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowers/plans/2026-10-17-pokefit.md`.
+- **Live: https://pokefit.party** (public repo github.com/tribixbite/pokefit, GitHub Pages via
+  Actions, custom domain from `web/public/CNAME`; DNS is Cloudflare-proxied CNAME @ →
+  tribixbite.github.io, so HTTPS is Cloudflare's — GitHub's own cert stays unissued). Every push
+  to `main` runs `.github/workflows/deploy.yml` (mypy, pytest, typecheck, bun test, build,
+  Pyodide smoke test) and redeploys. Watch with `gh run list -R tribixbite/pokefit`.
+- The site runs the same Python engine in a Web Worker (Pyodide 0.29.5 from jsDelivr,
+  manifold-3d WASM for booleans via `pokefit/geom.py` → `_manifold_js.py`, vendored
+  trimesh 5.1.1 / networkx 3.4.2 wheels, `pokefit.zip`, build-time `config.json`). `api.ts`
+  uses the local server when the page is served by it, else the worker. No Bambu slicing on the
+  site. Browser timings: dragon load+analyse 24 s (native 12), re-analyse 13 s.
+- Public-repo hygiene: history was rewritten 2026-10-18 (author → tribixbite noreply; the
+  third-party `pokeball.3mf`, `*.skp` and derived STLs removed). Original history + files are
+  in `C:\git\pokeball_backup_20261018\` (bundle verified). Model files are git-ignored; the
+  ball ships only as measurements (`pokefit/profiles/ball_functional_pokeball.json`).
 - Setup once: `pip install -e .` (repo root) and `cd web && bun install && bun run build`.
 - UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj, or
   `?path=C:/path/to/file.3mf` with `+` written as `%2B`). Outputs land in `pokefit_out/<name>/`.
-- CLI: `python -m pokefit fit <figure.3mf> --ball 0.6 --washer M6 [--scale 85%] [--magnets 0-3]
+- CLI: `python -m pokefit fit <figure.3mf> [--ball 0.6 | --diameter 44] --washer M6 [--scale 85%] [--magnets 0-3]
+  [--rotate-x/-y/-z DEG]
   [--washers] [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
-- Magnets (1–3): placed on a ray-cast height field of the underside (`magnets.HeightField`), so
+- Magnets (1–3): placed on a rasterised height field of the underside (`magnets.HeightField`), so
   sloped/raised undersides work. Each pocket opens as low as possible, never below the bed
   plane, with ≥ `grip` (1.2 mm) of it walled; auto placement keeps openings ≤ 2 mm above the
   washer (UI offers raising it when nothing lower fits). Pocket z = opening height in reports.
@@ -57,8 +72,10 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   upstream Sep 2026) — harmless.
 - Multi-figure 3MFs: picker card at the top of the panel; meshes are parsed per object on demand
   (14 × 500k-face file opens in ~6 s; was 99 s because the regex fast path never matched).
-- Gates: `python -m mypy`, `python -m pytest` (82 incl. slow real-file/Bambu tests, ~1 min),
-  `cd web && bun run typecheck && bun test && bun run build`.
+- Gates: `python -m mypy`, `python -m pytest` (86 incl. slow real-file/Bambu tests, ~1 min),
+  `cd web && bun run typecheck && bun test && bun run build && bun run smoke` (engine under Node).
+- Social preview: `cd web && bun run og`, open http://127.0.0.1:8791/ → writes public/og.gif + og.jpg
+  (original creature; no third-party model). Icons: `python scripts/make_icons.py`.
 - Slicing uses the user's X2D/PETG/0.16 project settings (`pokeball60goodPrinted.3mf`, or the
   bundled copy `pokefit/profiles/x2d_petg_printed_ball_shells.json`), reduced to the figure's
   filament count. Bambu CLI facts: needs `Application=BambuStudio-…` in 3dmodel.model or it
@@ -70,6 +87,9 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   US #10×3/4″ 33.6, M5 off steel.
 
 ## Open
+- Site: GitHub Actions warns that checkout/setup-python/deploy-pages@v4 run on Node 20 (forced to 24);
+  bump the action majors when convenient. No LICENSE file yet (public repo = all rights reserved
+  by default) — the user's call. Cloudflare "Always Use HTTPS" is off (the page redirects itself).
 - pokefit known limits (not bugs): ring radius is the minimum over all angles (the latch
   notch sets it, so a figure could be a little bigger turned away from the latch — would need
   yaw-dependent ring profile); manual pockets stay at absolute mm when the size changes;
