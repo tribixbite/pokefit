@@ -31,7 +31,7 @@ import numpy as np
 
 DEFAULT_EXE = Path(os.environ.get("POKEFIT_BAMBU", r"C:\Program Files\Bambu Studio\bambu-studio.exe"))
 TIMEOUT_S = 300
-RETRIES = 1          # one of the first ~8 CLI runs hung idle at 0 % CPU; rerunning the same file took 12 s
+RETRIES = 1          # a run that dies without writing result.json is retried once
 
 
 @dataclass
@@ -165,23 +165,56 @@ def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, 
         cmd += ["--arrange", "1"]
     cmd += ["--outputdir", str(out_dir), str(Path(path).resolve())]
     t0 = time.time()
+    rc: int | None = None
     for attempt in range(RETRIES + 1):
+        (out_dir / "result.json").unlink(missing_ok=True)
         try:
-            proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, timeout=timeout,
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            break
-        except subprocess.TimeoutExpired:
-            # subprocess.run kills the child on timeout before re-raising.
-            if attempt == RETRIES:
-                return SliceResult(False, error=f"slicing timed out after {timeout:.0f} s "
-                                                f"({RETRIES + 1} attempts)", copies=copies)
+            rc = _run_until_result(cmd, out_dir, timeout)
         except OSError as exc:
             return SliceResult(False, error=f"cannot run Bambu Studio: {exc}", copies=copies)
+        if rc is not None or _result_complete(out_dir):
+            break
+        if attempt == RETRIES:
+            return SliceResult(False, error=f"slicing timed out after {timeout:.0f} s ({RETRIES + 1} attempts)",
+                               copies=copies)
     res = read_result(out_dir, copies)
     res.wall_time = time.time() - t0
-    if not res.ok and proc.returncode and not res.error:
-        res.error = f"exit code {proc.returncode}"
+    if not res.ok and rc and not res.error:
+        res.error = f"exit code {rc}"
     return res
+
+
+def _result_complete(out_dir: Path) -> bool:
+    try:
+        return "return_code" in json.loads((out_dir / "result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+
+
+def _run_until_result(cmd: list[str], out_dir: Path, timeout: float, grace: float = 5.0) -> int | None:
+    """Run the CLI; return its exit code, or None if it had to be killed.
+
+    The CLI sometimes finishes slicing, writes result.json and the G-code, and
+    then hangs during shutdown with a single idle thread (seen 2 times in ~12
+    runs on 02.08.02.61). Once result.json is complete the process gets
+    `grace` seconds to exit on its own before it is killed; the result stands.
+    """
+    proc = subprocess.Popen(cmd, cwd=out_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    deadline = time.time() + timeout
+    done_at: float | None = None
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            return rc
+        now = time.time()
+        if done_at is None and _result_complete(out_dir):
+            done_at = now
+        if (done_at is not None and now - done_at > grace) or now > deadline:
+            proc.kill()
+            proc.wait(10)
+            return None
+        time.sleep(0.25)
 
 
 def grid_positions(footprint: tuple[float, float], copies: int, plate: tuple[float, float],

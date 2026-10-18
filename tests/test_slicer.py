@@ -107,3 +107,20 @@ def test_slice_t_shape_supports(tmp_path: Path) -> None:
     assert res[False].support_seconds == 0
     assert res[True].support_seconds > 0
     assert res[True].seconds > res[False].seconds
+
+
+def test_exit_hang_is_cut_short(tmp_path: Path) -> None:
+    """A CLI that writes result.json and then never exits is killed after the grace period."""
+    import sys
+    import time
+
+    from pokefit.slicer import _run_until_result
+
+    script = tmp_path / "fake.py"
+    script.write_text("import json, time\n"
+                      "json.dump({'return_code': 0, 'sliced_plates': [{'total_predication': 5}]}, open('result.json', 'w'))\n"
+                      "time.sleep(60)\n")
+    t0 = time.time()
+    rc = _run_until_result([sys.executable, str(script)], tmp_path, timeout=30, grace=1.0)
+    assert rc is None and time.time() - t0 < 10
+    assert read_result(tmp_path, 1).seconds == 5
