@@ -188,6 +188,7 @@ def read_project(path: str | Path) -> Project:
     path = Path(path)
     if path.suffix.lower() != ".3mf":
         m = trimesh.load(path, force="mesh", process=False)
+        assert isinstance(m, trimesh.Trimesh)
         part = Part(path.stem, 0, np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
         obj = FigureObject("1", path.stem, 1, [part], np.eye(4))
         return Project(path, "mesh", [obj], DEFAULT_COLOURS[:1], None)
@@ -228,7 +229,7 @@ def read_project(path: str | Path) -> Project:
                 sub_path = c.get(P_PATH) or mf_path
                 collect(sub_path, c.get("objectid"), xf @ parse_transform(c.get("transform")), part_meta, out)
 
-        build = {}
+        build: dict[str, np.ndarray] = {}
         for item in root.iterfind("m:build/m:item", NS):
             build.setdefault(item.get("objectid"), parse_transform(item.get("transform")))
 

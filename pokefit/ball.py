@@ -59,7 +59,9 @@ class Ball:
 
 
 def _merged(parts: list[Part]) -> trimesh.Trimesh:
-    return trimesh.util.concatenate([p.mesh() for p in parts])
+    m = trimesh.util.concatenate([p.mesh() for p in parts])
+    assert isinstance(m, trimesh.Trimesh)
+    return m
 
 
 def _ring_profile(ring: trimesh.Trimesh) -> tuple[float, np.ndarray, np.ndarray]:
