@@ -1,7 +1,8 @@
 /**
  * Underside view (looking up at the figure's base, figure frame, final mm) with
- * draggable magnet pockets. Shows the foot outlines, where a pocket centre keeps
- * its walls (green), and the washer's steel ring as the ball will hold it.
+ * draggable magnet pockets. Shows the underside heights (dark = on the bed,
+ * lighter = higher), the outline of what touches the bed, where a pocket centre
+ * keeps its walls (green), and the washer's steel ring as the ball will hold it.
  */
 import { bounds, insideRings, onSteel } from "./geometry";
 import type { Underside } from "./types";
@@ -46,7 +47,8 @@ export class UndersideEditor {
       [ring.x + ring.outer, ring.y + ring.outer],
       ...pockets.map((p) => [p.x, p.y]),
     ];
-    const [x0, y0, x1, y1] = bounds(data.feet, extra);
+    const ext = data.extent;
+    const [x0, y0, x1, y1] = bounds(data.feet, [...extra, [ext[0], ext[1]], [ext[2], ext[3]]]);
     const pad = 2;
     // SVG y grows downward; flip so +y is up. This is the view from below,
     // so mirror x as well: what is on the figure's right appears on the left.
@@ -54,6 +56,9 @@ export class UndersideEditor {
     const g = el("g", { transform: "scale(-1,-1)" });
     s.appendChild(g);
 
+    // Height image: row 0 is the grid's lowest y, which this mirrored group draws at the bottom.
+    g.appendChild(el("image", { href: data.height_png, x: ext[0], y: ext[1], width: ext[2] - ext[0],
+      height: ext[3] - ext[1], preserveAspectRatio: "none", class: "u-height" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.washer_od / 2, class: "u-washer" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.washer_id / 2, class: "u-hole" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: (ring.inner + ring.outer) / 2, class: "u-band",
@@ -73,6 +78,13 @@ export class UndersideEditor {
       });
       c.addEventListener("keydown", (e) => this.nudge(e, i));
       g.appendChild(c);
+    });
+    // Pocket numbers (outside the mirrored group so the digits read normally).
+    this.pockets.forEach((p, i) => {
+      const t = el("text", { x: -p.x, y: -p.y, class: "u-label", "data-l": i, "font-size": data.pocket_d * 0.55,
+        "text-anchor": "middle", "dominant-baseline": "central" });
+      t.textContent = String(i + 1);
+      s.appendChild(t);
     });
   }
 
@@ -96,6 +108,11 @@ export class UndersideEditor {
       c.setAttribute("cx", String(p.x));
       c.setAttribute("cy", String(p.y));
       c.setAttribute("class", `u-pocket ${this.pocketOk(p) ? "ok" : "bad"}`);
+    }
+    const t = this.svg.querySelector<SVGTextElement>(`text[data-l="${this.dragging}"]`);
+    if (t) {
+      t.setAttribute("x", String(-this.pockets[this.dragging].x));
+      t.setAttribute("y", String(-this.pockets[this.dragging].y));
     }
   }
 

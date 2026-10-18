@@ -153,20 +153,20 @@ def thickness_check(m: trimesh.Trimesh, samples: int = 4000, seed: int = 0) -> C
                  f"Thinnest 1 % of the surface is {p01:.2f} mm.", round(p01, 2))
 
 
-def overhang_check(m: trimesh.Trimesh, threshold_deg: float, ignore_xy: list[tuple[float, float, float]] | None = None,
-                   ignore_z: float = 0.0) -> Check:
+def overhang_check(m: trimesh.Trimesh, threshold_deg: float,
+                   ignore_xy: list[tuple[float, float, float, float]] | None = None) -> Check:
     """Down-facing surfaces flatter than the slicer's support threshold, above the bed.
 
     `threshold_deg` is Bambu's support_threshold_angle: a face whose angle to
-    the horizontal is below it needs support. `ignore_xy` (x, y, r) discs up to
-    `ignore_z` exclude the magnet pocket ceilings (short bridges).
+    the horizontal is below it needs support. `ignore_xy` (x, y, r, z_top)
+    cylinders exclude the magnet pocket ceilings (short bridges).
     """
     nz = m.face_normals[:, 2]
     tilt = np.degrees(np.arccos(np.clip(-nz, -1, 1)))      # 0 = flat ceiling, 90 = vertical wall
     centres = m.triangles_center
     over = (nz < 0) & (tilt < threshold_deg) & (centres[:, 2] > BED_LAYER)
-    for x, y, r in ignore_xy or []:
-        inside = (np.hypot(centres[:, 0] - x, centres[:, 1] - y) <= r + 0.05) & (centres[:, 2] <= ignore_z + 0.05)
+    for x, y, r, z_top in ignore_xy or []:
+        inside = (np.hypot(centres[:, 0] - x, centres[:, 1] - y) <= r + 0.05) & (centres[:, 2] <= z_top + 0.05)
         over &= ~inside
     idx = np.nonzero(over)[0]
     if not len(idx):

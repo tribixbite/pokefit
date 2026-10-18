@@ -19,12 +19,19 @@ export interface Params {
   figure_scale: number | null;
   rotate_x: number;
   rotate_y: number;
-  magnets: boolean;
+  /** Number of magnet pockets, 0–3. */
+  magnets: number;
   pockets: { x: number; y: number }[] | null;
   pocket_diameter: number;
   pocket_depth: number;
   pocket_wall: number;
   pocket_ceiling: number;
+  /** Min. pocket height surrounded by wall (on a sloped underside the magnet may stand proud below it). */
+  pocket_grip: number;
+  /** Automatic placement: highest pocket opening above the washer. */
+  pocket_max_seat: number;
+  /** Import file: figure filament -> project slot (1-based). */
+  filament_map: Record<string, number> | null;
   object_id: string | null;
   slot: number | null;
   settings_source: "reference" | "original";
@@ -83,6 +90,18 @@ export interface Underside {
   valid: number[][][];
   ring: { x: number; y: number; inner: number; outer: number; washer_od: number; washer_id: number };
   pocket_d: number;
+  /** Underside heights as an image (dark = on the bed), drawn over `extent` [x0, y0, x1, y1]. */
+  height_png: string;
+  extent: [number, number, number, number];
+  /** Height (mm) shown as the lightest shade. */
+  height_span: number;
+}
+
+/** A magnet pocket: figure-frame XY and the height of its opening above the bed (mm). */
+export interface PocketPos {
+  x: number;
+  y: number;
+  z: number;
 }
 
 export interface WasherRow {
@@ -101,7 +120,8 @@ export interface Report {
   object: ObjectInfo;
   ball: BallInfo;
   fit: FitInfo;
-  pockets: { x: number; y: number }[];
+  pockets: PocketPos[];
+  import_map: SlotMatch[];
   checks: Check[];
   status: Status;
   washers: WasherRow[];
@@ -165,4 +185,17 @@ export interface ExportResponse {
   files: { name: string; path: string; url: string }[];
   status: Status;
   note: string;
+  import_3mf: string | null;
+}
+
+/** How one figure filament maps onto a slot of the user's project (for the import file). */
+export interface SlotMatch {
+  source: number;
+  colour: string;
+  target: number;
+  target_colour: string;
+  delta_e: number;
+  /** Beyond the project's slots: Bambu adds a filament on import; set its colour there. */
+  new: boolean;
+  manual: boolean;
 }

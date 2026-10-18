@@ -24,9 +24,10 @@ const state: State = {
   config: null,
   session: null,
   params: {
-    ball_scale: 0.6, washer: "M6", clearance: 1, figure_scale: null, rotate_x: 0, rotate_y: 0, magnets: true,
+    ball_scale: 0.6, washer: "M6", clearance: 1, figure_scale: null, rotate_x: 0, rotate_y: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
-    object_id: null, slot: null, settings_source: "reference",
+    pocket_grip: 1.2, pocket_max_seat: 2.0, object_id: null, slot: null, settings_source: "reference",
+    filament_map: null,
   },
   report: null,
   focus: null,
@@ -107,7 +108,8 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
   try {
     const res = await fn();
     state.session = res.session;
-    state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, object_id: null };
+    state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, object_id: null,
+      filament_map: null };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
@@ -186,8 +188,8 @@ function show(rep: Report): void {
 
   renderObjects(rep);
   renderChecks(rep);
-  underside.render(rep.underside, rep.pockets);
-  $("pocketInfo").textContent = rep.params.pockets ? "placed by hand" : rep.pockets.length ? "automatic" : "";
+  renderMagnets(rep);
+  renderImportMap(rep);
   $("timing").textContent = `analysed in ${rep.timings.total?.toFixed(1)} s`;
   viewer.update(rep);
 }
@@ -204,8 +206,8 @@ function limitText(kind: string): string {
 
 function renderObjects(rep: Report): void {
   const o = rep.object;
-  const row = $("objectRow");
-  row.hidden = o.objects.length < 2;
+  $("objectCard").hidden = o.objects.length < 2;
+  $("objectCount").textContent = `${o.objects.length} figures in this file — pick one`;
   const sel = $<HTMLSelectElement>("objectSelect");
   sel.replaceChildren(...o.objects.map((x) => h("option", { value: x.id, textContent: `${x.name} (${x.faces.toLocaleString()} faces)` })));
   sel.value = o.id;
@@ -215,6 +217,73 @@ function renderObjects(rep: Report): void {
     sw.style.background = col;
     return h("div", {}, sw, `${p.name} — ${p.faces.toLocaleString()} faces${p.painted ? `, ${p.painted} painted` : ""}`);
   }));
+}
+
+/** Pocket fields of the "Pocket size and limits" form, by element id. */
+const POCKET_INPUTS: [string, "pocket_diameter" | "pocket_depth" | "pocket_wall" | "pocket_ceiling" | "pocket_grip" | "pocket_max_seat"][] = [
+  ["pkD", "pocket_diameter"], ["pkDepth", "pocket_depth"], ["pkWall", "pocket_wall"],
+  ["pkCeil", "pocket_ceiling"], ["pkGrip", "pocket_grip"], ["pkMaxSeat", "pocket_max_seat"],
+];
+
+function renderMagnets(rep: Report): void {
+  const n = rep.params.magnets;
+  document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
+    b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === n)));
+  for (const [id, key] of POCKET_INPUTS) $<HTMLInputElement>(id).value = String(rep.params[key]);
+  $("underside").hidden = n === 0;
+  underside.render(rep.underside, rep.pockets);
+  $("pocketInfo").textContent = !n ? "no magnets" : rep.params.pockets ? "placed by hand"
+    : rep.pockets.length ? "automatic" : "";
+  $("autoPockets").hidden = n === 0;
+  const under = rep.checks.find((x) => x.id === "pockets:feet");
+  if (n && !rep.pockets.length && under) {
+    // Nothing placed: say why, and offer the one fix that is a single number.
+    const items: HTMLElement[] = [h("li", { cls: under.status }, h("span", { textContent: under.message }))];
+    const low = typeof under.value === "number" ? under.value : NaN;
+    if (/above the washer everywhere/.test(under.message) && low > rep.params.pocket_max_seat) {
+      const allow = low;                    // already rounded up to 0.1 mm by the server
+      const b = h("button", { cls: "btn", textContent: `Allow pockets up to ${allow.toFixed(1)} mm high` });
+      b.addEventListener("click", () => { state.params.pocket_max_seat = allow; void runAnalyse(); });
+      items.push(h("li", {}, b));
+    }
+    $("pocketList").replaceChildren(...items);
+    return;
+  }
+  // One line per pocket: how high its opening is and its check status.
+  $("pocketList").replaceChildren(...rep.pockets.map((p, i) => {
+    const c = rep.checks.find((x) => x.id === `pocket:${i + 1}`);
+    const seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
+    return h("li", { cls: c?.status ?? "" }, h("span", { cls: "n", textContent: String(i + 1) }),
+      h("span", { textContent: c?.status === "fail" ? c.message : seat }));
+  }));
+}
+
+/** Figure colour -> project slot table; each row's picker overrides the closest-colour choice. */
+function renderImportMap(rep: Report): void {
+  const slots = state.config?.slots ?? [];
+  $("importMapBox").hidden = rep.import_map.length === 0;
+  const swatch = (c: string): HTMLElement => {
+    const sw = h("span", { cls: "sw" });
+    sw.style.background = c || "transparent";
+    return sw;
+  };
+  $("importMap").replaceChildren(
+    h("thead", {}, h("tr", {}, ...["figure", "→ your slot", ""].map((t) => h("th", { textContent: t })))),
+    h("tbody", {}, ...rep.import_map.map((m) => {
+      const sel = h("select");
+      sel.setAttribute("aria-label", `Slot for figure colour ${m.source}`);
+      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1), textContent: `${i + 1} · ${s.name.replace(/ @.*$/, "")} ${s.colour}` })));
+      const extra = Math.max(slots.length + 1, m.new ? m.target : 0);
+      sel.append(h("option", { value: String(extra), textContent: `${extra} · new slot (set its colour after import)` }));
+      sel.value = String(m.target);
+      sel.addEventListener("change", () => {
+        state.params.filament_map = { ...(state.params.filament_map ?? {}), [String(m.source)]: +sel.value };
+        void runAnalyse();
+      });
+      const note = m.new ? "no close colour" : m.delta_e > 10 ? `ΔE ${m.delta_e.toFixed(0)} — not an exact match` : "";
+      return h("tr", {}, h("td", {}, swatch(m.colour), `${m.source}`),
+        h("td", {}, swatch(m.target_colour), sel), h("td", { cls: "muted", textContent: note }));
+    })));
 }
 
 function renderChecks(rep: Report): void {
@@ -469,6 +538,7 @@ function bind(): void {
     state.params.object_id = (e.target as HTMLSelectElement).value;
     state.params.figure_scale = null;
     state.params.pockets = null;
+    state.params.filament_map = null;
     if (state.session) await viewer.setFigure(api.previewUrl(state.session, state.params));
     void runAnalyse();
   });
@@ -481,11 +551,23 @@ function bind(): void {
       if (state.session) await viewer.setFigure(api.previewUrl(state.session, state.params));
       void runAnalyse();
     }));
-  $<HTMLInputElement>("magnetToggle").addEventListener("change", (e) => {
-    state.params.magnets = (e.target as HTMLInputElement).checked;
-    state.params.pockets = null;
-    void runAnalyse();
-  });
+  document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const n = +(b.dataset.n ?? 2);
+      if (n === state.params.magnets) return;
+      state.params.magnets = n;
+      state.params.pockets = null;          // a new count is placed automatically
+      void runAnalyse();
+    }));
+  for (const [id, key] of POCKET_INPUTS) {
+    $<HTMLInputElement>(id).addEventListener("change", (e) => {
+      const inp = e.target as HTMLInputElement;
+      const v = +inp.value;
+      if (!(v >= +inp.min && v <= +inp.max)) { toast(`${key.replace("pocket_", "").replace("_", " ")} must be ${inp.min}–${inp.max} mm.`); return; }
+      state.params[key] = v;
+      void runAnalyse();
+    });
+  }
   $("autoPockets").addEventListener("click", () => { state.params.pockets = null; void runAnalyse(); });
   $<HTMLSelectElement>("slotSelect").addEventListener("change", (e) => {
     state.params.slot = +(e.target as HTMLSelectElement).value;

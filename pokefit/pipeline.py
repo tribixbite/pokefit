@@ -18,17 +18,19 @@ from typing import Any
 
 import numpy as np
 import trimesh
+from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
-from .magnets import (Pocket, PocketSpec, auto_pockets, choose_pockets, cut_pockets, feasible_region, find_feet,
-                      required_washer, validate_pockets)
+from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
+                      height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, plate_size, read_project, remesh_part, world_parts,
                        write_project)
 from .paint import decode_majority
+from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
 from .shell import flat_spot, from_manifold, to_manifold
 from .slicer import SliceResult, adapt_settings, default_slot, grid_positions, reference_settings, slice_3mf
@@ -53,15 +55,25 @@ class Params:
     figure_scale: float | None = None            # None = largest that fits
     rotate_x: int = 0                            # degrees, multiples of 90
     rotate_y: int = 0
-    magnets: bool = True
-    pockets: list[dict[str, float]] | None = None  # None = automatic; figure frame, final mm
+    magnets: int = 2                             # number of magnet pockets, 0–3
+    pockets: list[dict[str, float]] | None = None  # None = automatic; figure frame, final mm (x, y)
     pocket_diameter: float = 4.18
     pocket_depth: float = 2.20
     pocket_wall: float = 0.8
     pocket_ceiling: float = 0.6
+    pocket_grip: float = 1.2                     # min. pocket height surrounded by wall (sloped undersides)
+    pocket_max_seat: float = 2.0                 # auto placement: highest pocket opening above the washer
     object_id: str | None = None
     slot: int | None = None                      # reference filament slot for slicing/export
     settings_source: str = "reference"           # "reference" (user's printer) or "original"
+    # Import file: figure filament -> slot of the user's project (1-based; JSON keys are strings).
+    filament_map: dict[str, int] | None = None
+
+    def __post_init__(self) -> None:
+        # Older clients send magnets as a switch: on = the default two pockets.
+        if isinstance(self.magnets, bool):
+            self.magnets = 2 if self.magnets else 0
+        self.magnets = max(0, min(3, int(self.magnets)))
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Params":
@@ -70,7 +82,8 @@ class Params:
 
     @property
     def spec(self) -> PocketSpec:
-        return PocketSpec(self.pocket_diameter, self.pocket_depth, self.pocket_wall, self.pocket_ceiling)
+        return PocketSpec(self.pocket_diameter, self.pocket_depth, self.pocket_wall, self.pocket_ceiling,
+                          self.pocket_grip, self.pocket_max_seat)
 
 
 @dataclass
@@ -83,8 +96,10 @@ class Session:
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
     _frames: dict[tuple[str, int, int], list[Part]] = field(default_factory=dict)
     _points: dict[tuple[str, int, int], HullPoints] = field(default_factory=dict)
+    _fields: dict[tuple[str, int, int], HeightField] = field(default_factory=dict)   # unit-scale undersides
     # Auto-placement results per configuration (the figure-scale-independent search).
     _auto: dict[tuple, Any] = field(default_factory=dict)
+    _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -109,6 +124,26 @@ class Session:
         self.unit_parts(params)
         obj = self.obj(params)
         return self._points[(obj.id, params.rotate_x % 360, params.rotate_y % 360)]
+
+    def underside(self, params: Params, s: float) -> HeightField:
+        """Height field of the figure's underside at figure scale s (ray-cast once per orientation)."""
+        obj = self.obj(params)
+        key = (obj.id, params.rotate_x % 360, params.rotate_y % 360)
+        if key not in self._fields:
+            solid = [p.mesh() for p in self.unit_parts(params) if p.subtype == "normal_part"]
+            self._fields[key] = height_field(solid)
+        return self._fields[key].scaled(s)
+
+    def slot_matches(self, params: Params) -> list[SlotMatch]:
+        """How the figure's filaments map onto the user's project slots (for the import file)."""
+        if not self.reference:
+            return []
+        obj = self.obj(params)
+        if obj.id not in self._used:
+            self._used[obj.id] = used_filaments(obj.parts, obj.extruder)
+        manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
+        return match_slots(self._used[obj.id], self.project.colours,
+                           list(self.reference.get("filament_colour", [])), manual)
 
     def slot(self, params: Params) -> int:
         if params.slot is not None:
@@ -154,6 +189,7 @@ class Report:
     washers: list[dict[str, Any]]
     timings: dict[str, float]
     underside: dict[str, Any] = field(default_factory=dict)   # 2D outlines for the pocket editor
+    import_map: list[dict[str, Any]] = field(default_factory=list)   # figure filament -> project slot
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -164,30 +200,32 @@ def _steel_band(washer: Washer, diameter: float, relaxed: bool) -> tuple[float, 
     return (washer.id / 2, washer.od / 2) if relaxed else washer.annulus(diameter)
 
 
+def _pocket_map(session: Session, params: Params, s: float) -> PocketMap:
+    return pocket_map(session.underside(params, s), params.spec)
+
+
 def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float, relaxed: bool = False
            ) -> tuple[list[Pocket], list[Check], tuple[float, float]]:
-    """Pockets at figure scale `s` that sit on the steel ring while the figure fits.
+    """`params.magnets` pockets at figure scale `s` that sit on the steel ring while the figure fits.
 
     The figure frame's origin is at offset o in the ball frame, so the washer
     (on the ball axis) is centred at -o in the figure frame. The fit margin is
     1-Lipschitz in o, so every offset within the best margin m* of the best
     offset o* still fits; o* and 36 such offsets are tried.
     """
-    spec = params.spec
-    meshes = [p.mesh() for p in scaled(session.unit_parts(params), s)]
-    feet, region = find_feet(meshes), feasible_region(meshes, spec)
+    spec, n = params.spec, params.magnets
+    pm = _pocket_map(session, params, s)
     o_star, m_star = best_offset(session.points(params), cavity, s)
     o0 = (float(o_star[0]), float(o_star[1]))
     if m_star < 0:
-        return [], [Check("pockets:feet", "Feet", "fail", "Figure does not fit at this size.")], o0
+        return [], [Check("pockets:feet", "Underside", "fail", "Figure does not fit at this size.")], o0
     lo, hi = _steel_band(washer, spec.diameter, relaxed)
     cands = [o_star] + [o_star + m_star * f * np.array([np.cos(a), np.sin(a)])
                         for f in (0.33, 0.66, 0.95) for a in np.linspace(0, 2 * np.pi, 12, endpoint=False)]
     first: list[Check] = []
     for o in cands:
-        pockets, checks = choose_pockets(feet, region, spec, (-float(o[0]), -float(o[1]), lo, hi),
-                                         allow_single=False)
-        if len(pockets) == 2:
+        pockets, checks = choose_pockets(pm, spec, n, (-float(o[0]), -float(o[1]), lo, hi), allow_fewer=False)
+        if len(pockets) == n:
             return pockets, checks, (float(o[0]), float(o[1]))
         first = first or checks
     return [], first, o0
@@ -216,7 +254,7 @@ def _offset_for_pockets(session: Session, params: Params, cavity: Cavity, washer
 
 def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s_fit: float,
                           relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
-    """Largest scale <= s_fit where two pockets fit the feet AND sit on the steel.
+    """Largest scale <= s_fit where the pockets fit the underside AND sit on the steel.
 
     Not monotone at the small end (walls are absolute mm), so scan down in 4 %
     steps from the fit limit, then bisect between the last failure and the first success.
@@ -248,7 +286,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
            ) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
     """(scale, max scale, pockets in the figure frame, pocket checks, XY offset)."""
     hp = session.points(params)
-    spec = params.spec
+    spec, n = params.spec, params.magnets
     free = max_scale(hp, cavity)
     if free is None:
         return 0.0, 0.0, [], [], (0.0, 0.0)
@@ -258,29 +296,32 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
         o, _ = best_offset(hp, cavity, s)
         return float(o[0]), float(o[1])
 
-    if not params.magnets:
+    if not n:
         scale = params.figure_scale or s_fit
         return scale, s_fit, [], [], fit_offset(scale)
 
     if params.pockets is not None:
-        # Manual pockets: figure-frame mm as placed by the user.
+        # Manual pockets: figure-frame XY as placed by the user; seats follow the underside.
         scale = params.figure_scale or s_fit
-        manual = [Pocket(float(p["x"]), float(p["y"])) for p in params.pockets]
+        manual = seat_pockets(session.underside(params, scale),
+                              [Pocket(float(p["x"]), float(p["y"])) for p in params.pockets], spec)
         if not manual:
             return scale, s_fit, [], [], fit_offset(scale)
-        return scale, s_fit, manual, [Check("pockets:feet", "Feet", "info", "Pockets placed by hand.")],             _offset_for_pockets(session, params, cavity, washer, scale, manual)
+        return (scale, s_fit, manual, [Check("pockets:feet", "Underside", "info", "Pockets placed by hand.")],
+                _offset_for_pockets(session, params, cavity, washer, scale, manual))
 
     # Shrinking the figure only shrinks the area that can hold a walled pocket
-    # (walls are absolute mm). If two pockets do not fit even without the steel
-    # ring at the size being asked for (or the largest that fits), skip the search.
+    # (walls are absolute mm). If the pockets do not fit even without the steel
+    # ring at the size being asked for (or the largest that fits), skip the search
+    # and show as many as do fit.
     probe = params.figure_scale or s_fit
-    free_pk, free_ch = auto_pockets([p.mesh() for p in scaled(session.unit_parts(params), probe)], spec)
-    if len(free_pk) < 2:
+    free_pk, free_ch = choose_pockets(_pocket_map(session, params, probe), spec, n)
+    if len(free_pk) < n:
         return probe, s_fit, free_pk, free_ch, fit_offset(probe)
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
         key = (session.obj(params).id, params.rotate_x % 360, params.rotate_y % 360, params.ball_scale,
-               washer.key, params.clearance, spec, relaxed)
+               washer.key, params.clearance, spec, n, relaxed)
         if key not in session._auto:
             session._auto[key] = _largest_with_pockets(session, params, cavity, washer, s_fit, relaxed)
         return session._auto[key]
@@ -293,9 +334,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
                 best = largest(relaxed)
                 return sc, best[0] if best else s_fit, pk, ch, off
         # Nothing on steel: show the best unconstrained spots so the user sees why.
-        meshes = [p.mesh() for p in scaled(session.unit_parts(params), sc)]
-        pk1, ch1 = auto_pockets(meshes, spec)
-        return sc, s_fit, pk1, ch1, fit_offset(sc)
+        return sc, s_fit, free_pk, free_ch, fit_offset(sc)
 
     for relaxed in (False, True):
         best = largest(relaxed)
@@ -303,12 +342,10 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
             scale, pk, ch, off = best
             if scale < s_fit * 0.999:
                 ch = ch + [Check("pockets:scale", "Size vs. magnets", "info",
-                                 f"Reduced from {s_fit:.1%} to {scale:.1%} so both magnets sit on the washer's "
+                                 f"Reduced from {s_fit:.1%} to {scale:.1%} so the magnets sit on the washer's "
                                  f"steel; a larger washer may allow more (see the washer table).")]
             return scale, scale, pk, ch, off
-    meshes = [p.mesh() for p in scaled(session.unit_parts(params), s_fit)]
-    pk1, ch1 = auto_pockets(meshes, spec)
-    return s_fit, s_fit, pk1, ch1, fit_offset(s_fit)
+    return s_fit, s_fit, free_pk, free_ch, fit_offset(s_fit)
 
 
 def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
@@ -328,7 +365,7 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
         p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
         steel = "off"
-        if len(pockets) == 2:
+        if pockets and len(pockets) == p.magnets:
             pxy = np.array([[q.x, q.y] for q in pockets])
             if annulus_margin(pxy, 1.0, np.array(off), w.annulus(p.pocket_diameter)) >= -1e-6:
                 steel = "full"
@@ -385,11 +422,12 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
 
     t2 = time.time()
     meshes = [p.mesh() for p in final]
-    underside = _underside(meshes, params, washer, off)
+    underside = _underside(session, params, meshes, scale, washer, off)
     if params.magnets:
         checks.extend(pchecks)
         if pockets:
-            pocket_checks = validate_pockets(meshes, pockets, params.spec)  # pocket:N (+ pocket:gap)
+            field_s = session.underside(params, scale)
+            pocket_checks = validate_pockets(field_s, pockets, params.spec)  # pocket:N (+ pocket:gap)
             checks.extend(pocket_checks)
             lo, hi = washer.annulus(params.pocket_diameter)
             pxy = np.array([[p.x, p.y] for p in pockets])
@@ -397,10 +435,12 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
             am_centre = annulus_margin(pxy, 1.0, np.array(off), (washer.id / 2, washer.od / 2))
             if am >= -1e-6:
                 checks.append(Check("steel", "Magnets on the washer", "pass",
-                                    f"Both pockets sit on the steel ring ({lo:.1f}–{hi:.1f} mm from the centre)."))
+                                    f"{'The pocket sits' if len(pockets) == 1 else 'All pockets sit'} on the "
+                                    f"steel ring ({lo:.1f}–{hi:.1f} mm from the centre)."))
             elif am_centre >= -1e-6:
                 checks.append(Check("steel", "Magnets on the washer", "warn",
-                                    "Pocket centres are on the steel but the magnets overhang its edge "
+                                    f"{'The pocket centre is' if len(pockets) == 1 else 'Pocket centres are'} on "
+                                    "the steel but the magnets overhang its edge "
                                     f"by up to {-am:.1f} mm, so they hold with roughly half force. "
                                     "A larger washer avoids this (Compare washers).", round(am, 2)))
             else:
@@ -418,8 +458,8 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     solid = printable_solid(final)
     layer = float((session.reference or {}).get("layer_height", 0.2) or 0.2)
     angle = float((session.reference or {}).get("support_threshold_angle", 30) or 30)
-    ignore = [(p.x, p.y, params.pocket_diameter / 2) for p in pockets] if params.magnets else []
-    printing = [thickness_check(solid), overhang_check(solid, angle, ignore, params.pocket_depth),
+    ignore = [(p.x, p.y, params.pocket_diameter / 2, p.z + params.pocket_depth) for p in pockets] if params.magnets else []
+    printing = [thickness_check(solid), overhang_check(solid, angle, ignore),
                 islands_check(solid, 2 * layer), bed_contact_check(solid)]
     printing.append(supports_verdict(printing))
     checks.extend(printing)
@@ -429,7 +469,8 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     t["total"] = time.time() - t0
     rep = Report(asdict(params), _obj_info(session, obj), _ball_info(cavity, washer), fit_dict,
                  [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
-                 {k: round(v, 2) for k, v in t.items()}, underside)
+                 {k: round(v, 2) for k, v in t.items()}, underside,
+                 [m.to_dict() for m in session.slot_matches(params)])
     return rep, final
 
 
@@ -448,16 +489,71 @@ def _rings(geom: Any) -> list[list[list[float]]]:
     return out
 
 
-def _underside(meshes: list[trimesh.Trimesh], params: Params, washer: Washer,
+def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], scale: float, washer: Washer,
                off: tuple[float, float]) -> dict[str, Any]:
-    """Figure-frame 2D data: foot outlines, where pocket centres are valid, and the steel ring."""
+    """Figure-frame 2D data for the pocket editor.
+
+    feet: outline of what touches the bed; valid: outline of where a pocket
+    centre satisfies every rule; height: the underside as an image (darker =
+    lower, transparent = no material) over `extent` [x0, y0, x1, y1]; ring: the
+    washer's steel ring as the ball holds it.
+    """
     lo, hi = washer.annulus(params.pocket_diameter)
     feet = find_feet(meshes)
-    return {"feet": _rings(unary_union(feet) if feet else None),
-            "valid": _rings(feasible_region(meshes, params.spec)) if params.magnets else [],
-            "ring": {"x": -off[0], "y": -off[1], "inner": lo, "outer": hi,
-                     "washer_od": washer.od, "washer_id": washer.id},
-            "pocket_d": params.pocket_diameter}
+    f = session.underside(params, scale)
+    out: dict[str, Any] = {"feet": _rings(unary_union(feet) if feet else None), "valid": [],
+                           "ring": {"x": -off[0], "y": -off[1], "inner": lo, "outer": hi,
+                                    "washer_od": washer.od, "washer_id": washer.id},
+                           "pocket_d": params.pocket_diameter}
+    out.update(_height_image(f))
+    if params.magnets:
+        out["valid"] = _mask_rings(pocket_map(f, params.spec).valid, f)
+    return out
+
+
+def _mask_rings(mask: np.ndarray, f: HeightField) -> list[list[list[float]]]:
+    """Outlines of a boolean grid mask as figure-frame rings (even-odd: holes come out as rings too)."""
+    from skimage.measure import find_contours
+
+    if not mask.any():
+        return []
+    padded = np.pad(mask.astype(float), 1)
+    rings = []
+    for c in find_contours(padded, 0.5):
+        if len(c) < 4:
+            continue
+        xy = np.c_[f.x0 + (c[:, 1] - 1) * f.step, f.y0 + (c[:, 0] - 1) * f.step]
+        poly = Polygon(xy).simplify(f.step / 2)
+        if poly.is_empty or poly.geom_type != "Polygon":
+            continue
+        rings.append(np.round(np.asarray(poly.exterior.coords), 3).tolist())
+    return rings
+
+
+def _height_image(f: HeightField) -> dict[str, Any]:
+    """The underside heights as a PNG data URL: black at the bed, lighter higher up, transparent = none."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    z = f.z1
+    have = np.isfinite(z)
+    top = float(z[have].max()) if have.any() else 1.0
+    span = max(min(top, 6.0), 0.5)            # shade the lowest 6 mm; anything higher is the lightest
+    t = np.clip(np.where(have, z, 0) / span, 0, 1)
+    rgba = np.zeros(z.shape + (4,), np.uint8)
+    rgba[..., 0] = (40 + 150 * t).astype(np.uint8)
+    rgba[..., 1] = (50 + 150 * t).astype(np.uint8)
+    rgba[..., 2] = (70 + 160 * t).astype(np.uint8)
+    rgba[..., 3] = np.where(have, 255, 0)
+    buf = io.BytesIO()
+    # Row 0 = y0: the editor draws it inside its own figure-frame group (which mirrors it).
+    Image.fromarray(rgba).save(buf, format="PNG", optimize=True)
+    ny, nx = z.shape
+    return {"height_png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
+            "extent": [f.x0 - f.step / 2, f.y0 - f.step / 2, f.x0 + (nx - 0.5) * f.step, f.y0 + (ny - 0.5) * f.step],
+            "height_span": round(span, 2)}
 
 
 def _kind_text(kind: str) -> str:
@@ -567,7 +663,12 @@ def safe_stem(name: str) -> str:
 
 
 def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, Any]:
-    """Write the figure 3MF, the washer-seat shell STL and a JSON report."""
+    """Write the figure 3MF, its import variant, the washer-seat shell STL and a JSON report.
+
+    `<stem>_pokefit_<pct>.3mf` opens as a project (File > Open). `..._import.3mf`
+    is for dragging into an open project with "Import geometry only": its
+    filament numbers are the user's project slots of the closest colour.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rep, final = analyse(session, params)
@@ -584,10 +685,18 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
         fs.mesh.export(shell_path)
     except (OSError, ValueError, RuntimeError) as exc:
         shell_path, shell_note = None, f"washer-seat shell not written: {exc}"  # type: ignore[assignment]
+    # For "Import geometry only" into the user's own project: filaments renumbered to its slots.
+    imp = None
+    matches = session.slot_matches(params)
+    if matches and session.reference:
+        parts, ext = remap_parts(final, obj.extruder, matches)
+        imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
+                            settings=session.reference)
     rpath = out_dir / f"{stem}_pokefit_{pct}.json"
     rpath.write_text(json.dumps(rep.to_dict(), indent=1), encoding="utf-8")
-    return {"figure_3mf": str(f3), "shell_stl": str(shell_path) if shell_path else None, "report": str(rpath),
-            "note": shell_note, "status": rep.status}
+    return {"figure_3mf": str(f3), "import_3mf": str(imp) if imp else None,
+            "shell_stl": str(shell_path) if shell_path else None, "report": str(rpath),
+            "note": shell_note, "status": rep.status, "import_map": [m.to_dict() for m in matches]}
 
 
 def _shell_mesh() -> trimesh.Trimesh:

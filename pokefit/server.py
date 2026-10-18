@@ -65,7 +65,7 @@ def _register(s: Session) -> None:
 def _params(body: dict[str, Any]) -> Params:
     try:
         return Params.from_dict(body.get("params") or {})
-    except TypeError as exc:
+    except (TypeError, ValueError) as exc:
         raise ApiError(400, f"bad params: {exc}") from exc
 
 
@@ -264,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
         out = OUT_DIR / safe_stem(s.project.path.name)
         with lock:
             res = export(s, params, out)
-        files = [Path(p) for p in (res["figure_3mf"], res["shell_stl"], res["report"]) if p]
+        files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["shell_stl"], res["report"]) if p]
         res["files"] = [{"name": f.name, "path": str(f),
                          "url": "/api/download?file=" + quote(str(f.relative_to(OUT_DIR)).replace("\\", "/"))}
                         for f in files]

@@ -100,3 +100,37 @@ def test_manual_pockets_keep_fit_and_bad_pocket_not_cut(critter: Path, tmp_path:
     assert c["pocket:2"]["status"] == "fail" and "Not cut" in c["pocket:2"]["message"]
     removed = c[next(k for k in c if k.startswith("cut:"))]["value"]
     assert removed == pytest.approx(np.pi * 2.09 ** 2 * 2.2, rel=0.05)   # only one pocket cut
+
+
+def test_magnet_count(critter: Path, tmp_path: Path) -> None:
+    assert Params(magnets=True).magnets == 2 and Params(magnets=False).magnets == 0
+    assert Params.from_dict({"magnets": 5}).magnets == 3
+    s = open_session(critter, BALL_3MF, None, tmp_path)
+    # Each 9 mm foot holds one pocket; a third would go under the belly 11 mm up (over max_seat).
+    for n, placed in ((1, 1), (3, 2)):
+        rep, _ = analyse(s, Params(washer="US1/4x1", magnets=n))
+        c = _by_id(rep)
+        assert len(rep.pockets) == placed, (n, c["pockets:feet"]["message"])
+        assert c["pockets:feet"]["status"] == ("pass" if n == placed else "warn")
+        assert all(c[f"pocket:{i + 1}"]["status"] != "fail" for i in range(placed))
+        assert all(p["z"] == 0 for p in rep.pockets)              # flat feet: magnets sit on the washer
+        assert rep.underside["height_png"].startswith("data:image/png;base64,")
+        assert len(rep.underside["extent"]) == 4 and rep.underside["valid"]
+
+
+def test_export_import_variant(critter: Path, tmp_path: Path) -> None:
+    """With the user's project settings, export also writes a file for "Import geometry only"."""
+    from pokefit.paint import decode_weights
+    from pokefit.pipeline import BUNDLED_REFERENCE
+
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+    out = export(s, Params(washer="US1/4x1"), tmp_path / "out")
+    imp = read_project(out["import_3mf"])
+    targets = s.reference["filament_colour"]
+    assert imp.colours == targets                                    # carries the project's own slots
+    m = {x["source"]: x["target"] for x in out["import_map"]}
+    assert set(m) == {1, 2}                                          # body + painted top
+    obj = imp.default_object()
+    assert {p.extruder for p in obj.parts} == {m[1]}
+    painted = {k for p in obj.parts for a in p.tri_extra.values() for k in decode_weights(a.split('"')[1])}
+    assert painted == {m[2]}

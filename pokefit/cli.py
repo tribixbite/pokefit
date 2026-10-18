@@ -1,6 +1,6 @@
 """Command line: `python -m pokefit fit|serve|ball`.
 
-  python -m pokefit fit figure.3mf [--ball 0.6] [--washer M6] [--scale 85%] [--out DIR] [--slice] [--x10]
+  python -m pokefit fit figure.3mf [--ball 0.6] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
   python -m pokefit serve [--port 8765] [--open]
   python -m pokefit ball [--ball 0.6] [--washer M6]
 """
@@ -32,7 +32,8 @@ def cmd_fit(a: argparse.Namespace) -> int:
     from .pipeline import Params, analyse, export, open_session, slice_variants
 
     params = Params(ball_scale=a.ball, washer=a.washer, clearance=a.clearance, figure_scale=_scale(a.scale),
-                    magnets=not a.no_magnets, object_id=a.object, rotate_x=a.rotate_x, rotate_y=a.rotate_y)
+                    magnets=0 if a.no_magnets else a.magnets, object_id=a.object, rotate_x=a.rotate_x,
+                    rotate_y=a.rotate_y)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
     f = rep.fit
@@ -42,7 +43,7 @@ def cmd_fit(a: argparse.Namespace) -> int:
         print(f"scale {f['scale']:.1%} -> {f['height_mm']:.1f} mm tall (max {f['max_scale']:.1%} = "
               f"{f['max_height_mm']:.1f} mm), offset ({f['offset'][0]:.1f}, {f['offset'][1]:.1f}) mm")
     for p in rep.pockets:
-        print(f"pocket at ({p['x']:.2f}, {p['y']:.2f}) mm, figure frame")
+        print(f"pocket at ({p['x']:.2f}, {p['y']:.2f}) mm, figure frame, opening {p['z']:.2f} mm above the bed")
     for c in rep.checks:
         print(f"  [{ICON[c['status']]}] {c['title']}: {c['message']}")
     if rep.washers:
@@ -108,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--object", help="object id when the 3MF holds several (default: largest)")
     f.add_argument("--rotate-x", type=int, default=0, choices=[0, 90, 180, 270])
     f.add_argument("--rotate-y", type=int, default=0, choices=[0, 90, 180, 270])
-    f.add_argument("--no-magnets", action="store_true")
+    f.add_argument("--magnets", type=int, default=2, choices=[0, 1, 2, 3], help="number of magnet pockets")
+    f.add_argument("--no-magnets", action="store_true", help="same as --magnets 0")
     f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")
     f.add_argument("--slice", action="store_true", help="Bambu Studio time/filament, supports off vs auto")

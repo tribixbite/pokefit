@@ -270,7 +270,7 @@ export class Viewer {
       );
       cyl.renderOrder = 9;
       cyl.rotation.x = Math.PI / 2;
-      cyl.position.set(p.x, p.y, depth / 2 - 0.05);
+      cyl.position.set(p.x, p.y, (p.z ?? 0) + depth / 2 - 0.05);   // z: the pocket's opening above the bed
       this.markers.add(cyl);
     }
     const lim = rep.fit.limit_point;

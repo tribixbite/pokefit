@@ -44,6 +44,12 @@
     </section>
 
     <aside class="panel" id="panel">
+      <section class="card pick" id="objectCard" hidden>
+        <label><span id="objectCount">Figures in this file</span>
+          <select id="objectSelect"></select>
+        </label>
+      </section>
+
       <section class="card summary">
         <div class="big"><span id="sumHeight">–</span><small>mm tall</small></div>
         <div class="sum-lines">
@@ -92,9 +98,6 @@
 
       <section class="card">
         <h2>Figure</h2>
-        <label id="objectRow" hidden>Object
-          <select id="objectSelect"></select>
-        </label>
         <div class="row rot">
           <span class="muted">Turn upright</span>
           <button class="btn" data-rot="x">↻ X 90°</button>
@@ -107,17 +110,31 @@
       <section class="card">
         <div class="h-row">
           <h2>Magnets</h2>
-          <label class="switch"><input id="magnetToggle" type="checkbox" checked /><span></span></label>
+          <div class="seg" id="magnetCount" role="radiogroup" aria-label="Number of magnets">
+            <button role="radio" data-n="0">Off</button><button role="radio" data-n="1">1</button><button role="radio" data-n="2">2</button><button role="radio" data-n="3">3</button>
+          </div>
         </div>
-        <p class="hint">Two Ø4.18 × 2.2 mm push-in pockets for 4 × 2 mm disc magnets. Underside view — drag a pocket to move it.</p>
+        <p class="hint">Push-in pockets for 4 × 2 mm disc magnets. The underside need not be flat: a pocket goes in as low as it can and never below the plane the figure stands on. Underside view — drag a pocket to move it.</p>
         <div id="underside" class="underside-host"></div>
         <div class="legend">
-          <span><i class="lg feet"></i>foot</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>steel ring</span>
+          <span><i class="lg height"></i>underside, low → high</span><span><i class="lg feet"></i>on the bed</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>steel ring</span>
         </div>
         <div class="row">
           <button id="autoPockets" class="btn">Auto place</button>
           <span id="pocketInfo" class="muted"></span>
         </div>
+        <ul id="pocketList" class="pocket-list"></ul>
+        <details class="adv">
+          <summary>Pocket size and limits</summary>
+          <div class="grid3">
+            <label>Ø <span class="unit"><input id="pkD" type="number" min="1" max="20" step="0.01" inputmode="decimal" /> mm</span></label>
+            <label>Depth <span class="unit"><input id="pkDepth" type="number" min="0.5" max="20" step="0.05" inputmode="decimal" /> mm</span></label>
+            <label>Wall <span class="unit"><input id="pkWall" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label>Ceiling <span class="unit"><input id="pkCeil" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label title="How much of the pocket must be walled all round; on a slope the magnet may stand proud below that">Grip <span class="unit"><input id="pkGrip" type="number" min="0.2" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label title="Automatic placement will not put a pocket opening higher above the washer than this">Max height <span class="unit"><input id="pkMaxSeat" type="number" min="0" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
+          </div>
+        </details>
       </section>
 
       <section class="card">
@@ -141,6 +158,11 @@
       <section class="card">
         <h2>Export</h2>
         <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell.</p>
+        <div id="importMapBox" hidden>
+          <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots:</p>
+          <table class="tbl" id="importMap"></table>
+          <p class="hint">Bambu Studio 2.8.2 also says "The 3mf file has invalid config, load geometry data only" on every geometry import — harmless, fixed in later releases.</p>
+        </div>
         <button id="exportBtn" class="btn primary">Export files</button>
         <div id="exportOut" class="export-out"></div>
       </section>

@@ -80,7 +80,7 @@ def test_pocket_ceiling_ignored() -> None:
     hole = trimesh.creation.cylinder(radius=2.09, height=3.2, sections=48).apply_translation([0, 0, 0.6])
     cut = cube.difference(hole, engine="manifold")
     assert overhang_check(cut, 30).status == "warn"
-    assert overhang_check(cut, 30, ignore_xy=[(0, 0, 2.09)], ignore_z=2.2).status == "pass"
+    assert overhang_check(cut, 30, ignore_xy=[(0, 0, 2.09, 2.2)]).status == "pass"
 
 
 def test_bed_contact() -> None:
