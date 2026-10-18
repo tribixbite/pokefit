@@ -43,10 +43,22 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
 - Setup once: `pip install -e .` (repo root) and `cd web && bun install && bun run build`.
 - UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj, or
   `?path=C:/path/to/file.3mf` with `+` written as `%2B`). Outputs land in `pokefit_out/<name>/`.
-- CLI: `python -m pokefit fit <figure.3mf> --ball 0.6 --washer M6 [--scale 85%] [--washers]
-  [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
-- Gates: `python -m mypy`, `python -m pytest` (64 incl. slow real-file/Bambu tests, ~1 min;
-  `-m "not slow"` 61 in 20 s), `cd web && bun run typecheck && bun test`.
+- CLI: `python -m pokefit fit <figure.3mf> --ball 0.6 --washer M6 [--scale 85%] [--magnets 0-3]
+  [--washers] [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
+- Magnets (1–3): placed on a ray-cast height field of the underside (`magnets.HeightField`), so
+  sloped/raised undersides work. Each pocket opens as low as possible, never below the bed
+  plane, with ≥ `grip` (1.2 mm) of it walled; auto placement keeps openings ≤ 2 mm above the
+  washer (UI offers raising it when nothing lower fits). Pocket z = opening height in reports.
+- Export also writes `<name>_pokefit_<pct>_import.3mf` for dragging into an open Bambu project
+  ("Import geometry only" keeps part filaments + paint, which then mean that project's slots):
+  filaments renumbered to the closest-colour slot of the reference project (CIELAB ΔE ≤ 25, else
+  a new slot), overridable per colour in the UI. Bambu 2.8.2 shows "The 3mf file has invalid
+  config, load geometry data only" on EVERY geometry import (bambulab/BambuStudio#11927, fixed
+  upstream Sep 2026) — harmless.
+- Multi-figure 3MFs: picker card at the top of the panel; meshes are parsed per object on demand
+  (14 × 500k-face file opens in ~6 s; was 99 s because the regex fast path never matched).
+- Gates: `python -m mypy`, `python -m pytest` (82 incl. slow real-file/Bambu tests, ~1 min),
+  `cd web && bun run typecheck && bun test && bun run build`.
 - Slicing uses the user's X2D/PETG/0.16 project settings (`pokeball60goodPrinted.3mf`, or the
   bundled copy `pokefit/profiles/x2d_petg_printed_ball_shells.json`), reduced to the figure's
   filament count. Bambu CLI facts: needs `Application=BambuStudio-…` in 3dmodel.model or it
@@ -61,6 +73,10 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
 - pokefit known limits (not bugs): ring radius is the minimum over all angles (the latch
   notch sets it, so a figure could be a little bigger turned away from the latch — would need
   yaw-dependent ring profile); manual pockets stay at absolute mm when the size changes;
+  the height field sees only the FIRST solid span above each point (material above an air gap
+  is ignored — conservative); the import file's slot match uses the reference project
+  (`pokeball60goodPrinted.3mf`), not whichever project is open in Bambu; the actual GUI
+  drag-in import was not automated (CLI slice of the import file verified: 1h05, 10.7 g);
   analysis ~6–10 s per change on a 350k-face figure (islands section ~2.4 s, mesh checks
   4.4 s once per file).
 - **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
