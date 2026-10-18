@@ -8,6 +8,13 @@ dependencies = [
     "embreex", "rtree", "lxml",
 ]
 
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pokefit"]
+
 [project.optional-dependencies]
 dev = ["pytest", "mypy"]
 
