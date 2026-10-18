@@ -3,9 +3,10 @@ name = "pokefit"
 version = "0.1.0"
 description = "Fit a figure inside a scaled Pokéball, add magnet pockets, verify printability"
 requires-python = ">=3.11"
+# The engine also runs in the browser (Pyodide): keep this list to packages Pyodide
+# ships (manifold3d is swapped for its WebAssembly build there, see pokefit/geom.py).
 dependencies = [
-    "numpy", "scipy", "trimesh", "manifold3d", "shapely", "pymeshfix", "pymeshlab",
-    "embreex", "rtree", "lxml",
+    "numpy", "scipy", "trimesh", "manifold3d", "shapely", "lxml", "scikit-image", "pillow", "networkx",
 ]
 
 [build-system]
@@ -20,6 +21,8 @@ pokefit = ["profiles/*.json"]
 
 [project.optional-dependencies]
 dev = ["pytest", "mypy"]
+# Local-only extras: self-intersection check (pymeshlab), mesh repair scripts (pymeshfix).
+full = ["pymeshlab", "pymeshfix"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

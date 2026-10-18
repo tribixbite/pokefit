@@ -134,3 +134,17 @@ def test_export_import_variant(critter: Path, tmp_path: Path) -> None:
     assert {p.extruder for p in obj.parts} == {m[1]}
     painted = {k for p in obj.parts for a in p.tri_extra.values() for k in decode_weights(a.split('"')[1])}
     assert painted == {m[2]}
+
+
+def test_inner_diameter_and_free_rotation(critter: Path, tmp_path: Path) -> None:
+    s = open_session(critter, BALL_3MF, None, tmp_path)
+    by_scale, _ = analyse(s, Params(ball_scale=0.6, magnets=0))
+    by_diam, _ = analyse(s, Params(ball_diameter=by_scale.ball["inner_diameter"], magnets=0))
+    assert by_diam.ball["scale"] == pytest.approx(0.6)
+    assert by_diam.fit["max_scale"] == pytest.approx(by_scale.fit["max_scale"], rel=1e-6)
+    tilted, _ = analyse(s, Params(rotate_z=45, magnets=0))
+    # The block is 26 x 9 mm in plan: turned 45° about z its footprint is (26 + 9) / sqrt(2) square.
+    ext = tilted.fit["unit_extents"]
+    assert ext[0] == pytest.approx(ext[1], abs=1e-6) and ext[0] == pytest.approx(35 / np.sqrt(2), abs=1e-3)
+    lean, _ = analyse(s, Params(rotate_x=30, magnets=0))
+    assert lean.fit["scale"] > 0

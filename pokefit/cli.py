@@ -1,6 +1,6 @@
 """Command line: `python -m pokefit fit|serve|ball`.
 
-  python -m pokefit fit figure.3mf [--ball 0.6] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
+  python -m pokefit fit figure.3mf [--ball 0.6 | --diameter 44] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
   python -m pokefit serve [--port 8765] [--open]
   python -m pokefit ball [--ball 0.6] [--washer M6]
 """
@@ -31,14 +31,15 @@ def _fmt_time(sec: float) -> str:
 def cmd_fit(a: argparse.Namespace) -> int:
     from .pipeline import Params, analyse, export, open_session, slice_variants
 
-    params = Params(ball_scale=a.ball, washer=a.washer, clearance=a.clearance, figure_scale=_scale(a.scale),
-                    magnets=0 if a.no_magnets else a.magnets, object_id=a.object, rotate_x=a.rotate_x,
-                    rotate_y=a.rotate_y)
+    params = Params(ball_scale=a.ball, ball_diameter=a.diameter, washer=a.washer, clearance=a.clearance,
+                    figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
+                    rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
     f = rep.fit
     print(f"{rep.object['name']}  ({rep.object['faces']} faces, {len(rep.object['parts'])} parts)")
-    print(f"ball {a.ball:.0%}: floor z {rep.ball['floor_z']:.1f}, washer {rep.ball['washer']['label']}")
+    print(f"ball {rep.ball['scale']:.0%} (inner Ø {rep.ball['inner_diameter']:.1f} mm): floor z "
+          f"{rep.ball['floor_z']:.1f}, washer {rep.ball['washer']['label']}")
     if f["scale"] > 0:
         print(f"scale {f['scale']:.1%} -> {f['height_mm']:.1f} mm tall (max {f['max_scale']:.1%} = "
               f"{f['max_height_mm']:.1f} mm), offset ({f['offset'][0]:.1f}, {f['offset'][1]:.1f}) mm")
@@ -77,8 +78,10 @@ def cmd_ball(a: argparse.Namespace) -> int:
     from .washer import get_washer
 
     b = load_ball(DEFAULT_BALL, CACHE_DIR)
-    c = Cavity(b, a.ball, get_washer(a.washer), a.clearance)
-    print(f"inner R {b.r_inner:.3f} (x{a.ball} = {c.r_inner:.2f}), ring span {b.ring_span:.2f}, aperture {b.aperture:.2f}")
+    s = a.diameter / (2 * b.r_inner) if a.diameter else a.ball
+    c = Cavity(b, s, get_washer(a.washer), a.clearance)
+    print(f"inner R {b.r_inner:.3f} (x{s:.3f} = {c.r_inner:.2f}, inner Ø {2 * c.r_inner:.2f}), "
+          f"ring span {b.ring_span:.2f}, aperture {b.aperture:.2f}")
     print(f"floor z {c.floor_z:.2f}, top z {c.top_z:.2f}, room {c.top_z - c.floor_z:.2f} mm")
     z, r = c.profile(12)
     for zi, ri in zip(z, r):
@@ -99,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--ball", type=float, default=0.6, help="ball print scale (0.6 = the 60%% ball)")
+        p.add_argument("--diameter", type=float, help="ball inner diameter in mm (overrides --ball)")
         p.add_argument("--washer", default=DEFAULT_WASHER, help=f"{', '.join(CATALOGUE)} or 'OD,ID,T' mm")
         p.add_argument("--clearance", type=float, default=1.0, help="gap to the ball walls, mm")
 
@@ -107,8 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     common(f)
     f.add_argument("--scale", default="max", help="'max', '85%%' or 0.85 (of the file's size)")
     f.add_argument("--object", help="object id when the 3MF holds several (default: largest)")
-    f.add_argument("--rotate-x", type=int, default=0, choices=[0, 90, 180, 270])
-    f.add_argument("--rotate-y", type=int, default=0, choices=[0, 90, 180, 270])
+    f.add_argument("--rotate-x", type=float, default=0.0, help="degrees, any angle (applied X, Y, then Z)")
+    f.add_argument("--rotate-y", type=float, default=0.0)
+    f.add_argument("--rotate-z", type=float, default=0.0)
     f.add_argument("--magnets", type=int, default=2, choices=[0, 1, 2, 3], help="number of magnet pockets")
     f.add_argument("--no-magnets", action="store_true", help="same as --magnets 0")
     f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")

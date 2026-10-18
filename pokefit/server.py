@@ -232,7 +232,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_preview_glb(self, q: dict[str, str]) -> None:
         s, lock = _session(q.get("session"))
-        params = Params(object_id=q.get("object") or None, rotate_x=int(q.get("rx", 0)), rotate_y=int(q.get("ry", 0)))
+        try:
+            params = Params(object_id=q.get("object") or None, rotate_x=float(q.get("rx", 0)),
+                            rotate_y=float(q.get("ry", 0)), rotate_z=float(q.get("rz", 0)))
+        except ValueError as exc:
+            raise ApiError(400, f"bad rotation: {exc}") from exc
         with lock:
             glb = preview_glb(s, params)
         self._send(200, glb, "model/gltf-binary")

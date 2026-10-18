@@ -1,5 +1,8 @@
 """Cavity model of the assembled Pokéball, derived from pokeball.3mf.
 
+The package ships only the derived measurements (profiles/ball_functional_pokeball.json);
+`derive_ball` regenerates them from the model when it is available locally.
+
 Assembled ball (native mm, z = 0 at the ball centre / equator plane):
   * two shells, inner sphere radius Ri, rims ~3.3 mm short of the equator;
   * two connector rings ("1_inner_black"), each lining one shell from the
@@ -123,8 +126,10 @@ def derive_ball(path: str | Path) -> Ball:
 
 
 def load_ball(path: str | Path, cache_dir: str | Path | None = None) -> Ball:
-    """derive_ball with a JSON cache keyed by the file's SHA-256."""
+    """A ball from its derived-measurements JSON, or derive_ball on a 3MF (cached by SHA-256)."""
     path = Path(path)
+    if path.suffix.lower() == ".json":
+        return Ball(**json.loads(path.read_text(encoding="utf-8")))
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     cache = Path(cache_dir) / f"ball_{sha[:16]}.json" if cache_dir else None
     if cache and cache.exists():

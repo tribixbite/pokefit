@@ -10,7 +10,10 @@ import trimesh
 
 REAL_DRAGON = Path.home() / "Downloads" / "dragonwithegg+eyes+multicolor.3mf"
 REAL_ZELDA = Path.home() / "Downloads" / "Zelda+Pot_stls.zip"
-BALL_3MF = Path(__file__).resolve().parent.parent / "pokeball.3mf"
+# The third-party ball model is not in the repo; tests that derive from it skip without it.
+BALL_MODEL = Path(__file__).resolve().parent.parent / "pokeball.3mf"
+# Its derived measurements ship with the package: the pipeline tests use those.
+BALL_3MF = Path(__file__).resolve().parent.parent / "pokefit" / "profiles" / "ball_functional_pokeball.json"
 
 
 def two_footed(foot: float = 8.0, gap: float = 10.0, leg_h: float = 6.0, body_h: float = 10.0) -> trimesh.Trimesh:

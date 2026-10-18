@@ -7,12 +7,19 @@ from pokefit.ball import SEAT_MARGIN, Cavity, load_ball
 from pokefit.shell import cap_height
 from pokefit.washer import CATALOGUE, get_washer
 
-BALL = Path(__file__).resolve().parent.parent / "pokeball.3mf"
+from conftest import BALL_3MF as BALL_JSON, BALL_MODEL as BALL
+
+needs_model = pytest.mark.skipif(not BALL.exists(), reason="third-party pokeball.3mf not present")
 
 
 @pytest.fixture(scope="module")
-def ball(tmp_path_factory: pytest.TempPathFactory):
-    return load_ball(BALL, tmp_path_factory.mktemp("cache"))
+def ball():
+    return load_ball(BALL_JSON)
+
+
+@needs_model
+def test_bundled_measurements_match_model(tmp_path: Path, ball) -> None:
+    assert load_ball(BALL, tmp_path) == ball
 
 
 def test_ball_geometry(ball) -> None:
@@ -23,6 +30,7 @@ def test_ball_geometry(ball) -> None:
     assert all(r < ball.r_inner for r in ball.ring_r)
 
 
+@needs_model
 def test_cache_roundtrip(tmp_path: Path) -> None:
     a = load_ball(BALL, tmp_path)
     assert len(list(tmp_path.glob("ball_*.json"))) == 1

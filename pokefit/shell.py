@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import manifold3d as mf
 import numpy as np
 import trimesh
+
+from .geom import mf
 
 Sphere = tuple[np.ndarray, float]
 

@@ -30,13 +30,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-import manifold3d as mf
 import numpy as np
 import trimesh
 from scipy import ndimage
 from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
+from .geom import mf
 from .model3mf import Part, remesh_part
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
@@ -144,45 +144,98 @@ class HeightField:
 
 
 def height_field(meshes: list[trimesh.Trimesh], cells: int = GRID_CELLS, margin: float = 0.0) -> HeightField:
-    """Cast vertical rays up through the parts and record the first solid span of each.
+    """Rasterise the parts onto an XY grid and record the first solid span above each cell.
 
-    Parts may overlap (an eye inside a head): hits are counted as entries
-    (face pointing down) and exits, and the span ends where the count first
-    returns to zero. Rays are offset by an irrational fraction of a cell so
-    they do not run along mesh edges.
+    Every triangle is tested against the cell centres inside its XY bounding
+    box (pure numpy, so it runs the same natively and in the browser). A
+    triangle seen from below (projected winding clockwise) is an entry, one
+    seen from above an exit. Parts may overlap (an eye inside a head): the span
+    ends where the running entry count first returns to zero. Cell centres are
+    offset by irrational fractions of a cell so they do not land on mesh edges.
     """
     m = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
     assert isinstance(m, trimesh.Trimesh)
     lo, hi = m.bounds
     step = float(max(hi[0] - lo[0], hi[1] - lo[1])) / cells or 0.1
     pad = margin + 2 * step
-    jitter = 0.1234567 * step
-    xs = np.arange(lo[0] - pad, hi[0] + pad + step, step) + jitter
-    ys = np.arange(lo[1] - pad, hi[1] + pad + step, step) + jitter
-    gx, gy = np.meshgrid(xs, ys)
-    origins = np.c_[gx.ravel(), gy.ravel(), np.full(gx.size, lo[2] - 1.0)]
-    dirs = np.tile([0.0, 0.0, 1.0], (len(origins), 1))
-    loc, ray, tri = m.ray.intersects_location(origins, dirs, multiple_hits=True)
-    z1 = np.full(gx.size, np.inf)
-    z2 = np.full(gx.size, -np.inf)
-    if len(ray):
-        z = loc[:, 2]
-        order = np.lexsort((z, ray))
-        ray, z, tri = ray[order], z[order], tri[order]
-        sign = np.where(m.face_normals[tri, 2] < 0, 1, -1)
-        starts = np.r_[0, np.nonzero(np.diff(ray))[0] + 1]
-        cs = np.cumsum(sign)
-        before = np.r_[0, cs[:-1]][starts]                       # running count before each ray's first hit
-        depth = cs - np.repeat(before, np.diff(np.r_[starts, len(ray)]))
-        idx = np.arange(len(ray))
-        closed = np.where((depth <= 0) & (idx > np.repeat(starts, np.diff(np.r_[starts, len(ray)]))), idx, len(ray))
-        first_close = np.minimum.reduceat(closed, starts)
-        last = np.r_[starts[1:], len(ray)] - 1
-        end = np.where(first_close < len(ray), first_close, last)
-        r0 = ray[starts]
-        z1[r0] = z[starts]
-        z2[r0] = np.where(end > starts, z[end], z[starts])
-    return HeightField(float(xs[0]), float(ys[0]), step, z1.reshape(gx.shape), z2.reshape(gx.shape))
+    # Different offsets in x and y: equal ones would put cell centres on every x = y diagonal edge.
+    xs = np.arange(lo[0] - pad, hi[0] + pad + step, step) + 0.1234567 * step
+    ys = np.arange(lo[1] - pad, hi[1] + pad + step, step) + 0.3183099 * step
+    cell, z, sign = _crossings(np.asarray(m.triangles, np.float64), xs, ys)
+    z1, z2 = _first_spans(cell, z, sign, len(xs) * len(ys))
+    return HeightField(float(xs[0]), float(ys[0]), step, z1.reshape(len(ys), len(xs)),
+                       z2.reshape(len(ys), len(xs)))
+
+
+def _crossings(tri: np.ndarray, xs: np.ndarray, ys: np.ndarray,
+               chunk: int = 4_000_000) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(cell index, z, +1 entry / −1 exit) of every triangle-over-cell-centre crossing."""
+    step = xs[1] - xs[0] if len(xs) > 1 else 1.0
+    nx, ny = len(xs), len(ys)
+    gx = (tri[:, :, 0] - xs[0]) / step
+    gy = (tri[:, :, 1] - ys[0]) / step
+    j0 = np.clip(np.ceil(gx.min(axis=1)), 0, nx).astype(np.int64)
+    j1 = np.clip(np.floor(gx.max(axis=1)), -1, nx - 1).astype(np.int64)
+    i0 = np.clip(np.ceil(gy.min(axis=1)), 0, ny).astype(np.int64)
+    i1 = np.clip(np.floor(gy.max(axis=1)), -1, ny - 1).astype(np.int64)
+    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
+    area2 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+    w = np.maximum(j1 - j0 + 1, 0)
+    h = np.maximum(i1 - i0 + 1, 0)
+    count = w * h
+    use = np.nonzero((count > 0) & (np.abs(area2) > 1e-14))[0]
+    out_c, out_z, out_s = [], [], []
+    # Process triangles in batches so the expanded (triangle, cell) list stays bounded.
+    csum = np.cumsum(count[use])
+    start = 0
+    while start < len(use):
+        stop = int(np.searchsorted(csum, (csum[start - 1] if start else 0) + chunk, side="right"))
+        stop = max(stop, start + 1)
+        t = use[start:stop]
+        n = count[t]
+        tid = np.repeat(t, n)
+        k = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
+        ii = i0[tid] + k // w[tid]
+        jj = j0[tid] + k % w[tid]
+        px, py = xs[jj], ys[ii]
+        ax, ay, bx, by, cx, cy = a[tid, 0], a[tid, 1], b[tid, 0], b[tid, 1], c[tid, 0], c[tid, 1]
+        d = area2[tid]
+        l0 = ((bx - px) * (cy - py) - (by - py) * (cx - px)) / d
+        l1 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / d
+        l2 = 1.0 - l0 - l1
+        inside = (l0 >= 0) & (l1 >= 0) & (l2 >= 0)
+        tz = l0 * a[tid, 2] + l1 * b[tid, 2] + l2 * c[tid, 2]
+        out_c.append((ii * nx + jj)[inside])
+        out_z.append(tz[inside])
+        out_s.append(np.where(d[inside] < 0, 1, -1))      # clockwise from above = facing down = entry
+        start = stop
+    if not out_c:
+        return np.zeros(0, np.int64), np.zeros(0), np.zeros(0, np.int64)
+    return np.concatenate(out_c), np.concatenate(out_z), np.concatenate(out_s)
+
+
+def _first_spans(cell: np.ndarray, z: np.ndarray, sign: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Per cell: z where material first starts and where that span ends (inf / −inf where none)."""
+    z1 = np.full(n, np.inf)
+    z2 = np.full(n, -np.inf)
+    if not len(cell):
+        return z1, z2
+    order = np.lexsort((z, cell))
+    cell, z, sign = cell[order], z[order], sign[order]
+    starts = np.r_[0, np.nonzero(np.diff(cell))[0] + 1]
+    lengths = np.diff(np.r_[starts, len(cell)])
+    cs = np.cumsum(sign)
+    before = np.r_[0, cs[:-1]][starts]                       # running count before each cell's first hit
+    depth = cs - np.repeat(before, lengths)
+    idx = np.arange(len(cell))
+    closed = np.where((depth <= 0) & (idx > np.repeat(starts, lengths)), idx, len(cell))
+    first_close = np.minimum.reduceat(closed, starts)
+    last = starts + lengths - 1
+    end = np.where(first_close < len(cell), first_close, last)
+    c0 = cell[starts]
+    z1[c0] = z[starts]
+    z2[c0] = np.where(end > starts, z[end], z[starts])
+    return z1, z2
 
 
 def _disc_filter(a: np.ndarray, radius_px: float, kind: str, fill: float) -> np.ndarray:

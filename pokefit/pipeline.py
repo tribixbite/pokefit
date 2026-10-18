@@ -10,6 +10,7 @@ Frames:
 from __future__ import annotations
 
 import json
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -37,7 +38,12 @@ from .slicer import SliceResult, adapt_settings, default_slot, grid_positions, r
 from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BALL = ROOT / "pokeball.3mf"
+# The ball's derived measurements (radii, ring profile) ship with the package; the
+# model itself (MakerWorld #2045372) is third-party and only needed locally for
+# the washer-seat shell export.
+BUNDLED_BALL = Path(__file__).resolve().parent / "profiles" / "ball_functional_pokeball.json"
+BALL_MODEL = ROOT / "pokeball.3mf"
+DEFAULT_BALL = BUNDLED_BALL
 # The user's own printer/process/filament settings: their printed-shells project
 # if present, else the copy of its settings bundled with the package.
 BUNDLED_REFERENCE = Path(__file__).resolve().parent / "profiles" / "x2d_petg_printed_ball_shells.json"
@@ -49,12 +55,14 @@ MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its
 
 @dataclass
 class Params:
-    ball_scale: float = 0.6
+    ball_scale: float = 0.6                      # print scale of the ball model (0.6 = the 60 % ball)
+    ball_diameter: float | None = None           # inner diameter in mm; overrides ball_scale when set
     washer: str = DEFAULT_WASHER
     clearance: float = 1.0
     figure_scale: float | None = None            # None = largest that fits
-    rotate_x: int = 0                            # degrees, multiples of 90
-    rotate_y: int = 0
+    rotate_x: float = 0.0                        # degrees, any angle; applied X, then Y, then Z
+    rotate_y: float = 0.0
+    rotate_z: float = 0.0
     magnets: int = 2                             # number of magnet pockets, 0–3
     pockets: list[dict[str, float]] | None = None  # None = automatic; figure frame, final mm (x, y)
     pocket_diameter: float = 4.18
@@ -94,9 +102,9 @@ class Session:
     ball: Ball
     reference: dict | None
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
-    _frames: dict[tuple[str, int, int], list[Part]] = field(default_factory=dict)
-    _points: dict[tuple[str, int, int], HullPoints] = field(default_factory=dict)
-    _fields: dict[tuple[str, int, int], HeightField] = field(default_factory=dict)   # unit-scale undersides
+    _frames: dict[tuple[str, float, float, float], list[Part]] = field(default_factory=dict)
+    _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
+    _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
     # Auto-placement results per configuration (the figure-scale-independent search).
     _auto: dict[tuple, Any] = field(default_factory=dict)
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
@@ -104,13 +112,25 @@ class Session:
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
 
+    def _key(self, params: Params) -> tuple[str, float, float, float]:
+        """Cache key of an orientation: object id and the three angles (degrees, mod 360)."""
+        return (self.obj(params).id, round(params.rotate_x % 360, 6), round(params.rotate_y % 360, 6),
+                round(params.rotate_z % 360, 6))
+
+    def ball_scale(self, params: Params) -> float:
+        """Print scale of the ball: from the inner diameter when one is given."""
+        if params.ball_diameter:
+            return float(params.ball_diameter) / (2 * self.ball.r_inner)
+        return params.ball_scale
+
     def unit_parts(self, params: Params) -> list[Part]:
         """Figure-frame parts at scale 1 (rotated, XY-centred, on z = 0)."""
         obj = self.obj(params)
-        key = (obj.id, params.rotate_x % 360, params.rotate_y % 360)
+        key = self._key(params)
         if key not in self._frames:
             parts = world_parts(obj)
-            rot = (trimesh.transformations.rotation_matrix(np.radians(key[2]), [0, 1, 0]) @
+            rot = (trimesh.transformations.rotation_matrix(np.radians(key[3]), [0, 0, 1]) @
+                   trimesh.transformations.rotation_matrix(np.radians(key[2]), [0, 1, 0]) @
                    trimesh.transformations.rotation_matrix(np.radians(key[1]), [1, 0, 0]))
             parts = [p.transformed(rot) for p in parts]
             v = np.vstack([p.vertices for p in parts])
@@ -123,12 +143,11 @@ class Session:
     def points(self, params: Params) -> HullPoints:
         self.unit_parts(params)
         obj = self.obj(params)
-        return self._points[(obj.id, params.rotate_x % 360, params.rotate_y % 360)]
+        return self._points[self._key(params)]
 
     def underside(self, params: Params, s: float) -> HeightField:
         """Height field of the figure's underside at figure scale s (ray-cast once per orientation)."""
-        obj = self.obj(params)
-        key = (obj.id, params.rotate_x % 360, params.rotate_y % 360)
+        key = self._key(params)
         if key not in self._fields:
             solid = [p.mesh() for p in self.unit_parts(params) if p.subtype == "normal_part"]
             self._fields[key] = height_field(solid)
@@ -320,8 +339,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
         return probe, s_fit, free_pk, free_ch, fit_offset(probe)
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
-        key = (session.obj(params).id, params.rotate_x % 360, params.rotate_y % 360, params.ball_scale,
-               washer.key, params.clearance, spec, n, relaxed)
+        key = (session._key(params), session.ball_scale(params), washer.key, params.clearance, spec, n, relaxed)
         if key not in session._auto:
             session._auto[key] = _largest_with_pockets(session, params, cavity, washer, s_fit, relaxed)
         return session._auto[key]
@@ -361,7 +379,7 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
     height = session.points(params).height
 
     def row(key: str, w: Washer) -> dict[str, Any]:
-        cav = Cavity(session.ball, params.ball_scale, w, params.clearance)
+        cav = Cavity(session.ball, session.ball_scale(params), w, params.clearance)
         p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
         steel = "off"
@@ -374,8 +392,11 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
         return {"key": key, "label": w.label, "max_scale": round(s_max, 4), "height_mm": round(s_max * height, 2),
                 "pockets_on_steel": steel == "full", "steel": steel, "floor_z": round(cav.floor_z, 2)}
 
-    with ThreadPoolExecutor(max_workers=len(CATALOGUE)) as pool:
-        rows = list(pool.map(lambda kv: row(*kv), CATALOGUE.items()))
+    if sys.platform == "emscripten":      # the browser build has no threads
+        rows = [row(*kv) for kv in CATALOGUE.items()]
+    else:
+        with ThreadPoolExecutor(max_workers=len(CATALOGUE)) as pool:
+            rows = list(pool.map(lambda kv: row(*kv), CATALOGUE.items()))
     rank = {"full": 0, "partial": 1, "off": 2}
     rows.sort(key=lambda r: (rank[r["steel"]], -float(r["max_scale"])))
     return rows
@@ -386,7 +407,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     t: dict[str, float] = {}
     t0 = time.time()
     washer = get_washer(params.washer)
-    cavity = Cavity(session.ball, params.ball_scale, washer, params.clearance)
+    cavity = Cavity(session.ball, session.ball_scale(params), washer, params.clearance)
     hp = session.points(params)
     unit = session.unit_parts(params)
     obj = session.obj(params)
@@ -578,6 +599,7 @@ def _ball_info(cavity: Cavity, washer: Washer) -> dict[str, Any]:
     z, r = cavity.profile(160)
     s = cavity.scale
     return {"scale": s, "r_inner": cavity.r_inner, "r_outer": cavity.ball.r_outer * s,
+            "inner_diameter": 2 * cavity.r_inner, "native_r_inner": cavity.ball.r_inner,
             "floor_z": cavity.floor_z, "seat_z": cavity.seat_z, "top_z": cavity.top_z,
             "ring_span": cavity.ball.ring_span * s, "ring_h": [h * s for h in cavity.ball.ring_h],
             "ring_r": [x * s for x in cavity.ball.ring_r], "aperture": cavity.ball.aperture * s,
@@ -673,7 +695,9 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
     out_dir.mkdir(parents=True, exist_ok=True)
     rep, final = analyse(session, params)
     obj = session.obj(params)
-    pct = int(round(params.ball_scale * 100))
+    ball_s = session.ball_scale(params)
+    # File tag: the ball's print percentage, or its inner diameter when that was given.
+    pct = f"d{params.ball_diameter:.0f}mm" if params.ball_diameter else str(int(round(ball_s * 100)))
     stem = safe_stem(session.project.path.name)
     f3 = write_project(session.project, obj.name, obj.extruder, final, out_dir / f"{stem}_pokefit_{pct}.3mf",
                        settings=export_settings(session, params))
@@ -681,7 +705,7 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
     shell_note = ""
     try:
         shell = _shell_mesh()
-        fs = flat_spot(shell, params.ball_scale, SHELL_DISK, get_washer(params.washer).od + 0.4)
+        fs = flat_spot(shell, ball_s, SHELL_DISK, get_washer(params.washer).od + 0.4)
         fs.mesh.export(shell_path)
     except (OSError, ValueError, RuntimeError) as exc:
         shell_path, shell_note = None, f"washer-seat shell not written: {exc}"  # type: ignore[assignment]
@@ -700,7 +724,10 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
 
 
 def _shell_mesh() -> trimesh.Trimesh:
-    proj = read_project(DEFAULT_BALL)
+    if not BALL_MODEL.exists():
+        raise ValueError("needs the ball model: put pokeball.3mf (MakerWorld #2045372) next to the pokefit "
+                         "folder and use the local version")
+    proj = read_project(BALL_MODEL)
     shells = [o for o in proj.objects if o.name.startswith("0_ball_shell")]
     if not shells:
         raise ValueError("pokeball.3mf has no 0_ball_shell object")

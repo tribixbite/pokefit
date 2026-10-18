@@ -97,7 +97,8 @@ def _self_intersections(m: trimesh.Trimesh, name: str, pid: str) -> Check:
     try:
         import pymeshlab
     except ImportError:
-        return Check(f"selfint:{pid}", f"{name}: self-intersections", "info", "pymeshlab not installed; skipped.")
+        return Check(f"selfint:{pid}", f"{name}: self-intersections", "info",
+                     "Not checked (needs pymeshlab, which the local version installs).")
     ms = pymeshlab.MeshSet()
     ms.add_mesh(pymeshlab.Mesh(np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int32)))
     ms.compute_selection_by_self_intersections_per_face()
@@ -126,21 +127,75 @@ def printable_solid(parts: list[Part]) -> trimesh.Trimesh:
         return cat
 
 
+THICK_RANGE = 1.0   # mm: rays look this far for the opposite surface (thin walls only matter < 0.8 mm)
+
+
+def ray_distances(m: trimesh.Trimesh, origins: np.ndarray, dirs: np.ndarray, max_dist: float) -> np.ndarray:
+    """Distance along each ray to the first triangle within `max_dist` (inf if none).
+
+    Short rays only touch triangles near them, so candidates come from a KD-tree
+    of triangle centres, searched in small spheres strung along each ray (large
+    triangles are tested against every ray). Pure numpy/scipy: runs the same
+    natively and in the browser.
+    """
+    from scipy.spatial import cKDTree
+
+    tri = np.asarray(m.triangles, np.float64)
+    cen = tri.mean(axis=1)
+    rad = np.linalg.norm(tri - cen[:, None, :], axis=2).max(axis=1)
+    # Spheres of radius seg/2 + r centred every `seg` mm along a ray cover every triangle of
+    # circumradius <= r that can meet it. Triangles are grouped by size (powers of two) so
+    # each group is searched with its own r: a few big faces do not inflate the search for all.
+    n_seg = max(1, int(np.ceil(max_dist / 0.25)))
+    seg = max_dist / n_seg
+    ts = (np.arange(n_seg) + 0.5) * seg
+    probes = (origins[:, None, :] + dirs[:, None, :] * ts[None, :, None]).reshape(-1, 3)
+    size_class = np.ceil(np.log2(np.maximum(rad, 1e-6) / 0.05)).clip(0, 30).astype(np.int64)
+    rays, cands = [], []
+    for k in np.unique(size_class):
+        idx = np.nonzero(size_class == k)[0]
+        r_max = float(rad[idx].max())
+        found = cKDTree(cen[idx]).query_ball_point(probes, seg / 2 + r_max)
+        lens = np.fromiter((len(f) for f in found), np.int64, len(found))
+        if lens.sum():
+            rays.append(np.repeat(np.arange(len(probes)) // n_seg, lens))
+            cands.append(idx[np.concatenate([np.asarray(f, np.int64) for f in found if len(f)])])
+    ray = np.concatenate(rays) if rays else np.zeros(0, np.int64)
+    cand = np.concatenate(cands) if cands else np.zeros(0, np.int64)
+    key = np.unique(ray * len(tri) + cand)                  # a triangle near two probes is tested once
+    ray, cand = key // max(len(tri), 1), key % max(len(tri), 1)
+    out = np.full(len(origins), np.inf)
+    if not len(ray):
+        return out
+    # Möller–Trumbore, vectorised over (ray, triangle) pairs.
+    o, d = origins[ray], dirs[ray]
+    v0, e1, e2 = tri[cand, 0], tri[cand, 1] - tri[cand, 0], tri[cand, 2] - tri[cand, 0]
+    p = np.cross(d, e2)
+    det = np.einsum("ij,ij->i", e1, p)
+    ok = np.abs(det) > 1e-12
+    inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+    tv = o - v0
+    u = np.einsum("ij,ij->i", tv, p) * inv
+    q = np.cross(tv, e1)
+    v = np.einsum("ij,ij->i", d, q) * inv
+    t = np.einsum("ij,ij->i", e2, q) * inv
+    hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 1e-6) & (t <= max_dist)
+    np.minimum.at(out, ray[hit], t[hit])
+    return out
+
+
 def thickness_check(m: trimesh.Trimesh, samples: int = 4000, seed: int = 0) -> Check:
     """Local wall thickness: distance along the inward normal to the opposite surface."""
     pts, fidx = trimesh.sample.sample_surface(m, samples, seed=seed)
     normals = m.face_normals[fidx]
     origins = pts - normals * 1e-4
-    locs, ray_idx, _ = m.ray.intersects_location(origins, -normals, multiple_hits=False)
-    thick = np.full(len(pts), np.inf)
-    if len(ray_idx):
-        thick[ray_idx] = np.linalg.norm(locs - origins[ray_idx], axis=1)
+    thick = ray_distances(m, origins, -normals, THICK_RANGE)
     fail = thick < THIN_FAIL
     warn = (thick < THIN_WARN) & ~fail
     f_fail, f_warn = fail.mean(), warn.mean()
     hi = _sample(np.vstack([pts[fail], pts[warn]]))
-    finite = thick[np.isfinite(thick)]
-    p01 = float(np.percentile(finite, 1)) if len(finite) else float("nan")
+    # Thickness beyond THICK_RANGE is not measured: count it as THICK_RANGE.
+    p01 = float(np.percentile(np.minimum(thick, THICK_RANGE), 1))
     if f_fail > THIN_FAIL_FRACTION:
         return Check("thickness", "Wall thickness", "fail",
                      f"{f_fail:.1%} of the surface is under {THIN_FAIL} mm thick (nozzle width): large areas "
@@ -150,7 +205,8 @@ def thickness_check(m: trimesh.Trimesh, samples: int = 4000, seed: int = 0) -> C
                      f"{f_fail:.1%} of the surface under {THIN_FAIL} mm, {f_warn:.1%} under {THIN_WARN} mm "
                      f"(thin tips and edges print fragile or lose detail).", round(p01, 2), hi)
     return Check("thickness", "Wall thickness", "pass",
-                 f"Thinnest 1 % of the surface is {p01:.2f} mm.", round(p01, 2))
+                 f"Thinnest 1 % of the surface is {p01:.2f} mm." if p01 < THICK_RANGE else
+                 f"Thinnest 1 % of the surface is at least {THICK_RANGE:.0f} mm.", round(p01, 2))
 
 
 def overhang_check(m: trimesh.Trimesh, threshold_deg: float,

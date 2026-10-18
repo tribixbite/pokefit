@@ -8,6 +8,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "manifold-3d": "3",
+    "pyodide": "0.29",
     "three": "0.170.0"
   },
   "devDependencies": {
