@@ -42,6 +42,7 @@ BUNDLED_REFERENCE = Path(__file__).resolve().parent / "profiles" / "x2d_petg_pri
 DEFAULT_REFERENCE = ROOT / "pokeball60goodPrinted.3mf" if (ROOT / "pokeball60goodPrinted.3mf").exists() else BUNDLED_REFERENCE
 CACHE_DIR = ROOT / ".pokefit_cache"
 SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
+MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 
 
 @dataclass
@@ -219,11 +220,13 @@ def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, wash
 
     Not monotone at the small end (walls are absolute mm), so scan down in 4 %
     steps from the fit limit, then bisect between the last failure and the first success.
+    The scan stops at 60 % of the fit size: a washer that needs the figure
+    smaller than that is the wrong washer, and the steel check says so.
     """
     best = None
     prev_fail = None
     s = s_fit
-    while s >= max(0.05, 0.25 * s_fit):
+    while s >= max(0.05, MIN_SCALE_FOR_MAGNETS * s_fit):
         pk, ch, off = _place(session, params, cavity, washer, s, relaxed)
         if pk:
             best = (s, pk, ch, off)
@@ -309,9 +312,18 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
 
 
 def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
-    """Max figure scale with each catalogue washer (pockets on steel), best first."""
-    rows: list[dict[str, Any]] = []
-    for key, w in CATALOGUE.items():
+    """Max figure scale with each catalogue washer (magnets full / partial / off steel), best first.
+
+    Washers are evaluated in parallel threads: the work is numpy/shapely/
+    manifold3d, which release the GIL for most of it. The session's caches are
+    warmed first so the threads only read them (each writes its own _auto key).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    session.unit_parts(params)
+    height = session.points(params).height
+
+    def row(key: str, w: Washer) -> dict[str, Any]:
         cav = Cavity(session.ball, params.ball_scale, w, params.clearance)
         p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
@@ -322,9 +334,11 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
                 steel = "full"
             elif annulus_margin(pxy, 1.0, np.array(off), (w.id / 2, w.od / 2)) >= -1e-6:
                 steel = "partial"
-        rows.append({"key": key, "label": w.label, "max_scale": round(s_max, 4),
-                     "height_mm": round(s_max * session.points(params).height, 2),
-                     "pockets_on_steel": steel == "full", "steel": steel, "floor_z": round(cav.floor_z, 2)})
+        return {"key": key, "label": w.label, "max_scale": round(s_max, 4), "height_mm": round(s_max * height, 2),
+                "pockets_on_steel": steel == "full", "steel": steel, "floor_z": round(cav.floor_z, 2)}
+
+    with ThreadPoolExecutor(max_workers=len(CATALOGUE)) as pool:
+        rows = list(pool.map(lambda kv: row(*kv), CATALOGUE.items()))
     rank = {"full": 0, "partial": 1, "off": 2}
     rows.sort(key=lambda r: (rank[r["steel"]], -float(r["max_scale"])))
     return rows

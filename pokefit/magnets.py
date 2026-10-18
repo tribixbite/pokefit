@@ -189,6 +189,7 @@ def _farthest_pair(cand: Polygon | MultiPolygon, region: Polygon | MultiPolygon,
     step = max(x1 - x0, y1 - y0) / 60 or 0.05
     gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
     pts = np.c_[gx.ravel(), gy.ravel()]
+    shapely.prepare(cand)             # point-in-polygon on a prepared geometry is ~10x faster
     pts = pts[contains_xy(cand, pts[:, 0], pts[:, 1])]
     if len(pts) < 2:
         return None
