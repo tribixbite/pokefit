@@ -39,10 +39,16 @@ SketchUp exports here are at **16× working scale** and often non-manifold.
   a larger working scale (model mm as metres, ×1000) gives more margin.
 
 ## Open
-- **pokefit** (figure-in-ball fitter + magnet pockets + printability): spec at
-  `docs/superpowers/specs/2026-10-16-pokefit-design.md`, awaiting user review; next step is
-  the implementation plan (superpowers:writing-plans). Washer not bought yet (default DIN
-  9021 M6 18×6.4×1.6). Test figure: `~/Downloads/dragonwithegg+eyes+multicolor.3mf`.
+- **pokefit** — IN PROGRESS. Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`,
+  plan `docs/superpowers/plans/2026-10-17-pokefit.md`. Done: tasks 1–8 engine (`pokefit/`
+  shell, washer, ball, model3mf, paint, fit, magnets, checks, slicer, pipeline; `python -m
+  pytest -m "not slow"` 52 pass, `python -m mypy` clean). Remaining: CLI (`pokefit/cli.py`,
+  `__main__.py`), server (`pokefit/server.py`) + web UI (`web/`, bun + TS + three.js),
+  Chrome UI test, real-file run (dragon 0.6 → 94.8 %, 34.1 mm, M6 pockets on steel; Bambu
+  1× 1h04 / 10.8 g, 10× 4h15 / 38.8 g, no supports generated), Zelda pot check, docs.
+  Bambu CLI facts: needs `Application=BambuStudio-…` in 3dmodel.model or it ignores the
+  embedded settings; writes result.json to its cwd; sometimes hangs AFTER writing
+  result.json (handled: killed after 5 s grace).
 - **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
   `%APPDATA%\SketchUp\SketchUp 2017\SketchUp\Plugins\tt_cleanup`, but TT_Lib² is not
   installed. Not on GitHub (`thomthom/tt-lib` is the different tt-lib³; `thomthom/cleanup`
