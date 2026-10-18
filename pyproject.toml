@@ -15,6 +15,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["pokefit"]
 
+[tool.setuptools.package-data]
+pokefit = ["profiles/*.json"]
+
 [project.optional-dependencies]
 dev = ["pytest", "mypy"]
 

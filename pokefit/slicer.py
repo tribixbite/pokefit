@@ -60,6 +60,10 @@ def find_exe(exe: str | Path | None = None) -> Path | None:
 
 
 def reference_settings(path: str | Path) -> dict:
+    """Project settings from a Bambu 3MF (Metadata/project_settings.config) or a saved JSON copy."""
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
     with zipfile.ZipFile(path) as z:
         return json.loads(z.read("Metadata/project_settings.config"))
 

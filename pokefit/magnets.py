@@ -101,75 +101,99 @@ def _inscribed_radius(poly: Polygon) -> float:
     return float(poly.exterior.distance(c)) if poly.contains(c) else 0.0
 
 
+Ring = tuple[float, float, float, float]   # (centre x, centre y, inner r, outer r) in the figure frame
+
+
+def ring_polygon(ring: Ring) -> Polygon:
+    cx, cy, lo, hi = ring
+    return Point(cx, cy).buffer(hi, quad_segs=32).difference(Point(cx, cy).buffer(lo, quad_segs=32))
+
+
 def auto_pockets(meshes: list[trimesh.Trimesh], spec: PocketSpec,
-                 annulus: tuple[float, float] | None = None) -> tuple[list[Pocket], list[Check]]:
-    """Choose two pocket positions. `annulus` (lo, hi radius) caps the spacing on a single foot."""
-    feet = find_feet(meshes)
+                 ring: Ring | None = None) -> tuple[list[Pocket], list[Check]]:
+    """Choose two pocket positions; with `ring`, both must lie on the washer's steel ring."""
+    return choose_pockets(find_feet(meshes), feasible_region(meshes, spec), spec, ring)
+
+
+def choose_pockets(feet: list[Polygon], region: Polygon | MultiPolygon, spec: PocketSpec,
+                   ring: Ring | None = None, allow_single: bool = True) -> tuple[list[Pocket], list[Check]]:
+    """Pocket positions from precomputed feet and feasible region (see `feasible_region`).
+
+    Two separate usable areas → one pocket at the most inland point of each.
+    One area → the pair of valid centres farthest apart (steadier), deeper
+    inside on ties. `allow_single` returns one pocket when two do not fit.
+    """
     r = spec.diameter / 2
     need = r + spec.wall
     if not feet:
         return [], [Check("pockets:feet", "Feet", "fail",
                           f"No cross-section {Z_PROBE} mm above the bed: the figure has no flat underside.")]
-    region = feasible_region(meshes, spec)
-    regions = sorted(_parts(region), key=lambda p: -p.area)
-    largest = max(_inscribed_radius(f) for f in feet[:4])
-    if not regions:
+    if region.is_empty:
+        largest = max(_inscribed_radius(f) for f in feet[:4])
         return [], [Check("pockets:feet", "Feet", "fail",
                           f"No spot in the feet holds a Ø{spec.diameter:.2f} mm pocket with {spec.wall:.1f} mm "
                           f"walls (needs an inscribed circle of r {need:.2f} mm, largest foot has r {largest:.2f} mm).",
                           value=round(largest, 2))]
+    cand = region if ring is None else region.intersection(ring_polygon(ring))
+    comps = sorted((g for g in _parts(cand) if g.area > 1e-4), key=lambda g: -g.area)
+    if not comps:
+        return [], [Check("pockets:feet", "Feet", "fail",
+                          "The feet have room for pockets, but none of it lies over the washer's steel ring "
+                          "with the figure placed to fit the ball.")]
 
-    # One pocket per island when two separate islands can hold one.
-    by_foot = []
+    by_foot: list[Polygon] = []
     for foot in feet:
-        inside = [g for g in regions if foot.intersects(g)]
+        inside = [g for g in comps if foot.intersects(g)]
         if inside:
-            best = max(inside, key=lambda g: g.area)
-            by_foot.append(best)
+            by_foot.append(max(inside, key=lambda g: g.area))
         if len(by_foot) == 2:
             break
     if len(by_foot) == 2:
         pockets = []
         for g in by_foot:
-            c = polylabel(g, tolerance=0.01) if g.area > 1e-4 else g.representative_point()
+            c = polylabel(g, tolerance=0.01)
+            if not g.contains(c):
+                c = g.representative_point()
             pockets.append(Pocket(float(c.x), float(c.y)))
         return pockets, [Check("pockets:feet", "Feet", "pass",
                                f"Two feet found; one pocket in each ({len(feet)} contact islands).")]
 
-    # One usable foot (or one region of any shape): the pair of valid centres
-    # that are farthest apart — steadier on the washer — but no farther than the
-    # washer's steel ring allows, and with a wall between the two pockets.
-    g = by_foot[0] if by_foot else regions[0]
-    pair = _farthest_pair(g, spec.diameter + spec.wall, 2 * annulus[1] if annulus else np.inf)
+    pair = _farthest_pair(cand, region, spec.diameter + spec.wall)
     if pair is None:
-        c0 = polylabel(g, tolerance=0.01) if isinstance(g, Polygon) else g.representative_point()
+        if not allow_single:
+            return [], [Check("pockets:feet", "Feet", "fail", "Room for only one pocket.")]
+        c0 = polylabel(comps[0], tolerance=0.01)
+        if not comps[0].contains(c0):
+            c0 = comps[0].representative_point()
         return [Pocket(float(c0.x), float(c0.y))], [Check(
             "pockets:feet", "Feet", "warn",
-            "Only room for ONE pocket (the foot is too small for two with walls between); placed one.")]
+            "Only room for ONE pocket (too small for two with a wall between); placed one.")]
     a, b = pair
     d = float(np.hypot(*(a - b)))
     return [Pocket(float(a[0]), float(a[1])), Pocket(float(b[0]), float(b[1]))], [Check(
         "pockets:feet", "Feet", "pass", f"One contact area; two pockets {d:.1f} mm apart (centre to centre).")]
 
 
-def _farthest_pair(region: Polygon, d_min: float, d_max: float) -> tuple[np.ndarray, np.ndarray] | None:
-    """Two points of `region` with d_min <= distance <= d_max, as far apart as possible.
+def _farthest_pair(cand: Polygon | MultiPolygon, region: Polygon | MultiPolygon,
+                   d_min: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Two points of `cand` at least d_min apart, as far apart as possible.
 
-    Grid search (~60 cells across the region); ties prefer points deeper inside.
+    Grid search (~60 cells across); ties prefer points deeper inside `region`
+    (i.e. thicker walls).
     """
     from scipy.spatial.distance import pdist, squareform
     from shapely import contains_xy, distance
 
-    x0, y0, x1, y1 = region.bounds
+    x0, y0, x1, y1 = cand.bounds
     step = max(x1 - x0, y1 - y0) / 60 or 0.05
     gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
     pts = np.c_[gx.ravel(), gy.ravel()]
-    pts = pts[contains_xy(region, pts[:, 0], pts[:, 1])]
+    pts = pts[contains_xy(cand, pts[:, 0], pts[:, 1])]
     if len(pts) < 2:
         return None
-    depth = distance(region.exterior, shapely.points(pts))
+    depth = distance(region.boundary, shapely.points(pts))
     dist = squareform(pdist(pts))
-    valid = (dist >= d_min) & (dist <= d_max)
+    valid = dist >= d_min
     if not valid.any():
         return None
     score = np.where(valid, dist + 1.0 * (depth[:, None] + depth[None, :]), -np.inf)

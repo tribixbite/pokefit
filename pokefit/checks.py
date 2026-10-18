@@ -16,7 +16,8 @@ from .shell import from_manifold, to_manifold
 MAX_HIGHLIGHTS = 300
 THIN_WARN = 0.8          # mm, below this walls print with fewer perimeters
 THIN_FAIL = 0.4          # mm, below the nozzle width: detail is lost
-THIN_FAIL_FRACTION = 0.005   # fail when more than 0.5 % of the surface is that thin
+THIN_FAIL_FRACTION = 0.05    # fail when more than 5 % of the surface is that thin (Arachne walls
+                             # print isolated features down to ~0.1 mm, so small amounts only warn)
 OVERHANG_MIN_AREA = 2.0      # mm²; smaller down-facing patches bridge or sag harmlessly
 BED_LAYER = 0.2
 
@@ -142,12 +143,12 @@ def thickness_check(m: trimesh.Trimesh, samples: int = 4000, seed: int = 0) -> C
     p01 = float(np.percentile(finite, 1)) if len(finite) else float("nan")
     if f_fail > THIN_FAIL_FRACTION:
         return Check("thickness", "Wall thickness", "fail",
-                     f"{f_fail:.1%} of the surface is under {THIN_FAIL} mm thick (nozzle width): those details "
-                     f"will be lost or break. Print larger, or accept the loss.", round(p01, 2), hi)
+                     f"{f_fail:.1%} of the surface is under {THIN_FAIL} mm thick (nozzle width): large areas "
+                     f"that thin print weak or not at all. Print larger.", round(p01, 2), hi)
     if f_fail > 0 or f_warn > 0.01:
         return Check("thickness", "Wall thickness", "warn",
-                     f"{f_fail:.1%} under {THIN_FAIL} mm, {f_warn:.1%} under {THIN_WARN} mm "
-                     f"(thin tips/edges print weak).", round(p01, 2), hi)
+                     f"{f_fail:.1%} of the surface under {THIN_FAIL} mm, {f_warn:.1%} under {THIN_WARN} mm "
+                     f"(thin tips and edges print fragile or lose detail).", round(p01, 2), hi)
     return Check("thickness", "Wall thickness", "pass",
                  f"Thinnest 1 % of the surface is {p01:.2f} mm.", round(p01, 2))
 

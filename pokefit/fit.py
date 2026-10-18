@@ -118,40 +118,76 @@ def annulus_margin(pockets_unit: np.ndarray, s: float, offset: np.ndarray, annul
 def best_offset(points: HullPoints, cavity: Cavity, s: float,
                 pockets_unit: np.ndarray | None = None,
                 annulus: tuple[float, float] | None = None) -> tuple[np.ndarray, float]:
-    """XY offset maximising min(fit margin, annulus margin); returns (offset, margin)."""
+    """XY offset maximising min(fit margin, annulus margin); returns (offset, margin).
+
+    The fit margin alone is concave in the offset, but the annulus term
+    (|p + o| >= inner radius) is not, so a coarse grid over plausible offsets
+    seeds Nelder-Mead from the three best cells.
+    """
     allowed = _allowed(points, cavity, s)
     q = s * points.xy
+    use_annulus = pockets_unit is not None and annulus is not None
+
+    def margins(offs: np.ndarray) -> np.ndarray:
+        """Combined margin for each offset row of `offs` (k, 2)."""
+        d = np.linalg.norm(q[None, :, :] + offs[:, None, :], axis=2)          # (k, n)
+        m = np.min(allowed[None, :] - d, axis=1)
+        if use_annulus:
+            assert pockets_unit is not None and annulus is not None
+            r = np.linalg.norm(s * pockets_unit[None, :, :] + offs[:, None, :], axis=2)
+            m = np.minimum(m, np.min(np.minimum(r - annulus[0], annulus[1] - r), axis=1))
+        return m
 
     def neg_margin(o: np.ndarray) -> float:
-        m = float(np.min(allowed - np.linalg.norm(q + o, axis=1)))
-        if pockets_unit is not None and annulus is not None:
-            m = min(m, annulus_margin(pockets_unit, s, o, annulus))
-        return -m
+        return -float(margins(o[None, :])[0])
 
-    starts = [-s * points.xy_centre]
-    if pockets_unit is not None:
-        starts.append(-s * pockets_unit.mean(axis=0))
-    # Centre of the hull points' extremes is a good second start for lopsided figures.
-    starts.append(-(q.min(axis=0) + q.max(axis=0)) / 2)
-    best = None
+    centre = -(q.min(axis=0) + q.max(axis=0)) / 2
+    starts = [centre]                      # concave case: any start reaches the optimum
+    if use_annulus:
+        assert pockets_unit is not None
+        half = max(float(np.max(allowed, initial=0.0)), 1.0)
+        g = np.linspace(-half, half, 17)
+        grid = np.stack(np.meshgrid(g, g), axis=-1).reshape(-1, 2) + centre
+        gm = np.concatenate([margins(grid[i:i + 64]) for i in range(0, len(grid), 64)])
+        starts += [grid[i] for i in np.argsort(-gm)[:3]] + [-s * pockets_unit.mean(axis=0)]
+    best_x, best_f = None, np.inf
     for o0 in starts:
-        r = minimize(neg_margin, o0, method="Nelder-Mead",
-                     options={"xatol": 1e-4, "fatol": 1e-5, "maxiter": 2000})
-        if best is None or r.fun < best.fun:
-            best = r
-    assert best is not None
-    return np.asarray(best.x), -float(best.fun)
+        x, f = _nelder_mead_restarts(neg_margin, np.asarray(o0, float))
+        if f < best_f:
+            best_x, best_f = x, f
+    assert best_x is not None
+    return best_x, -float(best_f)
+
+
+def _nelder_mead_restarts(f, x0: np.ndarray, step: float = 1.0, max_restarts: int = 8) -> tuple[np.ndarray, float]:
+    """Nelder–Mead restarted from a fresh simplex until it stops improving.
+
+    The margin is a nonsmooth max–min; a single Nelder–Mead run stalls on its
+    ridges (measured: −0.002 mm where the true optimum is +0.51 mm). Restarting
+    with a new `step`-sized simplex at each result reaches the grid-search
+    optimum within 0.005 mm.
+    """
+    x, fx = x0, f(x0)
+    for _ in range(max_restarts):
+        simplex = np.array([x, x + [step, 0.0], x + [0.0, step]])
+        r = minimize(f, x, method="Nelder-Mead",
+                     options={"xatol": 1e-5, "fatol": 1e-7, "maxiter": 1500, "initial_simplex": simplex})
+        if r.fun >= fx - 1e-7:
+            break
+        x, fx = np.asarray(r.x), float(r.fun)
+    return x, fx
 
 
 def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | None = None,
               annulus: tuple[float, float] | None = None, tol: float = 1e-3) -> FitResult | None:
     """Largest figure scale that fits (bisection to `tol` relative). None if even 5 % does not fit.
 
-    The cavity fit is monotone in scale, so it is bisected alone. Keeping the
-    pockets on the washer's steel ring is not (pockets move apart as the figure
-    grows), so when the fit-optimal scale leaves them off the steel the scale
-    steps down 0.5 % at a time until both hold. If none does, the fit-only
-    result is returned and the caller reports the annulus failure.
+    The cavity fit is bisected first. If the pockets (scaled with the figure)
+    cannot also sit on the washer's steel ring there, the combined constraint
+    is bisected below that scale: shrinking the figure only brings the pockets
+    closer, and two pockets any distance apart up to the ring's diameter can
+    both sit on it, so the combined test is monotone in practice. If not even
+    5 % works, the fit-only result is returned and the caller reports it.
     """
     room = cavity.top_z - cavity.floor_z
     hi = room / points.height
@@ -174,12 +210,16 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
             lo = mid
         else:
             hi = mid
-    if pockets_unit is not None and annulus is not None:
-        s = lo
-        while s >= 0.05 and not ok(s, with_annulus=True):
-            s *= 0.995
-        if s >= 0.05:
-            lo = s
+    if pockets_unit is not None and annulus is not None and not ok(lo, with_annulus=True):
+        if ok(0.05, with_annulus=True):
+            a, b = 0.05, lo
+            while (b - a) / a > tol:
+                mid = (a + b) / 2
+                if ok(mid, with_annulus=True):
+                    a = mid
+                else:
+                    b = mid
+            lo = a
         else:
             pockets_unit = annulus = None
     off, _ = best_offset(points, cavity, lo, pockets_unit, annulus)

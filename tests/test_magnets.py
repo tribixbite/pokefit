@@ -38,11 +38,19 @@ def test_single_foot_two_pockets_far_apart() -> None:
     assert all(c.status == "pass" for c in validate_pockets([slab], pockets, SPEC))
 
 
-def test_single_foot_spacing_capped_by_annulus() -> None:
+def test_pockets_constrained_to_ring() -> None:
     slab = trimesh.creation.box([40, 10, 8]).apply_translation([0, 0, 4])
-    pockets, _ = auto_pockets([slab], SPEC, annulus=(5.29, 6.91))
-    half = abs(pockets[0].x - pockets[1].x) / 2
-    assert half <= 6.91 and half >= 5.29
+    ring = (3.0, 0.0, 5.29, 6.91)
+    pockets, checks = auto_pockets([slab], SPEC, ring=ring)
+    assert len(pockets) == 2 and checks[0].status == "pass"
+    for p in pockets:
+        assert 5.29 - 0.05 <= np.hypot(p.x - 3.0, p.y) <= 6.91 + 0.05
+
+
+def test_ring_unreachable_fails() -> None:
+    slab = trimesh.creation.box([40, 10, 8]).apply_translation([0, 0, 4])
+    pockets, checks = auto_pockets([slab], SPEC, ring=(0.0, 60.0, 5.29, 6.91))
+    assert pockets == [] and "steel ring" in checks[0].message
 
 
 def test_small_feet_fail() -> None:
