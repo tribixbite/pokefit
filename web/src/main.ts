@@ -272,7 +272,7 @@ function renderImportMap(rep: Report): void {
     h("tbody", {}, ...rep.import_map.map((m) => {
       const sel = h("select");
       sel.setAttribute("aria-label", `Slot for figure colour ${m.source}`);
-      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1), textContent: `${i + 1} · ${s.name.replace(/ @.*$/, "")} ${s.colour}` })));
+      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1), textContent: `${i + 1} · ${s.type} ${s.colour}`, title: s.name })));
       const extra = Math.max(slots.length + 1, m.new ? m.target : 0);
       sel.append(h("option", { value: String(extra), textContent: `${extra} · new slot (set its colour after import)` }));
       sel.value = String(m.target);
@@ -280,7 +280,7 @@ function renderImportMap(rep: Report): void {
         state.params.filament_map = { ...(state.params.filament_map ?? {}), [String(m.source)]: +sel.value };
         void runAnalyse();
       });
-      const note = m.new ? "no close colour" : m.delta_e > 10 ? `ΔE ${m.delta_e.toFixed(0)} — not an exact match` : "";
+      const note = m.new ? "no close colour in your project" : m.delta_e > 10 ? `colour differs (ΔE ${m.delta_e.toFixed(0)})` : "";
       return h("tr", {}, h("td", {}, swatch(m.colour), `${m.source}`),
         h("td", {}, swatch(m.target_colour), sel), h("td", { cls: "muted", textContent: note }));
     })));

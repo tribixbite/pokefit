@@ -412,7 +412,8 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
         if not np.isfinite(seat) or wall + r <= 0:
             msg = "Pocket centre is not under the figure."
         else:
-            msg = (f"Wall {wall:.2f} mm (min {spec.wall:.1f}), "
+            msg = (f"Breaks through the side by {-wall:.2f} mm, " if wall < 0 else f"Wall {wall:.2f} mm (min {spec.wall:.1f}), ")
+            msg = (msg +
                    f"ceiling {'covered' if ok_ceil else f'only {covered:.0%} covered'}. ")
             msg += ("Sits on the washer." if seat < 0.05 else
                     f"Opening {seat:.1f} mm above the washer" +

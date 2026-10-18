@@ -166,7 +166,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .checks .m { color: var(--muted); font-size: 13px; line-height: 1.35; }
 
 .parts { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.parts .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid #0006; }
+.parts .sw, #importMap .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid #0006; }
+#importMap .sw { width: 14px; height: 14px; border-color: #fff4; vertical-align: -3px; }
+#importMap td:nth-child(2) { display: flex; align-items: center; gap: 2px; }
+#importMap select { min-width: 0; flex: 1; }
 
 .slice-out, .export-out { display: flex; flex-direction: column; gap: 8px; }
 .verdict { font-size: 16px; font-weight: 650; }
