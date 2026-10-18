@@ -6,3 +6,12 @@ web/node_modules/
 web/dist/
 pokefit_out/
 *.egg-info/
+
+# Third-party or personal models: never commit (the repo is public).
+*.skp
+*.skb
+*.3mf
+*.stl
+*.dae
+original/
+printed/
