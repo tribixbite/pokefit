@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>pokefit</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23e8ecf4'/%3E%3Cpath d='M2 16a14 14 0 0 1 28 0z' fill='%23e5484d'/%3E%3Crect x='2' y='14.5' width='28' height='3' fill='%23161a22'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23161a22'/%3E%3Ccircle cx='16' cy='16' r='2.8' fill='%23e8ecf4'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="#e8ecf4"/><path d="M2 16a14 14 0 0 1 28 0z" fill="#e5484d"/><rect x="2" y="14.5" width="28" height="3" fill="#161a22"/><circle cx="16" cy="16" r="5" fill="#161a22"/><circle cx="16" cy="16" r="2.8" fill="#e8ecf4"/></svg>
+      <span>pokefit</span>
+    </div>
+    <div id="fileName" class="file-name">no figure loaded</div>
+    <label class="btn primary" for="fileInput">Open figure</label>
+    <input id="fileInput" type="file" accept=".3mf,.stl,.obj" hidden />
+  </header>
+
+  <main class="layout">
+    <section class="viewport" id="viewport">
+      <div class="view-tools" role="toolbar" aria-label="View">
+        <button data-view="iso" title="3/4 view">3D</button>
+        <button data-view="front" title="Front">Front</button>
+        <button data-view="side" title="Side">Side</button>
+        <button data-view="top" title="Top">Top</button>
+        <button data-view="bottom" title="Bottom">Under</button>
+        <button id="clipBtn" class="toggle" aria-pressed="false" title="Cut the ball in half">Cut</button>
+        <button id="spaceBtn" class="toggle" aria-pressed="true" title="Show the usable space">Space</button>
+      </div>
+      <div id="fitPill" class="fit-pill" hidden></div>
+      <div id="drop" class="drop">
+        <div>
+          <p class="drop-title">Drop a Pokémon 3MF / STL here</p>
+          <p class="drop-sub">or use <b>Open figure</b>. It is scaled to fit the ball, gets two magnet pockets in its feet, and is checked for printing.</p>
+        </div>
+      </div>
+      <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Analysing…</span></div>
+    </section>
+
+    <aside class="panel" id="panel">
+      <section class="card summary">
+        <div class="big"><span id="sumHeight">–</span><small>mm tall</small></div>
+        <div class="sum-lines">
+          <div id="sumScale">–</div>
+          <div id="sumLimit" class="muted"></div>
+        </div>
+        <div id="sumStatus" class="status-chip">–</div>
+      </section>
+
+      <section class="card">
+        <h2>Size</h2>
+        <div class="slider-row">
+          <input id="scaleSlider" type="range" min="5" max="100" step="0.1" value="100" aria-label="Figure size, percent of the largest that fits" />
+          <span id="maxMark" class="max-mark" title="largest that fits">max</span>
+        </div>
+        <div class="row">
+          <label>Height <input id="heightInput" type="number" step="0.1" min="1" inputmode="decimal" /> mm</label>
+          <button id="maxBtn" class="btn">Largest</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Ball &amp; washer</h2>
+        <div class="grid2">
+          <label>Ball size
+            <select id="ballSelect"></select>
+            <span id="ballCustomRow" class="unit" hidden><input id="ballCustom" type="number" min="10" max="300" step="1" inputmode="decimal" /> %</span>
+          </label>
+          <label>Clearance
+            <span class="unit"><input id="clearanceInput" type="number" min="0" max="5" step="0.1" value="1" inputmode="decimal" /> mm</span>
+          </label>
+        </div>
+        <label>Steel washer (glued to the inside bottom)
+          <select id="washerSelect"></select>
+        </label>
+        <div id="washerCustomRow" class="row custom-washer" hidden>
+          <label>OD <input id="wOd" type="number" min="1" step="0.1" value="20" inputmode="decimal" /></label>
+          <label>hole <input id="wId" type="number" min="0" step="0.1" value="6.4" inputmode="decimal" /></label>
+          <label>thick <input id="wT" type="number" min="0.1" step="0.1" value="1.5" inputmode="decimal" /></label>
+          <button id="wApply" class="btn">Apply</button>
+        </div>
+        <p class="hint">Must be plain or zinc-plated <b>steel</b> — stainless washers are not magnetic.</p>
+        <button id="washerCompare" class="btn">Compare washers</button>
+        <div id="washerTable"></div>
+      </section>
+
+      <section class="card">
+        <h2>Figure</h2>
+        <label id="objectRow" hidden>Object
+          <select id="objectSelect"></select>
+        </label>
+        <div class="row rot">
+          <span class="muted">Turn upright</span>
+          <button class="btn" data-rot="x">↻ X 90°</button>
+          <button class="btn" data-rot="y">↻ Y 90°</button>
+          <span id="rotLabel" class="muted"></span>
+        </div>
+        <div id="partsList" class="parts"></div>
+      </section>
+
+      <section class="card">
+        <div class="h-row">
+          <h2>Magnets</h2>
+          <label class="switch"><input id="magnetToggle" type="checkbox" checked /><span></span></label>
+        </div>
+        <p class="hint">Two Ø4.18 × 2.2 mm push-in pockets for 4 × 2 mm disc magnets. Underside view — drag a pocket to move it.</p>
+        <div id="underside" class="underside-host"></div>
+        <div class="legend">
+          <span><i class="lg feet"></i>foot</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>steel ring</span>
+        </div>
+        <div class="row">
+          <button id="autoPockets" class="btn">Auto place</button>
+          <span id="pocketInfo" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Checks</h2>
+        <ul id="checks" class="checks"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Print (Bambu Studio)</h2>
+        <p id="printerInfo" class="hint"></p>
+        <label>Filament for every colour
+          <select id="slotSelect"></select>
+        </label>
+        <div class="row">
+          <label class="check"><input id="x10Toggle" type="checkbox" checked /> also a plate of 10</label>
+          <button id="sliceBtn" class="btn primary">Slice</button>
+        </div>
+        <div id="sliceOut" class="slice-out"></div>
+      </section>
+
+      <section class="card">
+        <h2>Export</h2>
+        <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell.</p>
+        <button id="exportBtn" class="btn primary">Export files</button>
+        <div id="exportOut" class="export-out"></div>
+      </section>
+      <footer class="foot muted">pokefit · local · <span id="timing"></span></footer>
+    </aside>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

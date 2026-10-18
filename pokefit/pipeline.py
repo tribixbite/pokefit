@@ -18,17 +18,19 @@ from typing import Any
 
 import numpy as np
 import trimesh
+from shapely.ops import unary_union
 
 from .ball import Ball, Cavity, load_ball
-from .checks import (bed_contact_check, islands_check, mesh_checks, overhang_check, printable_solid,
+from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (Pocket, PocketSpec, auto_pockets, choose_pockets, cut_pockets, feasible_region, find_feet,
                       required_washer, validate_pockets)
-from .model3mf import FigureObject, Part, Project, plate_size, read_project, world_parts, write_project
+from .model3mf import (FigureObject, Part, Project, plate_size, read_project, remesh_part, world_parts,
+                       write_project)
 from .paint import decode_majority
 from .report import Check, worst
-from .shell import flat_spot
+from .shell import flat_spot, from_manifold, to_manifold
 from .slicer import SliceResult, adapt_settings, default_slot, grid_positions, reference_settings, slice_3mf
 from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
 
@@ -148,6 +150,7 @@ class Report:
     status: str
     washers: list[dict[str, Any]]
     timings: dict[str, float]
+    underside: dict[str, Any] = field(default_factory=dict)   # 2D outlines for the pocket editor
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -312,9 +315,10 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                             f"max is {s_max:.1%} ({s_max * hp.height:.1f} mm).", round(fc.margin, 2), [limit]))
 
     t2 = time.time()
+    meshes = [p.mesh() for p in final]
+    underside = _underside(meshes, params, washer, off)
     if params.magnets:
         checks.extend(pchecks)
-        meshes = [p.mesh() for p in final]
         if pockets:
             checks.extend(validate_pockets(meshes, pockets, params.spec))
             lo, hi = washer.annulus(params.pocket_diameter)
@@ -346,8 +350,35 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     t["total"] = time.time() - t0
     rep = Report(asdict(params), _obj_info(session, obj), _ball_info(cavity, washer), fit_dict,
                  [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
-                 {k: round(v, 2) for k, v in t.items()})
+                 {k: round(v, 2) for k, v in t.items()}, underside)
     return rep, final
+
+
+def _rings(geom: Any) -> list[list[list[float]]]:
+    """Polygon / MultiPolygon -> list of closed rings (exteriors and holes), simplified to 0.05 mm."""
+    if geom is None or geom.is_empty:
+        return []
+    polys = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
+    out: list[list[list[float]]] = []
+    for poly in polys:
+        if poly.geom_type != "Polygon":
+            continue
+        poly = poly.simplify(0.05)
+        out.append(np.round(np.asarray(poly.exterior.coords), 3).tolist())
+        out.extend(np.round(np.asarray(i.coords), 3).tolist() for i in poly.interiors)
+    return out
+
+
+def _underside(meshes: list[trimesh.Trimesh], params: Params, washer: Washer,
+               off: tuple[float, float]) -> dict[str, Any]:
+    """Figure-frame 2D data: foot outlines, where pocket centres are valid, and the steel ring."""
+    lo, hi = washer.annulus(params.pocket_diameter)
+    feet = find_feet(meshes)
+    return {"feet": _rings(unary_union(feet) if feet else None),
+            "valid": _rings(feasible_region(meshes, params.spec)) if params.magnets else [],
+            "ring": {"x": -off[0], "y": -off[1], "inner": lo, "outer": hi,
+                     "washer_od": washer.od, "washer_id": washer.id},
+            "pocket_d": params.pocket_diameter}
 
 
 def _kind_text(kind: str) -> str:
@@ -395,12 +426,42 @@ def face_colours(part: Part, colours: list[str], default_extruder: int) -> np.nd
     return ext
 
 
+def clip_overlaps(parts: list[Part]) -> list[Part]:
+    """What the slicer prints for overlapping parts: each part minus all earlier ones.
+
+    Bambu/Prusa clip multi-part objects in list order — the 2nd part is clipped
+    by the 1st, the 3rd by the 1st and 2nd — so an eye listed before the body
+    keeps its colour even though the body mesh encloses it. Parts that are not
+    valid solids are left as they are.
+    """
+    out: list[Part] = []
+    done: list[tuple[Part, Any]] = []
+    for part in parts:
+        lo, hi = part.vertices.min(axis=0), part.vertices.max(axis=0)
+        cur = part
+        if part.subtype == "normal_part":
+            try:
+                man = to_manifold(merged(part))
+                before = man.volume()
+                for prev, pman in done:
+                    plo, phi = prev.vertices.min(axis=0), prev.vertices.max(axis=0)
+                    if np.all(phi >= lo) and np.all(plo <= hi):
+                        man = man - pman
+                if abs(man.volume() - before) > 1e-6:
+                    cur = remesh_part(part, from_manifold(man))
+                done.append((part, to_manifold(merged(part))))
+            except RuntimeError:
+                pass
+        out.append(cur)
+    return out
+
+
 def preview_glb(session: Session, params: Params) -> bytes:
     """Figure at scale 1 in the figure frame, one mesh per (part, filament) for compact colours."""
     obj = session.obj(params)
     cols = session.project.colours or ["#cccccc"]
     scene = trimesh.Scene()
-    for pi, part in enumerate(session.unit_parts(params)):
+    for pi, part in enumerate(clip_overlaps(session.unit_parts(params))):
         ext = face_colours(part, cols, obj.extruder)
         for e in np.unique(ext):
             sub = trimesh.Trimesh(part.vertices, part.faces[ext == e], process=False)

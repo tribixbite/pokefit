@@ -26,7 +26,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, export, input_checks,
                        open_session, preview_glb, safe_stem, slice_variants, washer_table)
@@ -195,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(_config())
 
     def post_load(self, q: dict[str, str]) -> None:
-        name = Path(self.headers.get("X-Filename") or "upload.3mf").name
+        name = Path(unquote(self.headers.get("X-Filename") or "upload.3mf")).name
         if Path(name).suffix.lower() not in (".3mf", ".stl", ".obj"):
             raise ApiError(400, "Supported files: .3mf, .stl, .obj")
         data = self._body()
