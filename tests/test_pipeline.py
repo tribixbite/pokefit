@@ -61,8 +61,12 @@ def test_export_files(critter: Path, tmp_path: Path) -> None:
     back = read_project(f3).default_object()
     # Paint survived: the top face triangles are still painted.
     assert sum(len(p.tri_extra) for p in back.parts) >= 2
-    shell = trimesh.load(out["shell_stl"])
-    assert shell.is_watertight
+    # The washer-seat shell is cut from the third-party ball model, present only locally.
+    from pokefit.pipeline import BALL_MODEL
+    if BALL_MODEL.exists():
+        assert trimesh.load(out["shell_stl"]).is_watertight
+    else:
+        assert out["shell_stl"] is None and "ball model" in out["note"]
     rep = json.loads(Path(out["report"]).read_text(encoding="utf-8"))
     assert rep["fit"]["scale"] > 0
 

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import trimesh
 
-from pokefit.shell import cap_height, fit_sphere, flat_spot, washer_seat_depth
+from pokefit.shell import cap_height, fit_sphere, flat_spot, from_manifold, to_manifold, washer_seat_depth
 
 
 def test_fit_sphere_exact() -> None:
@@ -22,11 +22,10 @@ def test_cap_height() -> None:
 
 
 def _hemishell(r_out: float = 20.0, r_in: float = 18.0) -> trimesh.Trimesh:
-    """Dome shell, pole on +z, rim on z=0."""
-    outer = trimesh.creation.icosphere(subdivisions=5, radius=r_out)
-    inner = trimesh.creation.icosphere(subdivisions=5, radius=r_in)
-    shell = outer.difference(inner, engine="manifold")
-    return shell.slice_plane([0, 0, 0], [0, 0, 1], cap=True)
+    """Dome shell, pole on +z, rim on z=0 (built with manifold: trimesh's capped slice needs rtree)."""
+    outer = to_manifold(trimesh.creation.icosphere(subdivisions=5, radius=r_out))
+    inner = to_manifold(trimesh.creation.icosphere(subdivisions=5, radius=r_in))
+    return from_manifold((outer - inner).trim_by_plane((0.0, 0.0, 1.0), 0.0))
 
 
 def test_flat_spot_hemishell() -> None:
