@@ -229,11 +229,17 @@ export class Viewer {
         { r: w.id / 2, z: b.floor_z },
         { r: w.id / 2, z: b.seat_z },
       ], 96),
-      new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.85, roughness: 0.35, clippingPlanes: clipping }),
+      new THREE.MeshStandardMaterial({
+        color: 0x9aa3ad, metalness: 0.85, roughness: 0.35, transparent: true, opacity: 0.6, depthWrite: false,
+        clippingPlanes: clipping,
+      }),
     );
     const seat = new THREE.Mesh(
       new THREE.CircleGeometry(w.od / 2 + 0.2, 64),
-      new THREE.MeshStandardMaterial({ color: 0xc8303a, side: THREE.DoubleSide, clippingPlanes: clipping }),
+      new THREE.MeshStandardMaterial({
+        color: 0xc8303a, side: THREE.DoubleSide, transparent: true, opacity: 0.35, depthWrite: false,
+        clippingPlanes: clipping,
+      }),
     );
     seat.position.z = b.seat_z - 0.01;
 
@@ -259,8 +265,10 @@ export class Viewer {
     for (const p of rep.pockets) {
       const cyl = new THREE.Mesh(
         new THREE.CylinderGeometry(d / 2, d / 2, depth, 32),
-        new THREE.MeshStandardMaterial({ color: 0xff3355, emissive: 0x550011 }),
+        // Drawn over everything: pockets sit inside the base and would be hidden.
+        new THREE.MeshStandardMaterial({ color: 0xff3355, emissive: 0x550011, depthTest: false, transparent: true, opacity: 0.9 }),
       );
+      cyl.renderOrder = 9;
       cyl.rotation.x = Math.PI / 2;
       cyl.position.set(p.x, p.y, depth / 2 - 0.05);
       this.markers.add(cyl);
