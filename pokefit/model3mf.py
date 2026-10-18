@@ -371,7 +371,10 @@ def write_project(src: Project, name: str, extruder: int, parts: list[Part], out
     root = (f'<?xml version="1.0" encoding="UTF-8"?>\n'
             f'<model unit="millimeter" xml:lang="en-US" xmlns="{NS_CORE}" '
             f'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="{NS_PROD}" requiredextensions="p">\n'
-            f' <metadata name="Application">pokefit</metadata>\n'
+            # Bambu Studio only loads Metadata/project_settings.config from files
+            # whose Application starts with "BambuStudio-"; anything else is
+            # treated as a bare-geometry 3MF and sliced with defaults.
+            f' <metadata name="Application">BambuStudio-{_esc(str((settings or {}).get("version", "02.00.00.00")))}</metadata>\n'
             f' <metadata name="BambuStudio:3mfVersion">1</metadata>\n'
             f' <metadata name="Title">{_esc(name)}</metadata>\n'
             f' <resources>\n  <object id="{obj_id}" type="model">\n   <components>\n{comps}\n'
