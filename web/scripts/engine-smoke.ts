@@ -4,7 +4,7 @@
  *
  *   node scripts/engine-smoke.ts [figure.3mf|.stl]
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Module from "manifold-3d";
@@ -54,6 +54,11 @@ const params = JSON.stringify({ ...rep.params, magnets: 3, rotate_z: 45, ball_di
 const rep2 = JSON.parse(api.run_analyse(loaded.session, params));
 console.log(`[${secs()} s] 3 magnets, 45°, Ø50: scale ${(rep2.fit.scale * 100).toFixed(1)} %, ${rep2.pockets.length} pockets`);
 
+// With the (third-party, not in the repo) ball model present, exports must include the shell.
+const ballModel = join(root, "pokeball.3mf");
+const haveBall = existsSync(ballModel);
+if (haveBall) console.log(`[${secs()} s] ball model: ${api.set_ball_model("pokeball.3mf", new Uint8Array(readFileSync(ballModel)))}`);
+
 const glb = api.preview(loaded.session, params);
 const bytes = glb.toJs();
 glb.destroy();
@@ -69,6 +74,7 @@ if (String.fromCharCode(...bytes.slice(0, 4)) !== "glTF") problems.push("preview
 if (!files.some(([n]) => n.endsWith(".3mf"))) problems.push("no 3MF exported");
 if (!rep.checks.some((c: { id: string }) => c.id.startsWith("cut:"))) problems.push("pockets were not cut");
 if (res.status === undefined) problems.push("export result missing status");
+if (haveBall && !files.some(([n]) => n.startsWith("shell_washerseat"))) problems.push(`no shell exported: ${res.note}`);
 if (problems.length) {
   console.error(`FAILED: ${problems.join("; ")}`);
   process.exit(1);

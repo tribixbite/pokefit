@@ -21,6 +21,7 @@ WORK = Path("/tmp/pokefit")
 _sessions: dict[str, Session] = {}
 _reference: dict | None = None          # the user's own Bambu project settings, if they loaded one
 _reference_name = ""
+_ball_model: Path | None = None         # the user's copy of the ball model (for the washer-seat shell)
 
 
 def _dump(o: Any) -> str:
@@ -79,6 +80,18 @@ def set_reference(name: str, data: Any) -> str:
     return config()
 
 
+def set_ball_model(name: str, data: Any) -> str:
+    """Accept the user's copy of the ball model so exports include the washer-seat shell."""
+    global _ball_model
+    from .pipeline import _shell_mesh
+    path = WORK / "ball" / Path(name).name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_raw(data))
+    _shell_mesh(path)                     # raises if it has no 0_ball_shell object
+    _ball_model = path
+    return _dump({"ok": True, "name": path.name})
+
+
 def run_analyse(sid: str, params_json: str) -> str:
     rep, _ = analyse(_session(sid), Params.from_dict(json.loads(params_json)))
     return _dump(rep.to_dict())
@@ -96,6 +109,6 @@ def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]
     """(result JSON, [(file name, bytes)]) — the files are offered as downloads by the page."""
     s = _session(sid)
     out = WORK / "out" / uuid.uuid4().hex[:8] / safe_stem(s.project.path.name)
-    res = export(s, Params.from_dict(json.loads(params_json)), out)
+    res = export(s, Params.from_dict(json.loads(params_json)), out, ball_model=_ball_model)
     files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["shell_stl"], res["report"]) if p]
     return _dump(res), [(f.name, f.read_bytes()) for f in files]

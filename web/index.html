@@ -176,6 +176,11 @@
           <table class="tbl" id="importMap"></table>
           <p class="hint">Bambu Studio 2.8.2 also says "The 3mf file has invalid config, load geometry data only" on every geometry import — harmless, fixed in later releases.</p>
         </div>
+        <div class="row" id="ballModelRow" hidden>
+          <label class="btn" for="ballModelInput" title="The bottom shell with the washer seat is cut from the ball model, which pokefit cannot redistribute">Add the ball model for the shell</label>
+          <input id="ballModelInput" type="file" accept=".3mf" hidden />
+          <span id="ballModelInfo" class="muted">MakerWorld #2045372</span>
+        </div>
         <button id="exportBtn" class="btn primary">Export files</button>
         <div id="exportOut" class="export-out"></div>
       </section>

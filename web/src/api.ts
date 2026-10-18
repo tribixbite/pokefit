@@ -138,6 +138,13 @@ export async function setReference(file: File): Promise<Config> {
   return json<Config>(await call("setReference", [file.name, bytes], [bytes.buffer]));
 }
 
+/** Browser engine: the user's copy of the ball model, so exports include the washer-seat shell. */
+export async function setBallModel(file: File): Promise<string> {
+  if (mode === "local") throw new Error("The local version reads pokeball.3mf from its folder.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return (json<{ name: string }>(await call("setBallModel", [file.name, bytes], [bytes.buffer]))).name;
+}
+
 export async function analyse(session: string, params: Params): Promise<Report> {
   if (mode === "local") return postJson<Report>("/api/analyse", { session, params });
   return json<Report>(await call("analyse", [session, JSON.stringify(params)]));

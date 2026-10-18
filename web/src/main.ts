@@ -116,6 +116,7 @@ function renderPrinter(cfg: Config): void {
       : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
   ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
   $("refInfo").textContent = cfg.reference ? `slots from ${cfg.reference}` : "";
+  $("ballModelRow").hidden = cfg.engine !== "browser";
 }
 
 /** Header chip: where the engine runs and, in the browser, its start-up progress. */
@@ -619,6 +620,20 @@ function bind(): void {
       void rotate(v("rotX"), v("rotY"), v("rotZ"));
     });
   }
+  $<HTMLInputElement>("ballModelInput").addEventListener("change", async (e) => {
+    const inp = e.target as HTMLInputElement;
+    const f = inp.files?.[0];
+    inp.value = "";
+    if (!f) return;
+    busy(true, `Reading ${f.name}…`);
+    try {
+      $("ballModelInfo").textContent = `✓ ${await api.setBallModel(f)} — exports include the shell`;
+    } catch (err) {
+      toast(`Not the ball model: ${(err as Error).message}`);
+    } finally {
+      busy(false);
+    }
+  });
   $<HTMLInputElement>("refInput").addEventListener("change", async (e) => {
     const inp = e.target as HTMLInputElement;
     const f = inp.files?.[0];

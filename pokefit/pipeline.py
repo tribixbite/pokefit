@@ -710,7 +710,7 @@ def safe_stem(name: str) -> str:
     return keep.strip("_") or "figure"
 
 
-def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, Any]:
+def export(session: Session, params: Params, out_dir: str | Path, ball_model: Path | None = None) -> dict[str, Any]:
     """Write the figure 3MF, its import variant, the washer-seat shell STL and a JSON report.
 
     `<stem>_pokefit_<pct>.3mf` opens as a project (File > Open). `..._import.3mf`
@@ -730,7 +730,7 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
     shell_path = out_dir / f"shell_washerseat_{pct}_{safe_stem(params.washer)}.stl"
     shell_note = ""
     try:
-        shell = _shell_mesh()
+        shell = _shell_mesh(ball_model or BALL_MODEL)
         fs = flat_spot(shell, ball_s, SHELL_DISK, get_washer(params.washer).od + 0.4)
         fs.mesh.export(shell_path)
     except (OSError, ValueError, RuntimeError) as exc:
@@ -749,11 +749,12 @@ def export(session: Session, params: Params, out_dir: str | Path) -> dict[str, A
             "note": shell_note, "status": rep.status, "import_map": [m.to_dict() for m in matches]}
 
 
-def _shell_mesh() -> trimesh.Trimesh:
-    if not BALL_MODEL.exists():
-        raise ValueError("needs the ball model: put pokeball.3mf (MakerWorld #2045372) next to the pokefit "
-                         "folder and use the local version")
-    proj = read_project(BALL_MODEL)
+def _shell_mesh(model: Path) -> trimesh.Trimesh:
+    """The ball's shell mesh from its model (third-party: MakerWorld #2045372, not redistributed)."""
+    if not model.exists():
+        raise ValueError("it is cut from the ball model, which pokefit cannot redistribute: load your copy of "
+                         "the MakerWorld model #2045372 (.3mf) to get it")
+    proj = read_project(model)
     shells = [o for o in proj.objects if o.name.startswith("0_ball_shell")]
     if not shells:
         raise ValueError("pokeball.3mf has no 0_ball_shell object")

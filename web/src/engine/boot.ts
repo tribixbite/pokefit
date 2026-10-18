@@ -28,6 +28,7 @@ export interface WebApi {
   config(): string;
   load(name: string, data: Uint8Array): string;
   set_reference(name: string, data: Uint8Array): string;
+  set_ball_model(name: string, data: Uint8Array): string;
   run_analyse(sid: string, params: string): string;
   washers(sid: string, params: string): string;
   preview(sid: string, params: string): { toJs(): Uint8Array; destroy(): void };
