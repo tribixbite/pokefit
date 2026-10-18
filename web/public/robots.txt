@@ -1,0 +1,5 @@
+# pokefit.party: everything is public; search engines and AI crawlers are welcome.
+User-agent: *
+Allow: /
+
+Sitemap: https://pokefit.party/sitemap.xml

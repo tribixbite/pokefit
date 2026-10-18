@@ -672,6 +672,18 @@ function bind(): void {
   $<HTMLSelectElement>("slotSelect").addEventListener("change", (e) => {
     state.params.slot = +(e.target as HTMLSelectElement).value;
   });
+  // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.
+  const about = $("about");
+  const showAbout = (on: boolean): void => {
+    about.hidden = !on;
+    $("aboutBtn").setAttribute("aria-expanded", String(on));
+    if (on) $("aboutClose").focus();
+  };
+  $("aboutBtn").addEventListener("click", () => showAbout(about.hidden));
+  $("aboutClose").addEventListener("click", () => showAbout(false));
+  about.addEventListener("click", (e) => { if (e.target === about) showAbout(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !about.hidden) showAbout(false); });
+  if (location.hash === "#about") showAbout(true);
   $("sliceBtn").addEventListener("click", () => void doSlice());
   $("exportBtn").addEventListener("click", () => void doExport());
   $("washerCompare").addEventListener("click", () => void compareWashers());

@@ -19,7 +19,12 @@ def test_cube_is_sound() -> None:
     assert c["watertight"].status == "pass"
     assert c["winding"].status == "pass"
     assert c["manifold"].status == "pass"
-    assert c["selfint"].status == "pass"
+    # The self-intersection check needs pymeshlab (an optional extra; absent in CI and in the browser).
+    try:
+        import pymeshlab  # noqa: F401
+        assert c["selfint"].status == "pass"
+    except ImportError:
+        assert c["selfint"].status == "info"
     assert c["degenerate"].status == "pass"
 
 

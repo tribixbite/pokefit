@@ -6,7 +6,80 @@
   <meta name="color-scheme" content="dark" />
   <!-- The UI is dark already; stop the Dark Reader extension from re-tinting it. -->
   <meta name="darkreader-lock" />
-  <title>pokefit</title>
+  <title>pokefit — fit any 3D-printed figure inside a Pokéball, with magnets</title>
+  <meta name="description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <link rel="canonical" href="https://pokefit.party/" />
+  <meta name="robots" content="index, follow, max-image-preview:large" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="author" content="tribixbite" />
+  <meta name="keywords" content="pokeball, 3d printing, figure, magnet, bambu studio, 3mf, stl, fit, scale, washer, printability" />
+  <!-- Social previews: the animated GIF first (Discord, Slack, Telegram animate it), a still JPEG second. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="pokefit" />
+  <meta property="og:url" content="https://pokefit.party/" />
+  <meta property="og:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
+  <meta property="og:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta property="og:image" content="https://pokefit.party/og.gif" />
+  <meta property="og:image:type" content="image/gif" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="An open Pokéball with a small green figure standing on a steel washer inside, next to the pokefit title." />
+  <meta property="og:image" content="https://pokefit.party/og.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
+  <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta name="twitter:image" content="https://pokefit.party/og.jpg" />
+  <meta name="twitter:image:alt" content="An open Pokéball with a small green figure inside, next to the pokefit title." />
+  <link rel="manifest" href="site.webmanifest" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="alternate" type="text/plain" title="LLM-friendly summary" href="https://pokefit.party/llms.txt" />
+  <!-- Pyodide (the in-browser Python engine) loads from jsDelivr: open the connection early. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "name": "pokefit",
+        "url": "https://pokefit.party/",
+        "image": "https://pokefit.party/og.jpg",
+        "description": "Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser.",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Any (web browser); Windows/macOS/Linux for the local version",
+        "browserRequirements": "Requires JavaScript and WebAssembly",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "Largest scale that fits inside the ball's cavity, connector ring and opening",
+          "1 to 3 magnet pockets placed on the figure's underside, including sloped undersides",
+          "Steel washer catalogue and comparison",
+          "Mesh soundness, wall thickness, overhang, floating-island and bed-contact checks",
+          "Bambu Studio 3MF export keeping painted colours, plus an import-ready variant",
+          "Any-angle rotation and custom ball inner diameter"
+        ],
+        "codeRepository": "https://github.com/tribixbite/pokefit",
+        "author": { "@type": "Person", "name": "tribixbite", "url": "https://github.com/tribixbite" }
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          { "@type": "Question", "name": "Are my files uploaded anywhere?",
+            "acceptedAnswer": { "@type": "Answer", "text": "No. The analysis runs in your browser (Python compiled to WebAssembly); files never leave your device." } },
+          { "@type": "Question", "name": "Which washer and magnets should I use?",
+            "acceptedAnswer": { "@type": "Answer", "text": "A plain or zinc-plated steel washer (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets. A 1/4 inch × 1 inch fender washer or a DIN 9021 M6 washer works for the 60 % ball; Compare washers shows which gives the largest figure." } },
+          { "@type": "Question", "name": "Which file types work?",
+            "acceptedAnswer": { "@type": "Answer", "text": "3MF (including Bambu Studio projects with painted colours and several figures), STL and OBJ." } },
+          { "@type": "Question", "name": "How do I get print time and filament estimates?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Those come from Bambu Studio itself, which runs only on your computer: install the local version of pokefit (Python) to slice with your own printer settings." } }
+        ]
+      }
+    ]
+  }
+  </script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23e8ecf4'/%3E%3Cpath d='M2 16a14 14 0 0 1 28 0z' fill='%23e5484d'/%3E%3Crect x='2' y='14.5' width='28' height='3' fill='%23161a22'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23161a22'/%3E%3Ccircle cx='16' cy='16' r='2.8' fill='%23e8ecf4'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -18,6 +91,7 @@
     </div>
     <div id="fileName" class="file-name">no figure loaded</div>
     <span id="engineChip" class="engine-chip" hidden></span>
+    <button id="aboutBtn" class="btn" aria-controls="about" aria-expanded="false">About</button>
     <label class="btn primary" for="fileInput">Open figure</label>
     <input id="fileInput" type="file" accept=".3mf,.stl,.obj" hidden />
   </header>
@@ -187,6 +261,66 @@
       <footer class="foot muted">pokefit · local · <span id="timing"></span></footer>
     </aside>
   </main>
+
+  <!-- About: real text for people, search engines and AI crawlers (also in /llms.txt). -->
+  <section id="about" class="about" aria-labelledby="aboutTitle" hidden>
+    <div class="about-inner">
+      <button id="aboutClose" class="btn about-close" aria-label="Close">✕</button>
+      <h1 id="aboutTitle">pokefit — fit any figure inside a Pokéball, with magnets</h1>
+      <p>pokefit takes a 3D-printable figure (3MF, STL or OBJ), scales it to the largest size that fits inside a
+        printed Pokéball, cuts pockets for magnets into its underside so it snaps onto a steel washer glued in
+        the ball, checks that it will print, and exports a ready-to-slice Bambu Studio 3MF with its painted colours.</p>
+      <h2>How to use it</h2>
+      <ol>
+        <li><b>Open a figure</b> — drop a .3mf, .stl or .obj on the page. Files with several figures get a picker.</li>
+        <li><b>Pick the ball</b> — the 60 % or 100 % ball, or type the inner diameter of yours. Set the clearance to the walls.</li>
+        <li><b>Pick the washer</b> — plain or zinc-plated steel (stainless is not magnetic). <i>Compare washers</i> shows which allows the largest figure.</li>
+        <li><b>Magnets</b> — 1, 2 or 3 pockets for 4 × 2 mm disc magnets are placed automatically; drag them in the underside view.
+          The underside does not have to be flat: a pocket may go into a sloped or raised spot, but never below the plane the figure stands on.</li>
+        <li><b>Turn it</b> — rotate about X, Y and Z by any angle (45° works) if the model is not standing upright.</li>
+        <li><b>Export</b> — the figure 3MF (opens as a Bambu Studio project), an <i>import</i> variant whose colours are renumbered to
+          your own project's filament slots (for <i>Import geometry only</i>), and a JSON report.</li>
+      </ol>
+      <h2>What it checks</h2>
+      <ul>
+        <li>Fit against the ball's inner sphere, the connector rings and the ring opening the figure must pass through when closing.</li>
+        <li>Mesh soundness: closed surface, consistent normals, degenerate faces, separate shells.</li>
+        <li>Wall thickness, overhangs that need support, layers that start in mid-air, and bed contact (brim advice).</li>
+        <li>Magnet pockets: wall around each pocket, material above it, how high it sits above the washer, and whether it is over the steel.</li>
+      </ul>
+      <h2>Privacy</h2>
+      <p>Everything runs in your browser: the same Python engine as the desktop version, compiled to WebAssembly (Pyodide).
+        Your files are never uploaded. The first visit downloads about 30 MB, which the browser then caches.</p>
+      <h2>Local version (print time and filament)</h2>
+      <p>Print time, filament use and the supports verdict come from Bambu Studio itself, which only runs on your computer.
+        The local version slices with your own printer profile:</p>
+      <pre><code>git clone https://github.com/tribixbite/pokefit
+cd pokefit &amp;&amp; pip install -e .
+cd web &amp;&amp; bun install &amp;&amp; bun run build &amp;&amp; cd ..
+python -m pokefit serve --open</code></pre>
+      <h2>Questions</h2>
+      <dl>
+        <dt>Are my files uploaded anywhere?</dt>
+        <dd>No. The analysis runs in your browser (Python compiled to WebAssembly); files never leave your device.</dd>
+        <dt>Which washer and magnets should I use?</dt>
+        <dd>A plain or zinc-plated steel washer (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets.
+          A 1/4 inch × 1 inch fender washer or a DIN 9021 M6 washer works for the 60 % ball; <i>Compare washers</i> shows which gives the largest figure.</dd>
+        <dt>Which file types work?</dt>
+        <dd>3MF (including Bambu Studio projects with painted colours and several figures), STL and OBJ.</dd>
+        <dt>How do I get print time and filament estimates?</dt>
+        <dd>Those come from Bambu Studio itself, which runs only on your computer: install the local version of pokefit (Python) to slice with your own printer settings.</dd>
+      </dl>
+      <h2>Credits</h2>
+      <p>The ball dimensions are measured from the MakerWorld model
+        <a href="https://makerworld.com/en/models/2045372" rel="noopener">“functional Pokéball – no glue”</a> (#2045372); the model itself is not included.
+        Source code: <a href="https://github.com/tribixbite/pokefit" rel="noopener">github.com/tribixbite/pokefit</a>.</p>
+      <p class="muted">pokefit is a fan-made tool, not affiliated with or endorsed by Nintendo, Game Freak, Creatures or The Pokémon Company. Pokémon and Poké Ball are trademarks of their respective owners.</p>
+    </div>
+  </section>
+  <noscript>
+    <p style="padding:16px">pokefit runs in your browser and needs JavaScript and WebAssembly. It scales a 3D-printable figure to fit inside a printed Pokéball,
+      adds magnet pockets, checks printability and exports a Bambu Studio 3MF. Source: https://github.com/tribixbite/pokefit</p>
+  </noscript>
   <div id="toast" class="toast" role="status" hidden></div>
   <script type="module" src="main.js"></script>
 </body>

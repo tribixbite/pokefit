@@ -1,0 +1,43 @@
+# pokefit
+
+> pokefit (https://pokefit.party) is a free web tool that scales a 3D-printable figure (3MF, STL or OBJ) to the
+> largest size that fits inside a printed Pokéball, cuts 1–3 magnet pockets into its underside so it snaps onto
+> a steel washer glued inside the ball, checks printability, and exports a Bambu Studio-ready 3MF that keeps
+> painted colours. It runs entirely in the browser (Python compiled to WebAssembly via Pyodide); files are not
+> uploaded. A local Python version adds Bambu Studio slicing for print time and filament use.
+
+## What it does
+
+- Fit: largest scale at which the figure fits the ball's inner sphere, the connector rings near the equator and
+  the ring opening it must pass through when the ball closes, with a chosen clearance (default 1 mm). The figure
+  stands on the steel washer, which sits in a seat at the bottom of the ball.
+- Ball size: the 60 % or 100 % print of the MakerWorld model "functional Pokéball – no glue" (#2045372), or any
+  inner diameter in millimetres (the ring profile scales with it).
+- Magnets: 1, 2 or 3 pockets (default Ø4.18 × 2.2 mm, for 4 × 2 mm disc magnets) placed automatically to spread
+  out over the washer's steel ring; draggable by hand. The underside need not be flat: each pocket opens as low as
+  possible without going below the plane the figure stands on, with at least 1.2 mm of the pocket walled; pockets
+  more than 2 mm above the washer are avoided because the magnet would hold weakly.
+- Washers: catalogue of steel washers (DIN 9021 M5/M6/M8, US #10 × 3/4", US 1/4" × 1" fender) or a custom size;
+  a comparison table shows the largest figure each allows with the magnets on steel. Stainless steel is not magnetic.
+- Orientation: rotate about X, Y and Z by any angle; the lowest point lands on the bed.
+- Checks: closed surface, normals, degenerate faces, separate shells, wall thickness (warn < 0.8 mm, fail when
+  more than 5 % is < 0.4 mm), overhangs flatter than the slicer's support angle, layers that start in mid-air,
+  bed contact (brim advice), and per pocket: wall, ceiling, height above the washer, position over the steel.
+- Export: the figure as a Bambu Studio 3MF (opens as a project, painted colours kept); an "import" variant whose
+  filament numbers are matched by colour to the user's own Bambu project slots (for File > Import > Import
+  geometry only); a JSON report; and, if the user loads their copy of the ball model, the bottom shell with a
+  washer seat cut in.
+- Multi-figure 3MF files: a picker chooses which figure to fit.
+
+## Local version
+
+- Source: https://github.com/tribixbite/pokefit (Python 3.11+, numpy/scipy/trimesh/manifold3d/shapely; web UI in
+  TypeScript with three.js, built with bun).
+- `pip install -e .`, then `python -m pokefit serve --open` (web UI with Bambu Studio slicing: 1× and 10× plate
+  print time, filament grams, supports verdict) or `python -m pokefit fit figure.3mf --diameter 44 --magnets 2
+  --out DIR --slice`.
+
+## Notes
+
+- Not affiliated with Nintendo, Game Freak, Creatures or The Pokémon Company.
+- Contact / issues: https://github.com/tribixbite/pokefit/issues
