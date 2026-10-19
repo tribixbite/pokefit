@@ -25,9 +25,9 @@ exist only on the original Windows machine (ask the user for the files).
 5. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
    size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
 6. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
-   4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 64.5 s, was 289 s
+   4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 65-69 s, was 289 s
    under shapely 2.2 — islands now section each body when loops cross). Next: conform's height fields
-   (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's mesh checks (19 s).
+   (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's islands sections (~35-49 s, per body).
 7. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default; note beambam
    is AGPL, so pokefit only calls it as a program); Cloudflare "Always Use HTTPS" (off; the page redirects
    itself); turning on `has_filament_switcher` (track switch) in the Bambu project (it is off there).
