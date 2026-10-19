@@ -7,8 +7,11 @@ exist only on the original Windows machine (ask the user for the files).
 ## To do (prioritised)
 1. **Printer link next steps** (`docs/integration.md` "Next steps"). Credentials are set up
    (`~/.x2d/credentials`, never in the repo); `beambam status` and "Use my printer's AMS" work on the X2D
-   (4 AMS, 16 spools, track switch installed). Next, read-only first: live view (`beambam camera` MJPEG on
-   :8766) and print progress in a local "Printer" card; then send-to-printer (`beambam print …
+   (4 AMS, 16 spools, track switch installed). Next, read-only first: live view and print progress in a
+   local "Printer" card. `beambam camera` is blocked on Windows: its ffmpeg pump calls `select.select()` on
+   a pipe (`beambam/cli/daemon.py:433`, WinError 10038; Windows select takes sockets only) — needs a reader
+   thread there, in beambam (ask the user before changing that repo). The printer's RTSPS stream is enabled
+   (`ipcam.rtsp_url`) and ffmpeg is installed; then send-to-printer (`beambam print …
    --ams-mapping` with the Slice step's `.gcode.3mf`), blocked in beambam by the dual-nozzle
    `nozzle_mapping` print start (err 84033544); AMS load/unload. **Ask the user before any action that
    changes the printer**, every time.

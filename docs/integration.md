@@ -70,7 +70,9 @@ Measured with the Bambu CLI on the user's X2D project (PETG, 0.16 mm, prime towe
    `beambam push` and start on the touchscreen (needs the plate thumbnails beambam's
    `inject_thumbnails.py` adds).
 3. **Live view**: `beambam camera` proxies the X2D's RTSPS feed to MJPEG on 127.0.0.1:8766; the local UI
-   can embed it in a "Printer" card next to the AMS slots (print progress from `beambam status`).
+   can embed it in a "Printer" card next to the AMS slots (print progress from `beambam status`). Tried
+   2026-10-19: on Windows its ffmpeg pump dies at `select.select()` on a pipe (`beambam/cli/daemon.py:433`,
+   WinError 10038) — a beambam fix (reader thread) comes first.
 4. **Filament control**: `beambam ams-load / ams-unload` and `print.ams_filament_setting` (set a tray's
    type/colour) — a per-slot menu in that card. Every printer-changing action is user-confirmed.
 5. **Auto colour optimisation** across the loop: palette size from the cost table (done: "auto"), snap colours
