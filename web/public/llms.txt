@@ -18,6 +18,15 @@
   touches the steel; under a part that floats above the bed the magnet shows below it (at least 0.5 mm of the
   pocket must be in the figure). A "raised" option moves pockets up into such parts instead (hidden magnet, weaker
   hold), up to 2 mm above the washer. Nothing goes below the plane the figure stands on.
+- Shape for the ball (on by default): the ball's floor is flat only over the washer (18 mm for M6); beyond it the
+  sphere rises. Legs or a tail lying flat out past the washer are lifted along the sphere's curve (eased in, the
+  lowest 30 % of the figure's height lifted fully, fading above, so arms and head are untouched). Automatic
+  strength comes from the share of the low footprint beyond the washer that is a limb (free space above it, not a
+  solid column) and the low footprint's aspect ratio; it is kept only if the figure then fits ≥ 1 % larger. The
+  base over the washer is made flat: bumps pressed down by up to 1.2 mm, then gaps up to 2.5 mm between the
+  underside and the washer filled by a separate solid "flat base" part (main colour). Only vertices move, so paint
+  and texture colour are kept. Settings: bend Auto/Off/Slight/Medium/Follow the sphere, flat base diameter
+  (default the washer's), press depth, fill height.
 - GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
   kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
   materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament

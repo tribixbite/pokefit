@@ -50,6 +50,11 @@ export interface Params {
   settings_source: "reference" | "original";
   /** An imported process preset's name; null = the project's own process. */
   process: string | null;
+  /** Conform to the ball floor: bend strength (null = auto, 0 = off), flat base Ø (null = washer), press, fill (mm). */
+  bend: number | null;
+  flat_base: number | null;
+  flat_depth: number;
+  flat_fill: number;
 }
 
 export interface Washer {
@@ -89,6 +94,9 @@ export interface FitInfo {
   unit_extents: number[];
   margin?: number;
   limit_kind?: string;
+  /** The conform step (pokefit/conform.py ConformInfo). */
+  conform?: { bend: number; auto: boolean; lift_mm: number; flat_depth_mm: number; fill_mm2: number;
+    scale_before: number; scale_after: number; note: string };
   limit_point?: number[];
 }
 

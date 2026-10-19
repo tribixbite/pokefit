@@ -29,7 +29,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    process: null, filament_map: null, colours: null, paint: null, texture_colours: null,
+    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, filament_map: null, colours: null, paint: null, texture_colours: null,
   },
   report: null,
   focus: null,
@@ -222,7 +222,10 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
     const r = res.report;
     const differs = r.params.washer !== state.params.washer || r.params.ball_scale !== state.params.ball_scale ||
       r.params.ball_diameter !== state.params.ball_diameter ||
-      r.params.clearance !== state.params.clearance || r.params.magnets !== state.params.magnets;
+      r.params.clearance !== state.params.clearance || r.params.magnets !== state.params.magnets ||
+      r.params.bend !== state.params.bend || r.params.flat_base !== state.params.flat_base ||
+      r.params.flat_depth !== state.params.flat_depth || r.params.flat_fill !== state.params.flat_fill;
+    shownGeometry = geometryKey();
     await viewer.setFigure(await api.previewSource(res.session, state.params));
     if (differs) await runAnalyse();
     else show(r);
@@ -242,6 +245,7 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
  */
 async function refreshFigure(regions: import("./types").RegionView | null = null): Promise<void> {
   if (!state.session) return;
+  shownGeometry = geometryKey();
   busy(true, "Preparing the preview…");
   try {
     await viewer.setFigure(await api.previewSource(state.session, state.params, regions));
@@ -252,8 +256,18 @@ async function refreshFigure(regions: import("./types").RegionView | null = null
   }
 }
 
+/** What the figure's shape depends on: orientation and the conform step (designed for this ball,
+ * clearance and, unless the flat base has its own size, the washer). */
+function geometryKey(): string {
+  const p = state.params;
+  return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
+    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.ball_scale, p.ball_diameter, p.clearance]);
+}
+let shownGeometry = "";
+
 async function runAnalyse(): Promise<void> {
   if (!state.session) return;
+  if (geometryKey() !== shownGeometry) await refreshFigure();
   const seq = ++state.seq;
   paintDirty = false;
   busy(true);
@@ -279,6 +293,10 @@ function show(rep: Report): void {
     ? `${pct(f.scale)} of the file · max ${pct(f.max_scale)} (${f.max_height_mm.toFixed(1)} mm)`
     : "does not fit";
   $("sumLimit").textContent = f.limit_kind ? `Tightest at the ${limitText(f.limit_kind)}` : "";
+  // What the conform step did (bend / flat base), or why it left the figure alone.
+  const shaped = rep.checks.find((c) => c.id === "conform")?.message ?? f.conform?.note ?? "";
+  $("conformInfo").textContent = shaped;
+  $("conformInfo").hidden = !shaped;
   renderStatus(rep);
 
   const pill = $("fitPill");
@@ -678,6 +696,31 @@ function bind(): void {
     sel.value = key;
     $("washerCustomRow").hidden = true;
     state.params.washer = key;
+    state.params.pockets = null;
+    void runAnalyse();
+  });
+  // Shape for the ball (conform): any change reshapes the figure; runAnalyse reloads the preview.
+  $<HTMLSelectElement>("bendSelect").addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    state.params.bend = v === "auto" ? null : +v;
+    state.params.figure_scale = null;
+    state.params.pockets = null;
+    void runAnalyse();
+  });
+  for (const [id, key, lo, hi] of [["flatDepth", "flat_depth", 0, 5], ["flatFill", "flat_fill", 0, 10]] as const) {
+    $<HTMLInputElement>(id).addEventListener("change", (e) => {
+      const v = +(e.target as HTMLInputElement).value;
+      if (!(v >= lo && v <= hi)) { toast(`Must be ${lo}–${hi} mm.`); return; }
+      state.params[key] = v;
+      state.params.pockets = null;
+      void runAnalyse();
+    });
+  }
+  $<HTMLInputElement>("flatD").addEventListener("change", (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    const v = +raw;
+    if (raw !== "" && !(v >= 0 && v <= 60)) { toast("Flat base Ø must be 0–60 mm (blank = the washer's)."); return; }
+    state.params.flat_base = raw === "" ? null : v;
     state.params.pockets = null;
     void runAnalyse();
   });

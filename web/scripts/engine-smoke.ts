@@ -129,7 +129,22 @@ const imported = presetCfg.slots.filter((x: { imported?: boolean }) => x.importe
 console.log(`[${secs()} s] presets: ${imported.map((x: { name: string }) => x.name).join(", ")} ` +
   `(${presetCfg.presets.map((x: { status: string }) => x.status).join(", ")})`);
 
+// Conform: a round body with legs lying flat out bends its legs up and gets a flat base (scipy in Pyodide).
+pyodide.runPython(`
+import trimesh
+body = trimesh.creation.icosphere(subdivisions=3, radius=7.0); body.apply_translation([0, 0, 9.0])
+legs = [trimesh.creation.box((12.0, 4.0, 4.0)).subdivide().subdivide().subdivide() for _ in (0, 1)]
+for leg, side in zip(legs, (-1, 1)): leg.apply_translation([side * 10.0, 0, 2.0])
+trimesh.util.concatenate([body, *legs]).export("/tmp/sitting.stl")
+`);
+const sitting = JSON.parse(api.load("sitting.stl", pyodide.FS.readFile("/tmp/sitting.stl")));
+const shaped = sitting.report.checks.find((c: { id: string }) => c.id === "conform");
+console.log(`[${secs()} s] conform: ${shaped?.message ?? "none"} parts ${sitting.report.object.parts.length}`);
+
 const problems: string[] = [];
+if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
+  problems.push("conform (bend + flat base)");
+}
 if (imported.length !== 1 || imported[0].name !== "eSUN PETG Basic") problems.push("preset import");
 if (glbObj.parts.length !== 1 || glbObj.colours.join() !== "#1414C8,#C81414" || glbObj.parts[0].painted < 12) {
   problems.push("GLB colours");

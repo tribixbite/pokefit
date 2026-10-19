@@ -11,6 +11,11 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
 - cuts **1–3 magnet pockets** (4 × 2 mm discs) into its underside — flat feet or not — so it snaps onto a
   **steel washer** glued inside the ball (magnets rest on the washer; optionally raised into floating parts),
   and compares washers;
+- **shapes the figure for the ball**: legs or a tail lying straight out past the washer are bent up along the
+  sphere so it fits larger (automatic for limbs, more for wide, low figures, only when it helps), and the base is
+  made flat over the washer (18 mm, or any diameter): low bumps pressed flat (≤ 1.2 mm), gaps under the body up to
+  2.5 mm filled with a solid flat base, so magnets have room and the belly needs no support. Paint and texture
+  colour are kept (only vertices move; the flat base is its own part);
 - **colours single-colour models**: tap the 3D view and each tap fills a part found from the shape (ears, tail,
   eyes, bib…), a separate piece or a brush patch, exported as Bambu paint;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;

@@ -26,6 +26,7 @@ from shapely.ops import unary_union
 from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
+from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
 from .colorize import PaintOp, TopologyCache, apply_paint, pick_face, region_colours, region_faces
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
@@ -91,6 +92,14 @@ class Params:
     # glTF colour (texture, vertex colours, materials): how many filaments to reduce it to
     # (None = automatic, see gltf.py). Ignored for other files.
     texture_colours: int | None = None
+    # Conform to the ball's floor (conform.py): bend legs/tails that reach past the washer up along the
+    # sphere (None = automatic, 0 = off, else strength 0..1) and make the base flat over a disc of
+    # `flat_base` mm (None = the washer's diameter, 0 = off): press it by at most `flat_depth` mm,
+    # then fill gaps up to `flat_fill` mm under the figure with a solid "flat base" part.
+    bend: float | None = None
+    flat_base: float | None = None
+    flat_depth: float = DEFAULT_MAX_DEPTH
+    flat_fill: float = DEFAULT_FILL
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -110,6 +119,14 @@ class Params:
             self.texture_colours = int(self.texture_colours)
             if not 1 <= self.texture_colours <= MAX_PICK:
                 raise ValueError(f"texture_colours must be 1..{MAX_PICK}")
+        if self.bend is not None and not 0 <= float(self.bend) <= 1:
+            raise ValueError("bend must be 0..1 (or null for automatic)")
+        if self.flat_base is not None and not 0 <= float(self.flat_base) <= 60:
+            raise ValueError("flat_base must be 0..60 mm (or null for the washer's diameter)")
+        if not 0 <= float(self.flat_depth) <= 5:
+            raise ValueError("flat_depth must be 0..5 mm")
+        if not 0 <= float(self.flat_fill) <= 10:
+            raise ValueError("flat_fill must be 0..10 mm")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -135,7 +152,9 @@ class Session:
     reference: dict | None
     presets: PresetLibrary | None = None        # Bambu presets the user imported (presets.py)
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
-    _frames: dict[tuple[str, float, float, float], list[Part]] = field(default_factory=dict)
+    _frames: dict[tuple, list[Part]] = field(default_factory=dict)           # orientation + conform -> parts
+    _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
+    _conform: dict[tuple, ConformInfo] = field(default_factory=dict)
     _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
     _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
     # Auto-placement results per configuration (the figure-scale-independent search).
@@ -149,10 +168,32 @@ class Session:
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
 
-    def _key(self, params: Params) -> tuple[str, float, float, float]:
-        """Cache key of an orientation: object id and the three angles (degrees, mod 360)."""
+    def _orientation(self, params: Params) -> tuple[str, float, float, float]:
+        """Object id and the three angles (degrees, mod 360)."""
         return (self.obj(params).id, round(params.rotate_x % 360, 6), round(params.rotate_y % 360, 6),
                 round(params.rotate_z % 360, 6))
+
+    def _key(self, params: Params) -> tuple:
+        """Cache key of the figure-frame geometry: the orientation, plus what the conform step
+        depends on when it is on (its settings, the ball size and the clearance; the washer only
+        through the flat disc's diameter, see `unit_parts`)."""
+        spec = self.conform_spec(params)
+        if spec is None:
+            return self._orientation(params)
+        return self._orientation(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
+                                             round(self.ball_scale(params), 6), params.clearance)
+
+    def conform_spec(self, params: Params) -> ConformSpec | None:
+        """The conform step's settings, or None when bend and flat base are both off."""
+        flat = get_washer(params.washer).od if params.flat_base is None else float(params.flat_base)
+        bend = None if params.bend is None else float(params.bend)
+        if bend == 0 and (flat <= 0 or (params.flat_depth <= 0 and params.flat_fill <= 0)):
+            return None
+        return ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill))
+
+    def conform_info(self, params: Params) -> ConformInfo | None:
+        self.unit_parts(params)
+        return self._conform.get(self._key(params))
 
     def ball_scale(self, params: Params) -> float:
         """Print scale of the ball: from the inner diameter when one is given."""
@@ -165,16 +206,29 @@ class Session:
         obj = self.obj(params)
         key = self._key(params)
         if key not in self._frames:
-            parts = world_parts(obj)
-            rot = (trimesh.transformations.rotation_matrix(np.radians(key[3]), [0, 0, 1]) @
-                   trimesh.transformations.rotation_matrix(np.radians(key[2]), [0, 1, 0]) @
-                   trimesh.transformations.rotation_matrix(np.radians(key[1]), [1, 0, 0]))
-            parts = [p.transformed(rot) for p in parts]
-            v = np.vstack([p.vertices for p in parts])
-            mn, mx = v.min(axis=0), v.max(axis=0)
-            shift = trimesh.transformations.translation_matrix([-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2, -mn[2]])
-            self._frames[key] = [p.transformed(shift) for p in parts]
-            self._points[key] = prepare_points(np.vstack([p.vertices for p in self._frames[key]]))
+            okey = self._orientation(params)
+            if okey not in self._oriented:
+                parts = world_parts(obj)
+                rot = (trimesh.transformations.rotation_matrix(np.radians(okey[3]), [0, 0, 1]) @
+                       trimesh.transformations.rotation_matrix(np.radians(okey[2]), [0, 1, 0]) @
+                       trimesh.transformations.rotation_matrix(np.radians(okey[1]), [1, 0, 0]))
+                parts = [p.transformed(rot) for p in parts]
+                v = np.vstack([p.vertices for p in parts])
+                mn, mx = v.min(axis=0), v.max(axis=0)
+                shift = trimesh.transformations.translation_matrix([-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2,
+                                                                    -mn[2]])
+                self._oriented[okey] = [p.transformed(shift) for p in parts]
+            parts = self._oriented[okey]
+            spec = self.conform_spec(params)
+            if spec is not None:
+                # Designed against the default washer's floor, so the shape (and every cache keyed
+                # on it) is the same whatever washer is compared; the lift itself depends only on the
+                # sphere and the flat disc.
+                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+                # Vertices move, faces keep their order: paint and texture colour carry over.
+                parts, self._conform[key] = conform(parts, cavity, spec)
+            self._frames[key] = parts
+            self._points[key] = prepare_points(np.vstack([p.vertices for p in parts]))
         return self._frames[key]
 
     def colours(self, params: Params) -> list[str]:
@@ -198,7 +252,10 @@ class Session:
                 self._textured.clear()
             _, extra, base = self.project.texture.paint(params.texture_colours)
             p0 = parts[0]
-            self._textured[key] = [Part(p0.name, base, p0.vertices, p0.faces, dict(extra), p0.subtype), *parts[1:]]
+            # The conform step's flat base prints in the base filament, which depends on the count.
+            rest = [Part(p.name, base, p.vertices, p.faces, p.tri_extra, p.subtype) if p.name == FILL_NAME else p
+                    for p in parts[1:]]
+            self._textured[key] = [Part(p0.name, base, p0.vertices, p0.faces, dict(extra), p0.subtype), *rest]
         return self._textured[key]
 
     def topology(self, params: Params) -> TopologyCache:
@@ -515,7 +572,10 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
 
     def row(key: str, w: Washer) -> dict[str, Any]:
         cav = Cavity(session.ball, session.ball_scale(params), w, params.clearance)
-        p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None})
+        # The same figure shape for every washer (flat disc pinned to the current one's).
+        spec = session.conform_spec(params)
+        p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None,
+                              "flat_base": spec.flat_diameter if spec else params.flat_base})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
         steel = "off"
         if pockets and len(pockets) == p.magnets:
@@ -579,6 +639,13 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                             f"Pokes {-fc.margin:.1f} mm into the {_kind_text(fc.kind)} at this size; "
                             f"max is {s_max:.1%} ({s_max * hp.height:.1f} mm).", round(fc.margin, 2), [limit]))
 
+    info = session.conform_info(params)
+    if info is not None:
+        fit_dict["conform"] = info.to_dict()
+        conform_check = _conform_check(info)
+        if conform_check:
+            checks.append(conform_check)
+
     t2 = time.time()
     meshes = [p.mesh() for p in final]
     underside = _underside(session, params, meshes, scale, washer, off)
@@ -632,6 +699,24 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                  {k: round(v, 2) for k, v in t.items()}, underside,
                  [m.to_dict() for m in session.slot_matches(params)])
     return rep, final
+
+
+def _conform_check(info: ConformInfo) -> Check | None:
+    """One line on what the conform step did (bend, flat base), or None if it changed nothing."""
+    said = []
+    if info.bend > 0:
+        gain = info.scale_after / info.scale_before - 1 if info.scale_before else 0.0
+        said.append(f"legs/tail beyond the washer bent up by up to {info.lift_mm:.1f} mm"
+                    f"{' (automatic)' if info.auto else ''}, so it fits {gain:+.1%} larger")
+    if info.flat_depth_mm > 0:
+        said.append(f"base pressed {info.flat_depth_mm:.1f} mm flat over the washer")
+    if info.fill_mm2 > 0:
+        said.append(f"a {info.fill_mm2:.0f} mm² flat base fills the gap under it")
+    if not said:
+        return None
+    text = "; ".join(said)
+    return Check("conform", "Shaped for the ball", "info", text[0].upper() + text[1:] + ".",
+                 round(info.lift_mm, 2))
 
 
 def _rings(geom: Any) -> list[list[list[float]]]:
