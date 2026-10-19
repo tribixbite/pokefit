@@ -4,7 +4,7 @@
 
 ![pokefit preview](web/public/og.jpg)
 
-pokefit takes a figure (3MF, STL or OBJ) and:
+pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's material colours become filaments) and:
 
 - scales it to the **largest size that fits** the ball's inner sphere, connector rings and ring opening
   (60 % or 100 % ball, or any inner diameter);

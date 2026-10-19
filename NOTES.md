@@ -55,7 +55,7 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   in `C:\git\pokeball_backup_20261018\` (bundle verified). Model files are git-ignored; the
   ball ships only as measurements (`pokefit/profiles/ball_functional_pokeball.json`).
 - Setup once: `pip install -e .` (repo root) and `cd web && bun install && bun run build`.
-- UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj, or
+- UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj/.glb, or
   `?path=C:/path/to/file.3mf` with `+` written as `%2B`). Outputs land in `pokefit_out/<name>/`.
 - CLI: `python -m pokefit fit <figure.3mf> [--ball 0.6 | --diameter 44] --washer M6 [--scale 85%] [--magnets 0-3]
   [--rotate-x/-y/-z DEG]
@@ -115,6 +115,12 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   drag-in import was not automated (CLI slice of the import file verified: 1h05, 10.7 g);
   analysis ~6–10 s per change on a 350k-face figure (islands section ~2.4 s, mesh checks
   4.4 s once per file).
+- GLB/glTF input (`model3mf._read_gltf`): one part per material colour (≤ 16, rest merged to nearest);
+  Y-up → Z-up; ≤ 10 units taken as metres (×1000). Not supported: Draco/meshopt compression, .gltf with
+  external .bin/textures, per-texel or per-vertex colour detail (a textured primitive gets its texture's
+  average colour; vertex colours their mean). Game assets are usually not watertight → checks fail as with
+  any open STL. Big scenes are slow: a 600k-triangle LEGO GLB (Downloads/41714-1-dbix_conv_v3.glb) took 82 s
+  to open locally. `planar._xor` repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
 - **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
   `%APPDATA%\SketchUp\SketchUp 2017\SketchUp\Plugins\tt_cleanup`, but TT_Lib² is not
   installed. Not on GitHub (`thomthom/tt-lib` is the different tt-lib³; `thomthom/cleanup`

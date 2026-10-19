@@ -83,7 +83,30 @@ const [resJson, files] = api.run_export(loaded.session, params).toJs({ create_pr
 const res = JSON.parse(resJson);
 console.log(`[${secs()} s] preview ${bytes.length} B; export ${files.map(([n, b]) => `${n} (${b.length} B)`).join(", ")}`);
 
+// GLB: the critter as a glTF scene (Y-up, metres) with red legs and a blue body; it must open
+// as one figure with a part per colour, in mm.
+pyodide.runPython(`
+import trimesh
+from trimesh.visual.material import PBRMaterial
+def box(size, at, rgb):
+    m = trimesh.creation.box([s / 1000 for s in size]).apply_translation([a / 1000 for a in at])
+    m.visual = trimesh.visual.TextureVisuals(material=PBRMaterial(baseColorFactor=[*rgb, 255]))
+    return m
+y_up = trimesh.transformations.rotation_matrix(-1.5707963267948966, [1, 0, 0])
+s = trimesh.Scene()
+for i, m in enumerate([box([9, 9, 12], [x * 8.5, 0, 6], (200, 20, 20)) for x in (-1, 1)] +
+                      [box([26, 9, 18], [0, 0, 20.99], (20, 20, 200))]):
+    s.add_geometry(m.apply_transform(y_up), node_name=f"n{i}")
+open("/tmp/critter.glb", "wb").write(s.export(file_type="glb"))
+`);
+const glbLoaded = JSON.parse(api.load("critter.glb", pyodide.FS.readFile("/tmp/critter.glb")));
+const glbObj = glbLoaded.report.object;
+console.log(`[${secs()} s] GLB: ${glbObj.parts.length} parts, colours ${glbObj.colours.join(" ")}, ` +
+  `${glbLoaded.report.fit.height_mm.toFixed(1)} mm at ${(glbLoaded.report.fit.scale * 100).toFixed(1)} %`);
+
 const problems: string[] = [];
+if (glbObj.parts.length !== 2 || glbObj.colours.join() !== "#C81414,#1414C8") problems.push("GLB colour parts");
+if (Math.abs(glbLoaded.report.fit.scale - rep.fit.scale) > 0.01) problems.push("GLB scale differs from the STL's");
 if (!(rep.fit.scale > 0)) problems.push("figure does not fit");
 if (side.faces !== 2) problems.push(`region pick: expected 2 faces (one box side), got ${side.faces}`);
 if (leg.faces !== 12) problems.push(`piece pick: expected 12 faces (the leg box), got ${leg.faces}`);

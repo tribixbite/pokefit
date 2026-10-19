@@ -111,7 +111,7 @@ export async function getConfig(): Promise<Config> {
   return (await (await check(await fetch(versioned("config.json")))).json()) as Config;
 }
 
-/** Open a .3mf/.stl/.obj; the engine analyses it with default parameters. */
+/** Open a .3mf/.stl/.obj/.glb; the engine analyses it with default parameters. */
 export async function loadFile(file: File): Promise<LoadResponse> {
   if (mode === "local") {
     const res = await check(

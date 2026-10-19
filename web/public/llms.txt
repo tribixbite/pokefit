@@ -1,6 +1,6 @@
 # pokefit
 
-> pokefit (https://pokefit.party) is a free web tool that scales a 3D-printable figure (3MF, STL or OBJ) to the
+> pokefit (https://pokefit.party) is a free web tool that scales a 3D-printable figure (3MF, STL, OBJ or GLB) to the
 > largest size that fits inside a printed Pokéball, cuts 1–3 magnet pockets into its underside so it snaps onto
 > a steel washer glued inside the ball, checks printability, and exports a Bambu Studio-ready 3MF that keeps
 > painted colours. It runs entirely in the browser (Python compiled to WebAssembly via Pyodide); files are not
@@ -18,6 +18,8 @@
   touches the steel; under a part that floats above the bed the magnet shows below it (at least 0.5 mm of the
   pocket must be in the figure). A "raised" option moves pockets up into such parts instead (hidden magnet, weaker
   hold), up to 2 mm above the washer. Nothing goes below the plane the figure stands on.
+- GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
+  kept as mm). One part per material colour, so a coloured model opens with its colours as filaments (16 at most).
 - Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result

@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
                        input_checks,
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
+from .model3mf import GLTF_SUFFIXES
 from .slicer import find_exe, reference_settings
 from .washer import CATALOGUE, DEFAULT_WASHER
 
@@ -195,8 +196,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_load(self, q: dict[str, str]) -> None:
         name = Path(unquote(self.headers.get("X-Filename") or "upload.3mf")).name
-        if Path(name).suffix.lower() not in (".3mf", ".stl", ".obj"):
-            raise ApiError(400, "Supported files: .3mf, .stl, .obj")
+        if Path(name).suffix.lower() not in (".3mf", ".stl", ".obj", *GLTF_SUFFIXES):
+            raise ApiError(400, "Supported files: .3mf, .stl, .obj, .glb, .gltf")
         data = self._body()
         if not data:
             raise ApiError(400, "empty upload")

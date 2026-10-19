@@ -103,6 +103,58 @@ def test_stl_is_merged(tmp_path: Path) -> None:
     assert len(part.vertices) == 8
 
 
+def _glb_scene() -> trimesh.Scene:
+    """A glTF-style scene in metres, Y-up: a red PBR box (2 nodes, one mirrored) and a blue
+    vertex-coloured box on top of it."""
+    red = trimesh.creation.box([0.02, 0.01, 0.02])
+    red.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
+        baseColorFactor=[200, 20, 20, 255]))
+    blue = trimesh.creation.box([0.01, 0.01, 0.01])
+    blue.visual = trimesh.visual.ColorVisuals(blue, face_colors=[20, 20, 200, 255])
+    s = trimesh.Scene()
+    s.add_geometry(red, node_name="red", transform=trimesh.transformations.translation_matrix([0, 0.005, 0]))
+    mirror = np.diag([-1.0, 1.0, 1.0, 1.0])
+    mirror[:3, 3] = [0.03, 0.005, 0]
+    s.add_geometry(red.copy(), node_name="red_mirrored", transform=mirror)
+    s.add_geometry(blue, node_name="blue", transform=trimesh.transformations.translation_matrix([0, 0.015, 0]))
+    return s
+
+
+def test_glb_parts_per_colour(tmp_path: Path) -> None:
+    f = tmp_path / "toy.glb"
+    f.write_bytes(_glb_scene().export(file_type="glb"))
+    proj = read_project(f)
+    obj = proj.default_object()
+    assert proj.kind == "mesh" and len(proj.objects) == 1
+    assert proj.colours == ["#C81414", "#1414C8"]          # by triangle count: 2 red boxes, 1 blue
+    red, blue = obj.parts
+    assert (red.extruder, blue.extruder) == (1, 2)
+    assert len(red.faces) == 24 and len(blue.faces) == 12
+    # Metres -> mm, Y-up -> Z-up: the stack is 20 mm tall in Z; glTF's depth (its Z) becomes Y.
+    v = np.vstack([p.vertices for p in obj.parts])
+    assert np.allclose(v.max(axis=0) - v.min(axis=0), [50, 20, 20], atol=1e-4)   # glTF stores float32
+    assert np.isclose(blue.vertices[:, 2].min(), 10, atol=1e-4) and np.isclose(blue.vertices[:, 2].max(), 20, atol=1e-4)
+    for p in obj.parts:                                     # seams merged, normals outward (mirror too)
+        m = p.mesh()
+        assert m.is_watertight and m.volume > 0
+    assert len(blue.vertices) == 8
+
+
+def test_glb_in_mm_keeps_units(tmp_path: Path) -> None:
+    s = trimesh.Scene(trimesh.creation.box([40, 30, 20]))   # > 10 units: not metres
+    f = tmp_path / "big.glb"
+    f.write_bytes(s.export(file_type="glb"))
+    v = read_project(f).default_object().parts[0].vertices
+    assert np.allclose(v.max(axis=0) - v.min(axis=0), [40, 20, 30])
+
+
+def test_glb_unreadable(tmp_path: Path) -> None:
+    f = tmp_path / "broken.glb"
+    f.write_bytes(b"glTF\x02\x00\x00\x00junk")
+    with pytest.raises(ValueError, match="export a plain .glb"):
+        read_project(f)
+
+
 def test_fast_parser_handles_bambu_layout(tmp_path: Path) -> None:
     """The regex path must accept what Bambu writes (it once never did: the
     "<triangles>" tag was counted as a triangle, so every file fell back to lxml)."""

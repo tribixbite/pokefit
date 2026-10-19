@@ -1,4 +1,4 @@
-"""Read and write 3MF projects (Bambu Studio flavour) and plain STL/OBJ meshes.
+"""Read and write 3MF projects (Bambu Studio flavour); also read glTF/GLB scenes and plain STL/OBJ meshes.
 
 Reading keeps what a print-ready output needs: per-object parts (Bambu
 "volumes") with names, extruder assignment and every extra per-triangle
@@ -214,9 +214,92 @@ def _model_settings(z: zipfile.ZipFile) -> dict[str, dict]:
     return out
 
 
+GLTF_SUFFIXES = (".glb", ".gltf")
+GLTF_MAX_COLOURS = 16                   # an AMS setup's filament count; rarer colours join the nearest
+
+
+def _visual_colour(visual: object) -> tuple[int, int, int]:
+    """One sRGB colour for a glTF primitive: its material's base colour (a texture's
+    average when the factor is unset), or the mean of its vertex colours."""
+    mat = getattr(visual, "material", None)
+    if mat is not None:
+        try:
+            c = np.asarray(mat.main_color)          # PBR: baseColorFactor, else the texture's mean
+            return int(c[0]), int(c[1]), int(c[2])
+        except Exception:                           # a material without colour or texture
+            pass
+    vc = getattr(visual, "vertex_colors", None)
+    if vc is not None and len(vc):
+        c = np.asarray(vc, np.float64)[:, :3].mean(axis=0)
+        return int(c[0]), int(c[1]), int(c[2])
+    return 0xE0, 0x50, 0x28                          # DEFAULT_COLOURS[0]
+
+
+def _read_gltf(path: Path) -> Project:
+    """A glTF/GLB scene as one figure: every mesh node baked into place, grouped into one part
+    per material colour (so a coloured model keeps its colours as filament assignments).
+
+    glTF is Y-up and in metres; prints are Z-up in mm. The axes are turned (+90° about X), and
+    a scene no larger than 10 units is taken as metres (x1000). Many exporters ignore the
+    metre convention (LEGO exports are in mm-ish units), so a larger scene keeps its units;
+    the fit rescales the figure either way.
+    """
+    try:
+        scene = trimesh.load(path, force="scene", process=False)
+    except Exception as e:                          # Draco/meshopt compression, external buffers, ...
+        raise ValueError(f"{path.name}: cannot read this glTF ({e}). Draco- or meshopt-compressed files "
+                         "and .gltf files with separate .bin/texture files are not supported; "
+                         "export a plain .glb.") from e
+    assert isinstance(scene, trimesh.Scene)        # force="scene" always returns one
+    meshes: list[tuple[tuple[int, int, int], np.ndarray, np.ndarray]] = []
+    for node in scene.graph.nodes_geometry:
+        xf, gname = scene.graph[node]
+        g = scene.geometry.get(gname)
+        if not isinstance(g, trimesh.Trimesh) or not len(g.faces):
+            continue                                # points, lines, empty primitives
+        v = np.asarray(g.vertices, np.float64) @ xf[:3, :3].T + xf[:3, 3]
+        f = np.asarray(g.faces, np.int64)
+        if np.linalg.det(xf[:3, :3]) < 0:           # mirrored node: keep normals outward
+            f = f[:, ::-1]
+        meshes.append((_visual_colour(g.visual), v, f))
+    if not meshes:
+        raise ValueError(f"{path.name}: no triangle meshes in this glTF")
+
+    # Palette by triangle count; past GLTF_MAX_COLOURS, a colour joins its nearest kept colour.
+    counts: dict[tuple[int, int, int], int] = {}
+    for c, _, f in meshes:
+        counts[c] = counts.get(c, 0) + len(f)
+    palette = sorted(counts, key=counts.__getitem__, reverse=True)
+    kept = np.array(palette[:GLTF_MAX_COLOURS], np.float64)
+    slot = {c: int(np.argmin(((kept - c) ** 2).sum(axis=1))) for c in palette}
+
+    y_up = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], np.float64)  # Y-up -> Z-up
+    lo = np.min([v.min(axis=0) for _, v, _ in meshes], axis=0)
+    hi = np.max([v.max(axis=0) for _, v, _ in meshes], axis=0)
+    unit = 1000.0 if float((hi - lo).max()) <= 10.0 else 1.0
+    xf = y_up @ np.diag([unit, unit, unit, 1.0])
+
+    parts: list[Part] = []
+    colours = ["#{:02X}{:02X}{:02X}".format(*c) for c in palette[:GLTF_MAX_COLOURS]]
+    for k in range(len(kept)):
+        group = [(v, f) for c, v, f in meshes if slot[c] == k]
+        offsets = np.cumsum([0] + [len(v) for v, _ in group[:-1]])
+        m = trimesh.Trimesh(np.vstack([v for v, _ in group]),
+                            np.vstack([f + o for (_, f), o in zip(group, offsets)]), process=False)
+        m.merge_vertices()                          # glTF splits vertices at UV and normal seams
+        name = path.stem if len(kept) == 1 else f"{path.stem} {colours[k]}"
+        parts.append(Part(name, k + 1, np.asarray(m.vertices, np.float64),
+                          np.asarray(m.faces, np.int64)).transformed(xf))
+    obj = FigureObject("1", path.stem, 1, parts, np.eye(4))
+    return Project(path, "mesh", [obj], colours, None)
+
+
 def read_project(path: str | Path) -> Project:
-    """Load a 3MF project or an STL/OBJ mesh (one object, one part)."""
+    """Load a 3MF project, a glTF/GLB scene (one object, a part per colour) or an
+    STL/OBJ mesh (one object, one part)."""
     path = Path(path)
+    if path.suffix.lower() in GLTF_SUFFIXES:
+        return _read_gltf(path)
     if path.suffix.lower() != ".3mf":
         m = trimesh.load(path, force="mesh", process=False)
         assert isinstance(m, trimesh.Trimesh)

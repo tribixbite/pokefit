@@ -9,7 +9,7 @@
   <!-- The UI is dark already; stop the Dark Reader extension from re-tinting it. -->
   <meta name="darkreader-lock" />
   <title>pokefit — fit any 3D-printed figure inside a Pokéball, with magnets</title>
-  <meta name="description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta name="description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <link rel="canonical" href="https://pokefit.party/" />
   <meta name="robots" content="index, follow, max-image-preview:large" />
   <meta name="theme-color" content="#0d1117" />
@@ -20,7 +20,7 @@
   <meta property="og:site_name" content="pokefit" />
   <meta property="og:url" content="https://pokefit.party/" />
   <meta property="og:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
-  <meta property="og:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta property="og:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <meta property="og:image" content="https://pokefit.party/og.gif" />
   <meta property="og:image:type" content="image/gif" />
   <meta property="og:image:width" content="1200" />
@@ -28,7 +28,7 @@
   <meta property="og:image:alt" content="An open Pokéball with a small green figure standing on a steel washer inside, next to the pokefit title." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
-  <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <meta name="twitter:image" content="https://pokefit.party/og.gif" />
   <meta name="twitter:image:alt" content="An open Pokéball with a small green figure inside, next to the pokefit title." />
   <link rel="manifest" href="site.webmanifest" />
@@ -45,7 +45,7 @@
         "name": "pokefit",
         "url": "https://pokefit.party/",
         "image": "https://pokefit.party/og.jpg",
-        "description": "Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser.",
+        "description": "Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser.",
         "applicationCategory": "DesignApplication",
         "operatingSystem": "Any (web browser); Windows/macOS/Linux for the local version",
         "browserRequirements": "Requires JavaScript and WebAssembly",
@@ -91,7 +91,7 @@
     <span id="engineChip" class="engine-chip" hidden></span>
     <button id="aboutBtn" class="btn" aria-controls="about" aria-expanded="false">About</button>
     <label class="btn primary" for="fileInput">Open figure</label>
-    <input id="fileInput" type="file" accept=".3mf,.stl,.obj" hidden />
+    <input id="fileInput" type="file" accept=".3mf,.stl,.obj,.glb,.gltf" hidden />
   </header>
 
   <main class="layout">
@@ -309,7 +309,7 @@
         the ball, checks that it will print, and exports a ready-to-slice Bambu Studio 3MF with its painted colours.</p>
       <h2>How to use it</h2>
       <ol>
-        <li><b>Open a figure</b> — drop a .3mf, .stl or .obj on the page. Files with several figures get a picker.</li>
+        <li><b>Open a figure</b> — drop a .3mf, .stl, .obj or .glb on the page. Files with several figures get a picker; a .glb keeps its material colours as filaments.</li>
         <li><b>Pick the ball</b> — the 60 % or 100 % ball, or type the inner diameter of yours. Set the clearance to the walls.</li>
         <li><b>Pick the washer</b> — plain or zinc-plated steel (stainless is not magnetic). <i>Compare washers</i> shows which allows the largest figure.</li>
         <li><b>Magnets</b> — 1, 2 or 3 pockets for 4 × 2 mm disc magnets are placed automatically; drag them in the underside view.

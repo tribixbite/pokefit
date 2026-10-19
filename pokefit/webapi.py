@@ -55,7 +55,7 @@ def config() -> str:
 
 
 def load(name: str, data: Any) -> str:
-    """Open an uploaded .3mf / .stl / .obj (bytes) and analyse it with default settings."""
+    """Open an uploaded .3mf / .stl / .obj / .glb (bytes) and analyse it with default settings."""
     folder = WORK / uuid.uuid4().hex[:8]
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / Path(name).name
