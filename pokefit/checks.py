@@ -10,7 +10,7 @@ import numpy as np
 import trimesh
 
 from .model3mf import Part
-from .planar import regions
+from .planar import layer_regions, regions
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
 
@@ -251,13 +251,11 @@ def islands_check(m: trimesh.Trimesh, layer: float = 0.2) -> Check:
     """Layer regions with nothing below them (start in mid-air): these always need support."""
     zmax = m.bounds[1][2]
     heights = np.arange(layer / 2, zmax, layer)
-    sections = m.section_multiplane(plane_origin=[0, 0, 0], plane_normal=[0, 0, 1], heights=list(heights))
     from shapely.ops import unary_union
 
     prev = None
     found: list[list[float]] = []
-    for z, sec in zip(heights, sections):
-        polys = regions(sec) if sec is not None else []
+    for z, polys in zip(heights, layer_regions(m, list(heights))):
         cur = unary_union(polys) if polys else None
         if prev is not None and cur is not None:
             for p in polys:
