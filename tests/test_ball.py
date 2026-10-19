@@ -19,7 +19,12 @@ def ball():
 
 @needs_model
 def test_bundled_measurements_match_model(tmp_path: Path, ball) -> None:
-    assert load_ball(BALL, tmp_path) == ball
+    derived = load_ball(BALL, tmp_path)
+    # Same model (hash), same measurements to float rounding (numpy versions differ in the last digit).
+    assert derived.source_sha256 == ball.source_sha256
+    for name in ("r_inner", "r_outer", "ring_span", "aperture"):
+        assert getattr(derived, name) == pytest.approx(getattr(ball, name), rel=1e-9), name
+    assert np.allclose(derived.ring_h, ball.ring_h) and np.allclose(derived.ring_r, ball.ring_r)
 
 
 def test_ball_geometry(ball) -> None:

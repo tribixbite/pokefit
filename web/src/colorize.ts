@@ -123,13 +123,16 @@ export class ColorizePanel {
       $("texColAuto").setAttribute("aria-pressed", String(p.texture_colours === null));
       // What each palette size costs in filament changes (estimated); tap one to use it.
       const rows = this.host.report()?.toolchange?.by_count ?? [];
+      const pick = bestValueCount(rows);
       $("texCost").replaceChildren(...rows.map((r) => {
         const b = document.createElement("button");
         b.setAttribute("aria-current", String(r.count === n));
         b.title = `${r.count} filament${r.count === 1 ? "" : "s"}: about ${r.changes} filament changes, ` +
           `${formatDuration(r.minutes * 60)} and ${r.purge_g} g of purge on top of the print`;
         const extra = r.minutes > 0 ? ` · +${formatDuration(r.minutes * 60)}` : "";
-        b.innerHTML = `<b>${r.count}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}`;
+        b.innerHTML = `<b>${r.count}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}` +
+          (r.count === pick ? " ★" : "");
+        if (r.count === pick) b.title += ". ★ Best value: the next colour would add many more filament changes.";
         b.addEventListener("click", () => this.setTextureColours(r.count));
         return b;
       }));
@@ -264,4 +267,16 @@ export class ColorizePanel {
 function luminance(hex: string): number {
   const v = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
   return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+
+/** The palette size just before the biggest jump in filament changes (the knee of the cost curve),
+ * or null when no added colour costs at least MIN_JUMP more changes. */
+export function bestValueCount(rows: { count: number; changes: number }[], minJump = 50): number | null {
+  let best: number | null = null;
+  let jump = minJump - 1;
+  for (let i = 1; i < rows.length; i++) {
+    const d = rows[i].changes - rows[i - 1].changes;
+    if (d > jump) { jump = d; best = rows[i - 1].count; }
+  }
+  return best;
 }

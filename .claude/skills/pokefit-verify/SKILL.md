@@ -10,8 +10,9 @@ Work from the repo root. Stop and report at the first failure, with its output.
 ## 1. Gates (always)
 
 ```bash
-python -m mypy                                   # must print "Success"
-python -m pytest -q                              # all pass; note how many skipped (missing private files)
+# In the CI-mirroring venv (.venv, see AGENTS.md "Gates"): CI installs the latest numpy/Pillow.
+.venv/Scripts/python -m mypy                     # must print "Success"
+.venv/Scripts/python -m pytest -q                # all pass; note how many skipped (missing private files)
 cd web && bun run typecheck && bun test && bun run build && node scripts/engine-smoke.ts && cd ..
 ```
 `engine-smoke.ts` runs the engine in Pyodide under Node 24 and must end with "engine smoke test passed".

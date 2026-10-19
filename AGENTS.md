@@ -64,9 +64,12 @@ Files NOT in the repo (tests needing them skip; get them from the user if needed
 
 ## Gates (run all before committing; CI runs the same in `.github/workflows/deploy.yml`)
 
+Run Python gates in a venv with CI's (latest) dependency versions — CI installs `pip install -e ".[dev]"`
+fresh, and newer numpy/Pillow stubs have twice failed CI on code a stale global Python passed:
+`py -3.11 -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"` (git-ignored).
 ```bash
-python -m mypy                     # strict-ish, must be clean
-python -m pytest -q                # ~135 tests, ~100 s; real-file/Bambu tests skip without their files
+.venv/Scripts/python -m mypy       # strict-ish, must be clean
+.venv/Scripts/python -m pytest -q  # ~145 tests, ~100 s; real-file/Bambu tests skip without their files
 cd web && bun run typecheck && bun test && bun run build
 node scripts/engine-smoke.ts       # the whole engine under Pyodide in Node 24 (~25 s): load, analyse,
                                    # magnets, colorize, export, GLB flat + textured colour

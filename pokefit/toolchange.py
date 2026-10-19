@@ -112,7 +112,7 @@ def simulate(use: np.ndarray, nozzle_of: list[int], flush: np.ndarray, n_nozzles
     """Changes, nozzle switches and purge for one assignment (module doc, step 2).
 
     `flush[a, b]` is the purge volume (mm³) going from filament a to b (0-based)."""
-    used = use.any(axis=0)
+    used = np.asarray(use.any(axis=0), dtype=bool)
     per = [0] * n_nozzles
     purge = 0.0
     switches = 0

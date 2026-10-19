@@ -21,3 +21,6 @@ web/.wheel-cache/
 # The user's own photos and Bambu preset exports (personal; not for the public repo)
 imageto3d/
 printer_config/
+
+# Local venv that mirrors CI's dependency versions (see AGENTS.md "Gates")
+.venv/
