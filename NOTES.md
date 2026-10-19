@@ -5,17 +5,13 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **Check the live site after the GLB-colour deploy** (commit 415aeb5+): open a textured GLB on
-   https://pokefit.party (browser engine, ~15 s), move the Filaments slider, confirm no console errors.
-   Only the local server and the Pyodide smoke test were checked.
-2. **Phone-width check of the Colours card** (new Filaments row: label + slider + value + Auto) at ~390 px.
-3. **GLB palette quality** (`pokefit/gltf.py`): "auto" favours fidelity over purge (Squirtle: 7 colours =
+1. **GLB palette quality** (`pokefit/gltf.py`): "auto" favours fidelity over purge (Squirtle: 7 colours =
    233 changes / 129 g vs 4 = 127 / 74 g for a ~3 g figure). Ideas: show an estimated colour-change cost
    per count in the UI; weigh small clusters by how many layers they span; hue-aware merging (closest-first
    merges Squirtle's cream belly into blue at 3 colours).
-4. **Big GLB scenes are slow** (600k-triangle LEGO GLB: 82 s locally): profile `read_gltf` + mesh checks.
-5. GitHub Actions: checkout/setup-python/deploy-pages@v4 run on deprecated Node 20 — bump majors.
-6. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
+2. **Big GLB scenes are slow** (600k-triangle LEGO GLB: 82 s locally): profile `read_gltf` + mesh checks.
+3. GitHub Actions: checkout/setup-python/deploy-pages@v4 run on deprecated Node 20 — bump majors.
+4. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
    Cloudflare "Always Use HTTPS" (off; the page redirects itself).
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
@@ -139,6 +135,10 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   colours; Bambu CLI slice 60% ball: auto 7 = 233 changes / 129 g / 9.0 h, 4 colours = 127 / 74 g / 5.4 h
   (figure itself ~3 g; the rest is purge). Opens in ~15 s in the browser engine, ~5 s locally.
   Its base sits 1.7 mm above the washer except a tiny bed contact → "raised" magnet seat needed.
+  Verified live 2026-10-19 (browser engine): opens, slider re-cuts to 4, no console errors; Colours card fits
+  at 390 px. The browser's palette differs slightly from the local one (8,715 vs 8,481 painted triangles at
+  auto 7; colour 6 grey-green vs dark brown): Pyodide's scipy k-means lands differently with the same seed.
+  Each engine is self-consistent (export uses the same engine); make it deterministic only if users compare.
 - glTF not supported: Draco/meshopt compression, .gltf with external .bin/textures. `planar._xor`
   repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
 - (SketchUp, original machine) **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
