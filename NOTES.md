@@ -10,10 +10,10 @@ exist only on the original Windows machine (ask the user for the files).
    `.gcode.3mf` with the CLI's `--export-3mf`, `beambam print … --ams-mapping`) — blocked in beambam by the
    dual-nozzle `nozzle_mapping` print start (err 84033544); live view (`beambam camera` MJPEG on :8766) and
    AMS load/unload in a local "Printer" card. Ask before any action that changes the printer.
-2. **Palette quality** (`pokefit/gltf.py`): "auto" still favours fidelity over purge; the UI now shows each
-   count's cost (Colours card chips). Ideas left: make auto prefer ≤ 2 colours per nozzle when the figure
-   allows (2 colours on the X2D = no filament changes); hue-aware merging (closest-first merges the cream
-   belly into blue at 3).
+2. **Palette choice** (`pokefit/gltf.py`): a chosen count now merges by a softened Ward cost (3 colours keep
+   blue / cream / brown; black eyes come in at 4). "Auto" still picks by colour distance (7 for the
+   Squirtles) and the Colours card stars the best-value count; ask the user whether auto should default to
+   the starred count instead (it trades detail for hours of print time).
 3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head), and a single-photo result keeps the model's own colours (its camera is

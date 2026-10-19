@@ -47,6 +47,7 @@ LEAF_BUDGET = 1_500_000   # colour samples over the whole model (sets the split 
 MAX_DEPTH = 3             # at most 64 sub-triangles per triangle (Bambu's brush goes finer)
 OVER = 24                 # fine clusters
 MERGE_DE = 15.0           # auto: merge clusters closer than this (CIELAB, lightness x L_WEIGHT)
+WARD_BETA = 0.5           # area weight's exponent in the merge cost (TextureColours.groups)
 L_WEIGHT = 0.5            # shading changes lightness more than hue: count it half
 FIT_SAMPLES = 200_000     # samples the clustering is fitted on (area-weighted draw)
 SPECK_SHARE = 2e-4        # a one-colour patch under this share of the surface is a speck
@@ -187,9 +188,15 @@ class TextureColours:
         return len(self.groups(None))
 
     def groups(self, count: int | None) -> list[list[int]]:
-        """Fine clusters merged closest-first, largest group first: until `count` remain, or
-        (count None) until all are MERGE_DE apart and at most MAX_COLOURS remain. Exact flat
-        colours are only merged to meet a count or the cap."""
+        """Fine clusters merged into groups, largest group first.
+
+        Automatic (count None): near-duplicates (closer than MERGE_DE) merge closest-first, then, above
+        MAX_COLOURS, the cheapest pair by Ward's criterion. A chosen count merges by Ward's criterion
+        only: the pair whose merge adds the least area-weighted colour error, (wa·wb/(wa+wb))^β·d². So a
+        small colour joins its nearest neighbour before two large, clearly different colours (a cream
+        belly and a blue body) are merged — closest-first (β = 0) merged those at 3 colours; pure Ward
+        (β = 1) dropped small high-contrast details (black eyes) until 5+; β = WARD_BETA keeps both.
+        Exact flat colours are only merged to meet a count or the cap."""
         groups = [[i] for i in range(len(self.lab)) if self.weight[i] > 0]
         centres = [self.lab[g[0]] for g in groups]
         weights = [float(self.weight[g[0]]) for g in groups]
@@ -198,8 +205,13 @@ class TextureColours:
             d = np.linalg.norm(np.array(centres)[:, None] - np.array(centres)[None], axis=2)
             np.fill_diagonal(d, np.inf)
             a, b = np.unravel_index(int(np.argmin(d)), d.shape)
-            if len(groups) <= limit and (count is not None or self.exact or d[a, b] >= MERGE_DE):
+            near = count is None and not self.exact and d[a, b] < MERGE_DE
+            if len(groups) <= limit and not near:
                 break
+            if not near:                                    # over the limit: the cheapest merge (Ward)
+                w = np.array(weights)
+                ward = ((w[:, None] * w[None]) / (w[:, None] + w[None])) ** WARD_BETA * d ** 2
+                a, b = np.unravel_index(int(np.argmin(ward)), ward.shape)
             wa, wb = weights[a], weights[b]
             centres[a] = (centres[a] * wa + centres[b] * wb) / (wa + wb)
             weights[a] = wa + wb

@@ -188,3 +188,18 @@ def test_vertex_colours_under_a_pbr_material_are_linear(tmp_path: Path) -> None:
     # linear 0.2 -> sRGB 124, 0.9 -> 243, 0.05 -> 63 (not 51 / 230 / 13 as plain 8-bit would give)
     assert any(abs(r - 124) < 8 and abs(b - 243) < 8 for r, _, b in srgb), srgb
     assert any(abs(r - 243) < 8 and abs(g - 63) < 10 for r, g, _ in srgb), srgb
+
+
+def test_small_palettes_keep_large_distinct_colours() -> None:
+    """Merging for a chosen count weighs area (Ward-like): a large cream belly survives at 3 colours
+    while a tiny dark detail merges; closest-first merged the belly into the blue body."""
+    from pokefit.gltf import TextureColours, _lab
+    rgb = np.array([[140, 200, 215], [150, 205, 220], [200, 190, 160], [165, 100, 65], [30, 30, 25]], float)
+    weight = np.array([0.40, 0.10, 0.25, 0.23, 0.02])
+    tex = TextureColours(np.zeros((1, 1), np.intp), _lab(rgb), rgb, weight, np.ones(1), np.zeros((0, 2), np.intp), False)
+    three = [sorted(g) for g in tex.groups(3)]
+    assert [0, 1] in three                            # the two blues merge
+    assert not any(2 in g and (0 in g or 1 in g) for g in three)   # cream never joins the blue body
+    assert any(4 in g and len(g) > 1 for g in three)  # the tiny dark joins a neighbour
+    four = [sorted(g) for g in tex.groups(4)]
+    assert [4] in four                                # at 4 the dark detail gets its own filament
