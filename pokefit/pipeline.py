@@ -32,7 +32,8 @@ from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, plate_size, read_project, remesh_part, world_parts,
                        write_project)
-from .paint import decode_majority
+from .gltf import MAX_PICK
+from .paint import decode_majority, leaves, parse_tree
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
 from .shell import flat_spot, from_manifold, to_manifold
@@ -85,6 +86,9 @@ class Params:
     # (colorize.PaintOp dicts, applied in order).
     colours: list[str] | None = None
     paint: list[dict[str, Any]] | None = None
+    # glTF colour (texture, vertex colours, materials): how many filaments to reduce it to
+    # (None = automatic, see gltf.py). Ignored for other files.
+    texture_colours: int | None = None
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -100,6 +104,10 @@ class Params:
                 raise ValueError("at most 32 colours")
         for d in self.paint or []:
             PaintOp.from_dict(d)          # raises ValueError on a malformed operation
+        if self.texture_colours is not None:
+            self.texture_colours = int(self.texture_colours)
+            if not 1 <= self.texture_colours <= MAX_PICK:
+                raise ValueError(f"texture_colours must be 1..{MAX_PICK}")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -132,6 +140,7 @@ class Session:
     _topo: dict[str, TopologyCache] = field(default_factory=dict)       # object id -> colorize topology
     _painted: dict[tuple, list[Part]] = field(default_factory=dict)     # (orientation, paint) -> parts
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
+    _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -165,8 +174,28 @@ class Session:
         return self._frames[key]
 
     def colours(self, params: Params) -> list[str]:
-        """Filament colours (index 0 = filament 1): the user's palette, else the file's."""
-        return list(params.colours) if params.colours else list(self.project.colours)
+        """Filament colours (index 0 = filament 1): the user's palette, else the file's (for a
+        glTF, the palette of the chosen colour count)."""
+        if params.colours:
+            return list(params.colours)
+        if self.project.texture is not None and params.texture_colours is not None:
+            return list(self.project.texture.paint(params.texture_colours)[0])
+        return list(self.project.colours)
+
+    def textured_parts(self, params: Params) -> list[Part]:
+        """`unit_parts` with a glTF's colour reduced to `params.texture_colours` filaments
+        (the file loads with the automatic count; geometry and face order are identical)."""
+        parts = self.unit_parts(params)
+        if self.project.texture is None or params.texture_colours is None:
+            return parts
+        key = (self._key(params), params.texture_colours)
+        if key not in self._textured:
+            if len(self._textured) > 8:
+                self._textured.clear()
+            _, extra, base = self.project.texture.paint(params.texture_colours)
+            p0 = parts[0]
+            self._textured[key] = [Part(p0.name, base, p0.vertices, p0.faces, dict(extra), p0.subtype), *parts[1:]]
+        return self._textured[key]
 
     def topology(self, params: Params) -> TopologyCache:
         obj = self.obj(params)
@@ -176,11 +205,12 @@ class Session:
         return self._topo[obj.id]
 
     def figure_parts(self, params: Params) -> list[Part]:
-        """`unit_parts` with the colorize paint applied (geometry identical)."""
-        parts = self.unit_parts(params)
+        """`unit_parts` with the file's colour (glTF: at the chosen count) and the colorize paint
+        applied (geometry identical)."""
+        parts = self.textured_parts(params)
         if not params.paint:
             return parts
-        key = (self._key(params), json.dumps(params.paint, sort_keys=True))
+        key = (self._key(params), params.texture_colours, json.dumps(params.paint, sort_keys=True))
         if key not in self._painted:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
                 self._painted.clear()
@@ -205,9 +235,9 @@ class Session:
         if not self.reference:
             return []
         obj = self.obj(params)
-        ukey = f"{obj.id}:{json.dumps(params.paint, sort_keys=True)}" if params.paint else obj.id
+        ukey = f"{obj.id}:{params.texture_colours}:{json.dumps(params.paint, sort_keys=True)}"
         if ukey not in self._used:
-            parts = self.figure_parts(params) if params.paint else obj.parts
+            parts = self.figure_parts(params)
             self._used[ukey] = used_filaments(parts, obj.extruder)
         manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
         return match_slots(self._used[ukey], self.colours(params),
@@ -684,6 +714,10 @@ def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, 
             "parts": [{"name": p.name, "extruder": p.extruder or obj.extruder, "faces": len(p.faces),
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
+            # glTF colour: the automatic filament count and the count in use (None for other files).
+            "texture_colours": None if session.project.texture is None else {
+                "auto": session.project.texture.auto_count,
+                "count": params.texture_colours or session.project.texture.auto_count, "max": MAX_PICK},
             "objects": [{"id": o.id, "name": o.name, "faces": o.face_count} for o in session.project.objects]}
 
 
@@ -713,6 +747,35 @@ def face_colours(part: Part, colours: list[str], default_extruder: int) -> np.nd
             if st > 0:
                 ext[i] = st
     return ext
+
+
+def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(vertices, faces, extruder per face) with split paint drawn as its sub-triangles, so the
+    preview shows brush strokes and texture-derived colour edges as the slicer will print them."""
+    ext = face_colours(part, [], default_extruder)
+    split = [i for i, a in part.tri_extra.items() if "paint_color=" in a and not _whole_paint(a)]
+    if not split:
+        return part.vertices, part.faces, ext
+    base = part.extruder or default_extruder
+    keep = np.ones(len(part.faces), bool)
+    keep[split] = False
+    verts, faces, exts = [part.vertices], [part.faces[keep]], [ext[keep]]
+    n = len(part.vertices)
+    for i in split:
+        code = part.tri_extra[i].split('paint_color="', 1)[1].split('"', 1)[0]
+        corners = list(part.vertices[part.faces[i]])
+        for tri, st in leaves(parse_tree(code), corners):
+            verts.append(np.array(tri))
+            faces.append(np.array([[n, n + 1, n + 2]]))
+            exts.append(np.array([st or base]))
+            n += 3
+    return np.vstack(verts), np.vstack(faces), np.concatenate(exts)
+
+
+def _whole_paint(attrs: str) -> bool:
+    """A paint_color that is one state for the whole triangle (no split)."""
+    code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
+    return isinstance(parse_tree(code), int)
 
 
 def clip_overlaps(parts: list[Part]) -> list[Part]:
@@ -764,10 +827,11 @@ def preview_glb(session: Session, params: Params, regions: tuple[str, float] | N
             lab = session.topology(params).labels(pi, mode, regions[1])
             ext = lab + 1
             palette = region_colours(int(lab.max()) + 1 if len(lab) else 0)
+            pv, pf = part.vertices, part.faces
         else:
-            ext = face_colours(part, cols, obj.extruder)
+            pv, pf, ext = painted_mesh(part, obj.extruder)
         for e in np.unique(ext):
-            sub = trimesh.Trimesh(part.vertices, part.faces[ext == e], process=False)
+            sub = trimesh.Trimesh(pv, pf[ext == e], process=False)
             sub.remove_unreferenced_vertices()
             if regions:
                 rgba = [int(c) for c in palette[int(e) - 1]] + [255]

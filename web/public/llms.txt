@@ -19,7 +19,10 @@
   pocket must be in the figure). A "raised" option moves pockets up into such parts instead (hidden magnet, weaker
   hold), up to 2 mm above the washer. Nothing goes below the plane the figure stands on.
 - GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
-  kept as mm). One part per material colour, so a coloured model opens with its colours as filaments (16 at most).
+  kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
+  materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament
+  colours (shading ignored, automatic count up to 8, or a chosen 1–16), cleared of specks, and written as split
+  Bambu paint on one solid part, so it slices multi-colour with crisp edges. Fewer filaments = less purge waste.
 - Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result

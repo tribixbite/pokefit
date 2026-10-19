@@ -115,12 +115,20 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   drag-in import was not automated (CLI slice of the import file verified: 1h05, 10.7 g);
   analysis ~6–10 s per change on a 350k-face figure (islands section ~2.4 s, mesh checks
   4.4 s once per file).
-- GLB/glTF input (`model3mf._read_gltf`): one part per material colour (≤ 16, rest merged to nearest);
-  Y-up → Z-up; ≤ 10 units taken as metres (×1000). Not supported: Draco/meshopt compression, .gltf with
-  external .bin/textures, per-texel or per-vertex colour detail (a textured primitive gets its texture's
-  average colour; vertex colours their mean). Game assets are usually not watertight → checks fail as with
-  any open STL. Big scenes are slow: a 600k-triangle LEGO GLB (Downloads/41714-1-dbix_conv_v3.glb) took 82 s
-  to open locally. `planar._xor` repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
+- GLB/glTF colour (`pokefit/gltf.py`, doc at top): one part, colour as split Bambu paint (`paint.encode_tree`,
+  child geometry/order from BambuStudio `TriangleSelector::perform_split`/`serialize`). `Params.texture_colours`
+  (UI "Filaments" slider, CLI `--colours N`) re-cuts the palette (~0.3 s; drops user paint). Split paint now
+  survives re-meshing and mirrors (`paint.remap_tree`; a mirrored 2-side split's quad collapses to its larger
+  state) and shows in the preview (`pipeline.painted_mesh`). Squirtle test file (Manex3D AI GLB, colour in the
+  emissive texture; copy in scratchpad `manex/manex.glb`, not committed): 19.8k tris, depth-3 samples, auto 7
+  colours; Bambu CLI slice 60% ball: auto 7 = 233 changes / 129 g / 9.0 h, 4 colours = 127 / 74 g / 5.4 h
+  (figure itself ~3 g; the rest is purge). Opens in ~15 s in the browser engine, ~5 s locally.
+  Open: auto count favours fidelity over purge (could weigh area vs. change cost); the 3-colour cut merges
+  cream into blue (closest-first merge) — a hue-aware merge might pick better small palettes. Its base sits
+  1.7 mm above the washer except a tiny bed contact → "raised" magnet seat needed.
+- Big glTF scenes are slow: a 600k-triangle LEGO GLB (Downloads/41714-1-dbix_conv_v3.glb) took 82 s to open
+  locally. Not supported: Draco/meshopt compression, .gltf with external .bin/textures. `planar._xor`
+  repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
 - **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
   `%APPDATA%\SketchUp\SketchUp 2017\SketchUp\Plugins\tt_cleanup`, but TT_Lib² is not
   installed. Not on GitHub (`thomthom/tt-lib` is the different tt-lib³; `thomthom/cleanup`

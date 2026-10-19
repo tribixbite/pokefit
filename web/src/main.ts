@@ -29,7 +29,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    filament_map: null, colours: null, paint: null,
+    filament_map: null, colours: null, paint: null, texture_colours: null,
   },
   report: null,
   focus: null,
@@ -171,7 +171,7 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
     state.session = res.session;
     colorize.reset();
     state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-      object_id: null, filament_map: null, colours: null, paint: null };
+      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();

@@ -8,6 +8,7 @@ import trimesh
 
 from conftest import REAL_DRAGON, write_inline_3mf
 from pokefit.model3mf import Part, read_project, remesh_part, world_parts, write_project
+from pokefit.paint import encode_tree, leaves, parse_tree
 
 
 def _rot_scale(deg: float, s: float, t: tuple[float, float, float]) -> np.ndarray:
@@ -103,56 +104,31 @@ def test_stl_is_merged(tmp_path: Path) -> None:
     assert len(part.vertices) == 8
 
 
-def _glb_scene() -> trimesh.Scene:
-    """A glTF-style scene in metres, Y-up: a red PBR box (2 nodes, one mirrored) and a blue
-    vertex-coloured box on top of it."""
-    red = trimesh.creation.box([0.02, 0.01, 0.02])
-    red.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
-        baseColorFactor=[200, 20, 20, 255]))
-    blue = trimesh.creation.box([0.01, 0.01, 0.01])
-    blue.visual = trimesh.visual.ColorVisuals(blue, face_colors=[20, 20, 200, 255])
-    s = trimesh.Scene()
-    s.add_geometry(red, node_name="red", transform=trimesh.transformations.translation_matrix([0, 0.005, 0]))
-    mirror = np.diag([-1.0, 1.0, 1.0, 1.0])
-    mirror[:3, 3] = [0.03, 0.005, 0]
-    s.add_geometry(red.copy(), node_name="red_mirrored", transform=mirror)
-    s.add_geometry(blue, node_name="blue", transform=trimesh.transformations.translation_matrix([0, 0.015, 0]))
-    return s
+def _paint_areas(part: Part) -> set[tuple[frozenset, int]]:
+    """Every painted leaf of every triangle as (corner positions, state): independent of corner order."""
+    out = set()
+    for i, attrs in part.tri_extra.items():
+        code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
+        corners = [part.vertices[j] for j in part.faces[i]]
+        for v, st in leaves(parse_tree(code), corners):
+            out.add((frozenset(tuple(np.round(c, 6)) for c in v), st))
+    return out
 
 
-def test_glb_parts_per_colour(tmp_path: Path) -> None:
-    f = tmp_path / "toy.glb"
-    f.write_bytes(_glb_scene().export(file_type="glb"))
-    proj = read_project(f)
-    obj = proj.default_object()
-    assert proj.kind == "mesh" and len(proj.objects) == 1
-    assert proj.colours == ["#C81414", "#1414C8"]          # by triangle count: 2 red boxes, 1 blue
-    red, blue = obj.parts
-    assert (red.extruder, blue.extruder) == (1, 2)
-    assert len(red.faces) == 24 and len(blue.faces) == 12
-    # Metres -> mm, Y-up -> Z-up: the stack is 20 mm tall in Z; glTF's depth (its Z) becomes Y.
-    v = np.vstack([p.vertices for p in obj.parts])
-    assert np.allclose(v.max(axis=0) - v.min(axis=0), [50, 20, 20], atol=1e-4)   # glTF stores float32
-    assert np.isclose(blue.vertices[:, 2].min(), 10, atol=1e-4) and np.isclose(blue.vertices[:, 2].max(), 20, atol=1e-4)
-    for p in obj.parts:                                     # seams merged, normals outward (mirror too)
-        m = p.mesh()
-        assert m.is_watertight and m.volume > 0
-    assert len(blue.vertices) == 8
-
-
-def test_glb_in_mm_keeps_units(tmp_path: Path) -> None:
-    s = trimesh.Scene(trimesh.creation.box([40, 30, 20]))   # > 10 units: not metres
-    f = tmp_path / "big.glb"
-    f.write_bytes(s.export(file_type="glb"))
-    v = read_project(f).default_object().parts[0].vertices
-    assert np.allclose(v.max(axis=0) - v.min(axis=0), [40, 20, 30])
-
-
-def test_glb_unreadable(tmp_path: Path) -> None:
-    f = tmp_path / "broken.glb"
-    f.write_bytes(b"glTF\x02\x00\x00\x00junk")
-    with pytest.raises(ValueError, match="export a plain .glb"):
-        read_project(f)
+def test_split_paint_follows_corner_order() -> None:
+    # One triangle with a 3-way split whose children differ, plus a 1-way split one.
+    v = np.array([[0, 0, 0], [8, 0, 0], [0, 8, 0], [8, 8, 0]], float)
+    f = np.array([[0, 1, 2], [1, 3, 2]])
+    painted = Part("p", 1, v, f, {0: f'paint_color="{encode_tree((3, 0, [1, 2, 3, 4]))}"',
+                                  1: f'paint_color="{encode_tree((1, 1, [2, (3, 0, [1, 1, 4, 3])]))}"'})
+    before = _paint_areas(painted)
+    rolled = trimesh.Trimesh(v, np.array([[1, 2, 0], [2, 1, 3]]), process=False)   # same triangles, rotated
+    assert _paint_areas(remesh_part(painted, rolled)) == before
+    mirror = np.diag([-1.0, 1, 1, 1])
+    back = painted.transformed(mirror).transformed(mirror)        # each mirror reverses the corners
+    assert _paint_areas(painted.transformed(mirror)) == {(frozenset((-x, y, z) for x, y, z in c), s)
+                                                         for c, s in before}
+    assert _paint_areas(back) == before
 
 
 def test_fast_parser_handles_bambu_layout(tmp_path: Path) -> None:

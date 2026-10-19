@@ -83,10 +83,11 @@ const [resJson, files] = api.run_export(loaded.session, params).toJs({ create_pr
 const res = JSON.parse(resJson);
 console.log(`[${secs()} s] preview ${bytes.length} B; export ${files.map(([n, b]) => `${n} (${b.length} B)`).join(", ")}`);
 
-// GLB: the critter as a glTF scene (Y-up, metres) with red legs and a blue body; it must open
-// as one figure with a part per colour, in mm.
+// GLB: the critter as a glTF scene (Y-up, metres) with red legs and a (larger, so first) blue body,
+// and a sphere textured red/blue: both open as one part with their colours painted on, in mm.
 pyodide.runPython(`
-import trimesh
+import numpy as np, trimesh
+from PIL import Image
 from trimesh.visual.material import PBRMaterial
 def box(size, at, rgb):
     m = trimesh.creation.box([s / 1000 for s in size]).apply_translation([a / 1000 for a in at])
@@ -98,14 +99,29 @@ for i, m in enumerate([box([9, 9, 12], [x * 8.5, 0, 6], (200, 20, 20)) for x in 
                       [box([26, 9, 18], [0, 0, 20.99], (20, 20, 200))]):
     s.add_geometry(m.apply_transform(y_up), node_name=f"n{i}")
 open("/tmp/critter.glb", "wb").write(s.export(file_type="glb"))
+ball = trimesh.creation.icosphere(subdivisions=3, radius=0.02)
+n = ball.vertices / np.linalg.norm(ball.vertices, axis=1, keepdims=True)
+img = np.zeros((64, 64, 3), np.uint8); img[:, :32] = (220, 30, 30); img[:, 32:] = (30, 30, 220)
+ball.visual = trimesh.visual.TextureVisuals(uv=np.stack([0.5 + 0.5 * n[:, 0], 0.5 + 0.5 * n[:, 1]], 1),
+                                            material=PBRMaterial(baseColorTexture=Image.fromarray(img)))
+open("/tmp/ball.glb", "wb").write(trimesh.Scene(ball).export(file_type="glb"))
 `);
 const glbLoaded = JSON.parse(api.load("critter.glb", pyodide.FS.readFile("/tmp/critter.glb")));
 const glbObj = glbLoaded.report.object;
-console.log(`[${secs()} s] GLB: ${glbObj.parts.length} parts, colours ${glbObj.colours.join(" ")}, ` +
-  `${glbLoaded.report.fit.height_mm.toFixed(1)} mm at ${(glbLoaded.report.fit.scale * 100).toFixed(1)} %`);
+const ballLoaded = JSON.parse(api.load("ball.glb", pyodide.FS.readFile("/tmp/ball.glb")));
+const ballObj = ballLoaded.report.object;
+console.log(`[${secs()} s] GLB: ${glbObj.parts.length} part, colours ${glbObj.colours.join(" ")}, ` +
+  `${glbObj.parts[0].painted} faces painted, ${glbLoaded.report.fit.height_mm.toFixed(1)} mm at ` +
+  `${(glbLoaded.report.fit.scale * 100).toFixed(1)} %; textured: ${ballObj.colours.join(" ")}, ` +
+  `${ballObj.parts[0].painted} painted, texture_colours ${JSON.stringify(ballObj.texture_colours)}`);
 
 const problems: string[] = [];
-if (glbObj.parts.length !== 2 || glbObj.colours.join() !== "#C81414,#1414C8") problems.push("GLB colour parts");
+if (glbObj.parts.length !== 1 || glbObj.colours.join() !== "#1414C8,#C81414" || glbObj.parts[0].painted < 12) {
+  problems.push("GLB colours");
+}
+if (ballObj.colours.length !== 2 || !(ballObj.parts[0].painted > 0) || ballObj.texture_colours?.auto !== 2) {
+  problems.push("GLB texture colours");
+}
 if (Math.abs(glbLoaded.report.fit.scale - rep.fit.scale) > 0.01) problems.push("GLB scale differs from the STL's");
 if (!(rep.fit.scale > 0)) problems.push("figure does not fit");
 if (side.faces !== 2) problems.push(`region pick: expected 2 faces (one box side), got ${side.faces}`);

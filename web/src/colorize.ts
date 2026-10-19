@@ -65,6 +65,30 @@ export class ColorizePanel {
       this.render();
     });
     $<HTMLInputElement>("paintColour").addEventListener("change", () => { this.host.changed(); void this.reload(); });
+    const tex = $<HTMLInputElement>("texCol");
+    tex.addEventListener("input", () => { $("texColVal").textContent = String(tex.value); });
+    tex.addEventListener("change", () => this.setTextureColours(+tex.value));
+    $("texColAuto").addEventListener("click", () => this.setTextureColours(null));
+  }
+
+  /**
+   * Re-cut a GLB's own colours to `n` filaments (null = automatic). The palette and the
+   * filament numbers change, so the user's palette edits and paint steps are dropped.
+   */
+  private setTextureColours(n: number | null): void {
+    const p = this.host.params();
+    const auto = this.host.report()?.object.texture_colours?.auto;
+    const next = n === auto ? null : n;
+    if (next === p.texture_colours) { this.render(); return; }
+    if (p.paint?.length) this.host.toast("Paint steps cleared: the filaments were re-cut from the file's colours.");
+    p.texture_colours = next;
+    p.colours = null;
+    p.paint = null;
+    this.filament = 1;
+    this.host.changed();
+    void this.reload();
+    this.host.settled();
+    this.render();
   }
 
   /** The palette in use: the user's, else the file's. */
@@ -78,6 +102,7 @@ export class ColorizePanel {
     const p = this.host.params();
     p.paint = null;
     p.colours = null;
+    p.texture_colours = null;
     this.filament = 1;
     this.regions = false;
     this.setPainting(false);
@@ -86,6 +111,16 @@ export class ColorizePanel {
   render(): void {
     const p = this.host.params();
     const cols = this.colours();
+    const tex = this.host.report()?.object.texture_colours ?? null;
+    $("texColBox").hidden = !tex;
+    if (tex) {
+      const n = p.texture_colours ?? tex.auto;
+      const slider = $<HTMLInputElement>("texCol");
+      slider.max = String(tex.max);
+      slider.value = String(n);
+      $("texColVal").textContent = p.texture_colours === null ? `${n} (auto)` : String(n);
+      $("texColAuto").setAttribute("aria-pressed", String(p.texture_colours === null));
+    }
     if (this.filament > cols.length) this.filament = 1;
     const pal = $("palette");
     pal.replaceChildren(...cols.map((c, i) => this.swatch(i + 1, c)), this.swatch(0, ""), this.addButton());

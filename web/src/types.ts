@@ -43,6 +43,8 @@ export interface Params {
   colours: string[] | null;
   /** Colorize paint operations, applied in order. */
   paint: PaintOp[] | null;
+  /** GLB/glTF colour (texture, vertex colours): filaments to reduce it to; null = automatic. */
+  texture_colours: number | null;
   object_id: string | null;
   slot: number | null;
   settings_source: "reference" | "original";
@@ -96,6 +98,8 @@ export interface ObjectInfo {
   colours: string[];
   /** The file's own colours (before colorize changes). */
   file_colours: string[];
+  /** GLB/glTF colour: the automatic filament count, the count in use and the most allowed. */
+  texture_colours: { auto: number; count: number; max: number } | null;
   objects: { id: string; name: string; faces: number }[];
 }
 

@@ -33,7 +33,8 @@ def cmd_fit(a: argparse.Namespace) -> int:
 
     params = Params(ball_scale=a.ball, ball_diameter=a.diameter, washer=a.washer, clearance=a.clearance,
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
-                    rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat)
+                    rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
+                    texture_colours=a.texture_colours)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
     f = rep.fit
@@ -119,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--magnet-seat", choices=["washer", "raised"], default="washer",
                    help="washer: magnets rest on the washer (default); raised: pockets move up into parts "
                         "that float above the bed")
+    f.add_argument("--colours", type=int, metavar="N", dest="texture_colours",
+                   help="GLB/glTF: reduce the file's colours (texture, vertex colours) to N filaments "
+                        "(default: as many as are clearly distinct, up to 8)")
     f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")
     f.add_argument("--slice", action="store_true", help="Bambu Studio time/filament, supports off vs auto")

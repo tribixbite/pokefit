@@ -192,6 +192,16 @@
           <h2>Colours</h2>
           <button id="paintToggle" class="btn" aria-pressed="false">Paint</button>
         </div>
+        <div id="texColBox" hidden>
+          <p class="hint">This file brings its own colours (a texture or coloured materials), turned into filaments and painted on. Fewer filaments mean fewer colour changes and far less purge waste.</p>
+          <div class="row">
+            <label class="range-row">Filaments
+              <input id="texCol" type="range" min="1" max="16" step="1" value="4" />
+              <span id="texColVal" class="muted"></span>
+            </label>
+            <button id="texColAuto" class="btn" aria-pressed="true" title="As many as the file clearly has (up to 8)">Auto</button>
+          </div>
+        </div>
         <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
         <div class="row" id="paintColourRow">
@@ -309,7 +319,7 @@
         the ball, checks that it will print, and exports a ready-to-slice Bambu Studio 3MF with its painted colours.</p>
       <h2>How to use it</h2>
       <ol>
-        <li><b>Open a figure</b> — drop a .3mf, .stl, .obj or .glb on the page. Files with several figures get a picker; a .glb keeps its material colours as filaments.</li>
+        <li><b>Open a figure</b> — drop a .3mf, .stl, .obj or .glb on the page. Files with several figures get a picker. A .glb keeps its colours (texture or materials) as filaments; choose how many under Colours.</li>
         <li><b>Pick the ball</b> — the 60 % or 100 % ball, or type the inner diameter of yours. Set the clearance to the walls.</li>
         <li><b>Pick the washer</b> — plain or zinc-plated steel (stainless is not magnetic). <i>Compare washers</i> shows which allows the largest figure.</li>
         <li><b>Magnets</b> — 1, 2 or 3 pockets for 4 × 2 mm disc magnets are placed automatically; drag them in the underside view.

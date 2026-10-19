@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
                        input_checks,
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
-from .model3mf import GLTF_SUFFIXES
+from .gltf import GLTF_SUFFIXES
 from .slicer import find_exe, reference_settings
 from .washer import CATALOGUE, DEFAULT_WASHER
 
