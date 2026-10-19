@@ -192,6 +192,21 @@ export interface Report {
   washers: WasherRow[];
   timings: Record<string, number>;
   underside: Underside;
+  /** Estimated colour changes (pokefit/toolchange.py); empty for a one-colour figure. */
+  toolchange: Partial<ToolchangeInfo>;
+}
+
+export interface ToolchangeCost { changes: number; purge_g: number; minutes: number }
+
+export interface ToolchangeInfo extends ToolchangeCost {
+  filaments: number;
+  nozzles: number;
+  switches: number;
+  /** 1-based nozzle per filament in the best split (Bambu's Auto For Flush finds the same or better). */
+  nozzle_of: number[];
+  one_nozzle: ToolchangeCost;
+  /** glTF colour: the cost of each palette size. */
+  by_count?: (ToolchangeCost & { count: number })[];
 }
 
 export interface LoadResponse {
@@ -209,6 +224,15 @@ export interface Slot {
   imported?: boolean;
   /** Why an imported preset cannot print with the project as set up (e.g. its plate). */
   warning?: string;
+}
+
+/** A filament loaded in the printer (pokefit/printer.py). */
+export interface AmsSlot {
+  slot: number;
+  label: string;
+  colour: string;
+  type: string;
+  name: string;
 }
 
 /** What became of one imported Bambu preset. */
@@ -239,6 +263,10 @@ export interface Config {
   ball_r_inner: number;
   /** Local engine with a reachable ComfyUI: "From photos" can make a figure. */
   photos?: boolean;
+  /** Local engine with beambam installed: the printer's loaded filaments can be read. */
+  printer_link?: boolean;
+  /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */
+  ams: AmsSlot[];
 }
 
 export interface SliceResult {

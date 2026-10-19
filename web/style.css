@@ -205,6 +205,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .card.pick select { font-weight: 600; }
 
 /* Segmented control (magnet count). */
+.tex-cost { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tex-cost button { background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 8px; font: inherit; font-size: 12.5px; cursor: pointer; line-height: 1.3; text-align: left; }
+.tex-cost button b { font-size: 14px; }
+.tex-cost button[aria-current="true"] { border-color: var(--accent); background: rgba(229, 72, 77, .12); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { background: transparent; color: var(--text); border: 0; padding: 6px 12px; min-width: 40px; min-height: 34px; font: inherit; cursor: pointer; }
 .seg button + button { border-left: 1px solid var(--line); }

@@ -146,6 +146,9 @@ if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.
   problems.push("conform (bend + flat base)");
 }
 if (imported.length !== 1 || imported[0].name !== "eSUN PETG Basic") problems.push("preset import");
+const tcv = glbLoaded.report.toolchange;
+console.log(`[${secs()} s] toolchange: ${JSON.stringify({ ...tcv, by_count: undefined })}`);
+if (tcv?.nozzles !== 2 || tcv.filaments !== 2 || !Array.isArray(tcv.by_count)) problems.push("toolchange estimate");
 if (glbObj.parts.length !== 1 || glbObj.colours.join() !== "#1414C8,#C81414" || glbObj.parts[0].painted < 12) {
   problems.push("GLB colours");
 }

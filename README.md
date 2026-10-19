@@ -21,6 +21,13 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
   filament slots for *Import geometry only*;
+- **shows what colours cost to print**: estimated filament changes, time and purge for the figure and for
+  every palette size (on a two-nozzle X2D/H2D, two colours need no filament changes at all), from a model
+  calibrated on Bambu slices;
+- **matches colours to your printer's AMS** (local version, through [beambam](https://github.com/tribixbite/beambam)):
+  reads the loaded filaments, maps the figure's colours to them and can recolour the figure to match;
+- **takes models from other apps**: a page can open pokefit and post a model to it (`pokefit:load`, see
+  `web/src/handoff.ts`), or link `https://pokefit.party/?url=<model>`;
 - **reads your Bambu Studio presets**: a project 3MF, or the preset exports from *File › Export › Export Preset
   Bundle* (`.bbscfg` printer bundle, `.bbsflmt` filament bundle, printer/filament/process presets `.zip`). Their
   filaments become materials to print with, their process presets selectable settings; a filament that cannot

@@ -38,6 +38,7 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
+from .printer import AmsSlot, PrinterError, ams_slots, beambam_command, read_state
 from .slicer import find_exe
 from .washer import CATALOGUE, DEFAULT_WASHER
 
@@ -86,6 +87,7 @@ def _load(path: Path) -> dict[str, Any]:
     if _reference is not None:
         s.reference = _reference
     s.presets = _presets
+    s.ams = _ams
     _register(s)
     with _locks[s.id]:
         rep, _ = analyse(s, Params())
@@ -98,13 +100,14 @@ _reference_name = ""
 # Bambu presets the user imported (.bbscfg / .bbsflmt / presets .zip); inherits resolve against the
 # installed Bambu Studio's system profiles.
 _presets = PresetLibrary(system=default_system_profiles())
+_ams: list[AmsSlot] | None = None        # the printer's loaded filaments, once read (POST /api/printer)
 
 
 def _config() -> dict[str, Any]:
     exe = find_exe()
     from .imageto3d import Comfy
-    return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets), "engine": "local",
-            "photos": Comfy(COMFY_URL).alive(timeout=1.5)}
+    return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets, _ams), "engine": "local",
+            "photos": Comfy(COMFY_URL).alive(timeout=1.5), "printer_link": beambam_command() is not None}
 
 
 def _run_job(job_id: str, fn: Any) -> None:
@@ -272,6 +275,24 @@ class Handler(BaseHTTPRequestHandler):
             log("fitting the figure")
             return {**_load(d / f"{name}.glb"), "photos": rep}
         self._json({"job": _start_job(run, jid)})
+
+    def post_printer(self, q: dict[str, str]) -> None:
+        """Read the printer's loaded AMS filaments through beambam; {"clear": true} forgets them."""
+        global _ams
+        if self._json_body().get("clear"):
+            _ams = None
+        else:
+            try:
+                slots = ams_slots(read_state())
+            except PrinterError as exc:
+                raise ApiError(502, str(exc)) from exc
+            if not slots:
+                raise ApiError(404, "The printer reports no loaded filament.")
+            _ams = slots
+        with _registry_lock:
+            for s in _sessions.values():
+                s.ams = _ams
+        self._json(_config())
 
     def post_load_path(self, q: dict[str, str]) -> None:
         p = Path(str(self._json_body().get("path", ""))).expanduser()

@@ -217,6 +217,7 @@
             </label>
             <button id="texColAuto" class="btn" aria-pressed="true" title="As many as the file clearly has (up to 8)">Auto</button>
           </div>
+          <div id="texCost" class="tex-cost" aria-label="Colour-change cost per number of filaments"></div>
         </div>
         <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
@@ -290,6 +291,7 @@
       <section class="card">
         <h2>Print (Bambu Studio)</h2>
         <p id="printerInfo" class="hint"></p>
+        <p id="tcInfo" class="hint" hidden></p>
         <label id="slotRow">Filament for every colour
           <select id="slotSelect"></select>
         </label>
@@ -311,10 +313,16 @@
           <input id="refInput" type="file" accept=".3mf,.json,.bbscfg,.bbsflmt,.zip" hidden />
           <span id="refInfo" class="muted"></span>
         </div>
+        <div class="row" id="amsRow" hidden>
+          <button id="amsBtn" class="btn" title="Read which filaments are loaded in your printer's AMS units (through beambam) and match the figure's colours to them">Use my printer's AMS</button>
+          <button id="amsClear" class="btn" hidden>Back to the project's slots</button>
+          <span id="amsInfo" class="muted"></span>
+        </div>
         <p id="presetInfo" class="hint" hidden></p>
         <div id="importMapBox" hidden>
           <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots:</p>
           <table class="tbl" id="importMap"></table>
+          <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>
           <p class="hint">Bambu Studio 2.8.2 also says "The 3mf file has invalid config, load geometry data only" on every geometry import — harmless, fixed in later releases.</p>
         </div>
         <div class="row" id="ballModelRow" hidden>

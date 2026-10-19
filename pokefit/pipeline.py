@@ -36,8 +36,10 @@ from .model3mf import (FigureObject, Part, Project, plate_size, read_project, re
 from .gltf import MAX_PICK
 from .paint import decode_majority, leaves, parse_tree
 from .presets import PresetLibrary, PresetNote
+from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
+from . import toolchange as tc
 from .shell import flat_spot, from_manifold, to_manifold
 from .slicer import (SliceResult, adapt_settings, default_slot, grid_positions, reference_settings,
                      resize_filaments, slice_3mf)
@@ -151,6 +153,9 @@ class Session:
     ball: Ball
     reference: dict | None
     presets: PresetLibrary | None = None        # Bambu presets the user imported (presets.py)
+    # Filaments loaded in the user's printer (printer.py, via beambam): when set, the figure's colours are
+    # matched to these slots instead of the reference project's.
+    ams: list[AmsSlot] | None = None
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
     _frames: dict[tuple, list[Part]] = field(default_factory=dict)           # orientation + conform -> parts
     _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
@@ -164,6 +169,7 @@ class Session:
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
     _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
     _settings: dict[tuple, dict] = field(default_factory=dict)          # (presets version, process) -> settings
+    _tc_table: dict[tuple, list[dict[str, Any]]] = field(default_factory=dict)   # palette-size cost table
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -292,8 +298,10 @@ class Session:
         return self._fields[key].scaled(s)
 
     def slot_matches(self, params: Params) -> list[SlotMatch]:
-        """How the figure's filaments map onto the user's project slots (for the import file)."""
-        if not self.reference:
+        """How the figure's filaments map onto the user's project slots (for the import file): the
+        printer's loaded AMS trays when they were read, else the reference project's filaments."""
+        targets = [a.colour for a in self.ams] if self.ams else list((self.reference or {}).get("filament_colour", []))
+        if not targets:
             return []
         obj = self.obj(params)
         ukey = f"{obj.id}:{params.texture_colours}:{json.dumps(params.paint, sort_keys=True)}"
@@ -301,8 +309,7 @@ class Session:
             parts = self.figure_parts(params)
             self._used[ukey] = used_filaments(parts, obj.extruder)
         manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
-        return match_slots(self._used[ukey], self.colours(params),
-                           list(self.reference.get("filament_colour", [])), manual)
+        return match_slots(self._used[ukey], self.colours(params), targets, manual)
 
     def slot(self, params: Params) -> int:
         if params.slot is not None:
@@ -339,7 +346,7 @@ def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
 
 
 def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "",
-               presets: PresetLibrary | None = None) -> dict[str, Any]:
+               presets: PresetLibrary | None = None, ams: list[AmsSlot] | None = None) -> dict[str, Any]:
     """What the UI needs before a file is loaded: washers, defaults, the reference printer's filament slots.
 
     `reference` is a project the user loaded (their own filament slots); default: DEFAULT_REFERENCE.
@@ -371,6 +378,7 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         "presets": [n.to_dict() for n in notes],
         "default_slot": default_slot(ref) if ref else 0,
         "reference": reference_name if reference is not None else DEFAULT_REFERENCE.name,
+        "ams": [a.to_dict() for a in ams or []],
         "printer": (ref or {}).get("printer_settings_id", ""),
         "process": (ref or {}).get("print_settings_id", ""),
         "slicer": slicer,
@@ -401,6 +409,7 @@ class Report:
     timings: dict[str, float]
     underside: dict[str, Any] = field(default_factory=dict)   # 2D outlines for the pocket editor
     import_map: list[dict[str, Any]] = field(default_factory=list)   # figure filament -> project slot
+    toolchange: dict[str, Any] = field(default_factory=dict)         # estimated colour changes (toolchange.py)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -692,13 +701,63 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     checks.extend(printing)
     t["printability"] = time.time() - t3
 
+    t4 = time.time()
+    toolchange = toolchange_info(session, params, final, scale)
+    t["toolchange"] = time.time() - t4
+
     washers = washer_table(session, params) if recommend else []
     t["total"] = time.time() - t0
     rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict,
                  [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
                  {k: round(v, 2) for k, v in t.items()}, underside,
-                 [m.to_dict() for m in session.slot_matches(params)])
+                 [m.to_dict() for m in session.slot_matches(params)], toolchange)
     return rep, final
+
+
+def _tc_estimate(parts: list[Part], object_extruder: int, colours: list[str], settings: dict) -> dict[str, Any]:
+    """Colour changes for these (final-mm) parts: the best nozzle split (what Bambu's Auto For Flush
+    finds, within the model's error) and, on a two-nozzle printer, everything on one nozzle."""
+    n = max(1, len(colours))
+    lh = float(settings.get("layer_height", 0.2) or 0.2)
+    first = float(settings.get("initial_layer_print_height", lh) or lh)
+    use = tc.layer_use(parts, object_extruder, n, lh, first)
+    nozzles = tc.nozzle_count(settings)
+    best, single = tc.plan(use, tc.flush_matrix(settings, n), n_nozzles=nozzles)
+    return {"filaments": int(use.any(axis=0).sum()), "nozzles": nozzles, "changes": best.changes,
+            "switches": best.switches, "purge_g": round(tc.grams(best), 1),
+            "minutes": round(best.seconds / 60), "nozzle_of": best.nozzle_of,
+            "one_nozzle": {"changes": single.changes, "purge_g": round(tc.grams(single), 1),
+                           "minutes": round(single.seconds / 60)}}
+
+
+def toolchange_info(session: Session, params: Params, final: list[Part], scale: float) -> dict[str, Any]:
+    """Estimated colour changes of the figure as exported (module toolchange.py); for a glTF, also per
+    palette size, so the Filaments slider can show what each extra colour costs."""
+    st = export_settings(session, params) or {}
+    colours = session.colours(params)
+    if len(colours) < 2 or scale <= 0:
+        return {}
+    obj = session.obj(params)
+    info = _tc_estimate(final, obj.extruder, colours, st)
+    tex = session.project.texture
+    ref = session.settings(params)
+    if tex is not None and ref:
+        key = (session._key(params), round(scale, 5), params.slot, json.dumps(params.paint, sort_keys=True))
+        if key not in session._tc_table:
+            rows = []
+            unit = session.unit_parts(params)
+            for k in range(1, min(MAX_PICK, max(tex.auto_count + 2, 6)) + 1):
+                cols, extra, base = tex.paint(k)
+                p0 = unit[0]
+                shaped = [Part(p0.name, base, p0.vertices, p0.faces, dict(extra), p0.subtype), *unit[1:]]
+                st_k = adapt_settings(ref, list(cols), session.slot(params), False)
+                est = _tc_estimate(scaled(shaped, scale), base, list(cols), st_k)
+                rows.append({"count": k, "changes": est["changes"], "purge_g": est["purge_g"],
+                             "minutes": est["minutes"]})
+            session._tc_table = {key: rows}
+        info["by_count"] = session._tc_table[key]
+    return info
+
 
 
 def _conform_check(info: ConformInfo) -> Check | None:

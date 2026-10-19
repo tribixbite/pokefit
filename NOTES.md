@@ -5,27 +5,35 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **GLB palette quality / purge** (`pokefit/gltf.py`): "auto" favours fidelity over purge. Manex Squirtle:
-   7 colours = 233 changes / 129 g vs 4 = 127 / 74 g for a ~3 g figure; photo-made Squirtle at 5 colours:
-   158 changes, 90.8 g (6.9 h) for a 4.7 g figure. Ideas: estimated colour-change cost per count in the UI;
-   weigh small clusters by how many layers they span; hue-aware merging (closest-first merges the cream belly
-   into blue at 3).
-2. **Photos -> 3D quality** (`pokefit/imageto3d.py`): eyes come out as black blobs (highlights / red iris
+1. **Printer link next steps** (`docs/integration.md` "Next steps"; needs the user): beambam credentials on
+   this PC (`~/.x2d/credentials`) to try "Use my printer's AMS" for real; then send-to-printer (slice to
+   `.gcode.3mf` with the CLI's `--export-3mf`, `beambam print … --ams-mapping`) — blocked in beambam by the
+   dual-nozzle `nozzle_mapping` print start (err 84033544); live view (`beambam camera` MJPEG on :8766) and
+   AMS load/unload in a local "Printer" card. Ask before any action that changes the printer.
+2. **Palette quality** (`pokefit/gltf.py`): "auto" still favours fidelity over purge; the UI now shows each
+   count's cost (Colours card chips). Ideas left: make auto prefer ≤ 2 colours per nozzle when the figure
+   allows (2 colours on the X2D = no filament changes); hue-aware merging (closest-first merges the cream
+   belly into blue at 3).
+3. **Photos -> 3D quality** (`pokefit/imageto3d.py`): eyes come out as black blobs (highlights / red iris
    lost at vertex-colour resolution); colours are darker than the photos (PBR albedo, no lighting) — e.g.
    blue #6DAAB2 vs photo ~#8ECAD8; idea: rescale each palette colour toward the photos' colour of the same
    cluster. Try `RemeshMesh` resolution / `DecimateMesh` faces for finer colour; try the textured output
    (UnwrapMesh + BakeTextureFromVoxel, as the template) vs `PaintMesh`.
-3. **Profile photos from ordinary photos** (user's stretch goal): only front/left/back[/right] at eye height
+4. **Profile photos from ordinary photos** (user's stretch goal): only front/left/back[/right] at eye height
    work now (front only also works: single view). Options to evaluate: Pixal3D's single-image node on the
    best photo; a multi-view diffusion model to synthesise the orbit views (check what ComfyUI ships natively
    first); the template's "turnaround sheet" route uses a paid Google API — avoid.
-4. **Flat base fill** (`conform.base_fill`): its outline is 0.4 mm steps with vertical walls, visible as a
+5. **Flat base fill** (`conform.base_fill`): its outline is 0.4 mm steps with vertical walls, visible as a
    pedestal between the legs in the preview; smooth the outline / slope the walls. Conform is designed for the
    largest-fit scale and the default washer's floor (a smaller chosen size keeps the same shape).
-5. **Big meshes are slow** (600k-triangle LEGO GLB: 82 s locally; 200k-face photo Squirtle analyse 18.5 s,
-   of which conform ~5 s): profile `read_gltf`, mesh checks and conform's fit rounds.
-6. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
-   Cloudflare "Always Use HTTPS" (off; the page redirects itself).
+6. **Big meshes are slow** (600k-triangle LEGO GLB: 82 s locally; 200k-face photo Squirtle analyse 18.5 s,
+   of which conform ~5 s; the per-count toolchange table adds ~5 s on a glTF's first analysis): profile
+   `read_gltf`, mesh checks, conform's fit rounds.
+7. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default; note beambam
+   is AGPL, so pokefit only calls it as a program); Cloudflare "Always Use HTTPS" (off; the page redirects
+   itself); turning on `has_filament_switcher` (track switch) in the Bambu project (it is off there).
+8. craftmatic side of the handoff (its repo, ~15 lines, snippet in `docs/integration.md`): ask before
+   changing that repo (it has an unpushed local commit).
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
 SketchUp exports here are at **16× working scale** and often non-manifold.
@@ -152,6 +160,12 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   at 390 px. The browser's palette differs slightly from the local one (8,715 vs 8,481 painted triangles at
   auto 7; colour 6 grey-green vs dark brown): Pyodide's scipy k-means lands differently with the same seed.
   Each engine is self-consistent (export uses the same engine); make it deterministic only if users compare.
+- Toolchange model (`pokefit/toolchange.py`), Bambu CLI on the X2D project. Manex Squirtle palette sizes
+  1/2/3/4/7: 0.67/1.57/2.35/5.45/10.19 h, 2.8/17.3/28.9/73.8/145.7 g (fit: 104.6 s and 0.43 g per filament
+  change incl. flush, 18 s per nozzle switch; predictions within 0.4 h / 12 g). Photo Squirtle, 5 colours, all
+  16 nozzle splits: 6.94 h (Bambu's auto 1,2,2,2,2 = the planner's pick) to 10.79 h / 156.9 g (one nozzle).
+  Manex 7 colours: Bambu auto 1,1,1,2,2,1,2 = 10.19 h beat the planner's 1,2,1,2,2,2,2 = 10.34 h, so exports
+  keep Bambu's Auto For Flush. Sweep script: scratchpad `nozzle_sweep.py` (plate `filament_maps`, Manual).
 - Bambu presets (`pokefit/presets.py`): user's `printer_config/Filament presets.zip` (17 X2D presets, git-ignored)
   resolves exactly against `C:\Program Files\Bambu Studio\resources\profiles\BBL`; in the browser it is
   "approximate" (keys not in the preset come from the project's closest slot). 10 of the 17 set 0 °C for the

@@ -197,6 +197,12 @@ export async function exportFiles(session: string, params: Params): Promise<Expo
   return res;
 }
 
+/** Read (or with `clear`, forget) the printer's loaded AMS filaments through beambam (local only). */
+export async function readPrinter(clear = false): Promise<Config> {
+  if (mode !== "local") throw new Error("Reading the printer needs the local version with beambam.");
+  return postJson<Config>("/api/printer", { clear });
+}
+
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
 export async function photosToFigure(
   photos: Partial<Record<"front" | "left" | "back" | "right", File>>,

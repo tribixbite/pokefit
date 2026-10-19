@@ -53,6 +53,13 @@
   Filament presets become selectable materials, process presets for the same printer a "Process" choice, a
   printer preset for the project's printer is applied, and a filament whose temperature for the project's plate
   is 0 is flagged (Bambu refuses to slice it).
+- Colour-change cost: per layer, which filaments print (from the paint); per nozzle, the changes when it
+  keeps its loaded filament; on a two-nozzle printer (X2D, H2D) the best split of filaments between nozzles.
+  Shown as filament changes, extra time and purge grams, for the figure and for every palette size of a
+  textured GLB. Calibrated on Bambu CLI slices (about 105 s and 0.4 g per change, 18 s per nozzle switch);
+  exports keep Bambu's own "Auto For Flush" nozzle assignment, which matched or beat the planner.
+- Handoff from other apps: `?url=<model URL>` (CORS), or open pokefit and post
+  `{type: "pokefit:load", name, data: ArrayBuffer}` after it announces `pokefit:ready` (trusted origins only).
 - Multi-figure 3MF files: a picker chooses which figure to fit.
 
 ## Local version

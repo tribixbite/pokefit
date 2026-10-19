@@ -83,6 +83,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
+| `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`). Calibrated on Bambu slices. |
+| `printer.py` | The printer's loaded AMS filaments via beambam's CLI (subprocess: beambam is AGPL, never imported); colours matched with `remap.match_slots`. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
@@ -100,6 +102,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `src/colorize.ts` | Colours card: palette, paint modes, GLB "Filaments" slider. |
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |
+| `src/handoff.ts` | Models from other apps (craftmatic): `pokefit:load` postMessage from trusted origins, `?url=`. |
 | `public/` | Static files: CNAME, og.gif, icons, `llms.txt` (keep it in sync with features). |
 
 ## Gotchas that cost real time (keep them in mind)
@@ -108,6 +111,9 @@ summary + Bambu slice: time, grams, colour changes, purge).
   last-first; a 3-side split's children are (v0,m01,m20),(m01,v1,m12),(m12,v2,m20),centre, each with a
   different corner order — corner rotations/mirrors are remapped geometrically (`paint.remap_tree`), never
   by a fixed rule. Verified against BambuStudio `src/libslic3r/TriangleSelector.cpp`.
+- **Bambu CLI nozzle map** (X2D/H2D): the CLI takes `filament_map_mode` / `filament_maps` from the PLATE's
+  metadata in `Metadata/model_settings.config`, not from `project_settings.config` (a "Manual" map there
+  is silently replaced by its auto choice).
 - **Bambu CLI**: a 3MF must carry `<metadata name="Application">BambuStudio-…` or embedded settings are
   ignored; it writes `result.json` into its cwd; it sometimes hangs after writing it (handled: poll + kill).
 - **Cloudflare** in front of GitHub Pages keeps .js/.wasm/.zip for 4 h while HTML is 600 s: every asset
@@ -151,6 +157,12 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.
 - Measured: ~3.4 min for 3 views (int8 weights, 200k faces) while another app held 12 GB of the VRAM
   (ComfyUI streams weights). Squirtle photos -> watertight solid, 8 colours, slices in Bambu.
+
+## Ecosystem: beambam and craftmatic
+
+Plan and boundaries: `docs/integration.md`. beambam (printer control, AGPL) is used only as a subprocess
+(`POKEFIT_BEAMBAM`, default `beambam` on PATH; a venv is at `C:/git/beambam/.venv` on the original machine).
+craftmatic (TS) hands models over as files (`web/src/handoff.ts`).
 
 ## Testing the UI with a browser agent
 

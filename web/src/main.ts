@@ -2,6 +2,7 @@
 import * as api from "./api";
 import { ColorizePanel } from "./colorize";
 import { formatDuration, pct } from "./geometry";
+import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { Viewer } from "./scene";
 import type { Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
 import { UndersideEditor } from "./underside";
@@ -112,8 +113,32 @@ async function init(): Promise<void> {
   renderSlots(cfg);
   renderPrinter(cfg);
 
-  const path = new URLSearchParams(location.search).get("path");
+  const query = new URLSearchParams(location.search);
+  const path = query.get("path");
   if (path) await load(() => api.loadPath(path), path.split(/[\\/]/).pop() ?? path);
+  // ?url=<model URL>: fetch it (the server must allow cross-origin reads).
+  const url = query.get("url");
+  const urlName = url ? urlFileName(url) : null;
+  if (url && urlName) {
+    await load(async () => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Cannot fetch ${urlName}: HTTP ${res.status}`);
+      return api.loadFile(new File([await res.blob()], urlName));
+    }, urlName);
+  } else if (url) {
+    toast("?url= must point to a .3mf, .stl, .obj, .glb or .gltf file.");
+  }
+  // Another app (craftmatic) that opened this tab can now send a model (handoff.ts).
+  window.addEventListener("message", (e) => {
+    if (!trustedOrigin(e.origin)) return;
+    const file = handoffFile(e.data);
+    if (file) void load(() => api.loadFile(file), file.name);
+  });
+  if (window.opener) {
+    try {
+      (window.opener as Window).postMessage({ type: "pokefit:ready" }, "*");
+    } catch { /* the opener is gone or cross-origin restricted */ }
+  }
 }
 
 /** Material and process pickers: the project's filament profiles, then imported presets. */
@@ -182,6 +207,10 @@ function renderPrinter(cfg: Config): void {
     ? "default slots — load your project to match its filaments" : `slots from ${cfg.reference}`;
   $("ballModelRow").hidden = cfg.engine !== "browser";
   $("photosRow").hidden = !cfg.photos;
+  $("amsRow").hidden = !cfg.printer_link;
+  $("amsClear").hidden = !cfg.ams.length;
+  $("amsInfo").textContent = cfg.ams.length
+    ? `${cfg.ams.length} loaded: ${cfg.ams.map((a) => `${a.label} ${a.type}`).join(", ")}` : "";
 }
 
 /** Header chip: where the engine runs and, in the browser, its start-up progress. */
@@ -294,6 +323,16 @@ function show(rep: Report): void {
     ? `${pct(f.scale)} of the file · max ${pct(f.max_scale)} (${f.max_height_mm.toFixed(1)} mm)`
     : "does not fit";
   $("sumLimit").textContent = f.limit_kind ? `Tightest at the ${limitText(f.limit_kind)}` : "";
+  // Colour changes: what the colours cost to print (estimated; two nozzles keep a colour loaded each).
+  const tcv = rep.toolchange;
+  const tcText = !tcv?.changes && !tcv?.switches ? "" :
+    `Colour changes (estimated${tcv.nozzles === 2 ? ", 2 nozzles" : ""}): about ${tcv.changes} filament changes` +
+    `${tcv.switches ? ` and ${tcv.switches} nozzle switches` : ""}, ≈ +${formatDuration((tcv.minutes ?? 0) * 60)} and ` +
+    `${tcv.purge_g} g of purge.` + (tcv.nozzles === 2 && tcv.one_nozzle && tcv.one_nozzle.changes > (tcv.changes ?? 0)
+      ? ` On one nozzle it would be ${tcv.one_nozzle.changes} changes (+${formatDuration(tcv.one_nozzle.minutes * 60)}).` : "") +
+    " Fewer colours cut this most.";
+  $("tcInfo").textContent = tcText;
+  $("tcInfo").hidden = !tcText;
   // What the conform step did (bend / flat base), or why it left the figure alone.
   const shaped = rep.checks.find((c) => c.id === "conform")?.message ?? f.conform?.note ?? "";
   $("conformInfo").textContent = shaped;
@@ -425,7 +464,11 @@ function renderMagnets(rep: Report): void {
 
 /** Figure colour -> project slot table; each row's picker overrides the closest-colour choice. */
 function renderImportMap(rep: Report): void {
-  const slots = state.config?.slots ?? [];
+  // Targets: the printer's loaded AMS trays when read, else the reference project's slots.
+  const ams = state.config?.ams ?? [];
+  const slots = ams.length ? ams.map((a) => ({ type: a.type, colour: a.colour, name: `${a.label} ${a.name}`.trim() }))
+    : state.config?.slots ?? [];
+  $("snapColours").hidden = !rep.import_map.some((m) => !m.new && m.target_colour && m.target_colour !== m.colour);
   $("importMapBox").hidden = rep.import_map.length === 0;
   const swatch = (c: string): HTMLElement => {
     const sw = h("span", { cls: "sw" });
@@ -437,7 +480,8 @@ function renderImportMap(rep: Report): void {
     h("tbody", {}, ...rep.import_map.map((m) => {
       const sel = h("select");
       sel.setAttribute("aria-label", `Slot for figure colour ${m.source}`);
-      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1), textContent: `${i + 1} · ${s.type} ${s.colour}`, title: s.name })));
+      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1),
+        textContent: `${ams.length ? ams[i].label : i + 1} · ${s.type} ${s.colour}`, title: s.name })));
       const extra = Math.max(slots.length + 1, m.new ? m.target : 0);
       sel.append(h("option", { value: String(extra), textContent: `${extra} · new slot (set its colour after import)` }));
       sel.value = String(m.target);
@@ -826,6 +870,32 @@ function bind(): void {
     state.params.process = (e.target as HTMLSelectElement).value || null;
     if (state.session) void runAnalyse();     // layer height feeds the islands check
   });
+  // The printer's AMS (local engine with beambam): match colours to what is loaded.
+  const printer = async (clear: boolean): Promise<void> => {
+    busy(true, clear ? "Forgetting the printer's filaments…" : "Reading the printer's AMS…");
+    try {
+      state.config = await api.readPrinter(clear);
+      renderPrinter(state.config);
+      state.params.filament_map = null;
+      if (state.session) await runAnalyse();
+    } catch (err) {
+      toast((err as Error).message);
+    } finally {
+      busy(false);
+    }
+  };
+  $("amsBtn").addEventListener("click", () => void printer(false));
+  $("amsClear").addEventListener("click", () => void printer(true));
+  // Recolour the figure with the matched filaments' colours (what will actually print).
+  $("snapColours").addEventListener("click", () => {
+    const rep = state.report;
+    if (!rep) return;
+    const cols = [...(rep.object.colours ?? [])];
+    for (const m of rep.import_map) if (!m.new && m.target_colour && m.source <= cols.length) cols[m.source - 1] = m.target_colour.slice(0, 7);
+    state.params.colours = cols;
+    void refreshFigure().then(runAnalyse);
+  });
+
   // Photos -> 3D (local engine with ComfyUI): a dialog of view photos, then a long job.
   const photosDlg = $("photos");
   const showPhotos = (on: boolean): void => { photosDlg.hidden = !on; };

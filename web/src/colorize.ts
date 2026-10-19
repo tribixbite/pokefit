@@ -7,6 +7,7 @@
  * State lives in the shared `Params` (`colours`, `paint`), so analysis and
  * export see exactly what the preview shows.
  */
+import { formatDuration } from "./geometry";
 import type { FigureHit } from "./scene";
 import type { Params, PaintMode, PickResult, RegionView, Report } from "./types";
 
@@ -120,6 +121,18 @@ export class ColorizePanel {
       slider.value = String(n);
       $("texColVal").textContent = p.texture_colours === null ? `${n} (auto)` : String(n);
       $("texColAuto").setAttribute("aria-pressed", String(p.texture_colours === null));
+      // What each palette size costs in filament changes (estimated); tap one to use it.
+      const rows = this.host.report()?.toolchange?.by_count ?? [];
+      $("texCost").replaceChildren(...rows.map((r) => {
+        const b = document.createElement("button");
+        b.setAttribute("aria-current", String(r.count === n));
+        b.title = `${r.count} filament${r.count === 1 ? "" : "s"}: about ${r.changes} filament changes, ` +
+          `${formatDuration(r.minutes * 60)} and ${r.purge_g} g of purge on top of the print`;
+        const extra = r.minutes > 0 ? ` · +${formatDuration(r.minutes * 60)}` : "";
+        b.innerHTML = `<b>${r.count}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}`;
+        b.addEventListener("click", () => this.setTextureColours(r.count));
+        return b;
+      }));
     }
     if (this.filament > cols.length) this.filament = 1;
     const pal = $("palette");
