@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import trimesh
 from PIL import Image
 
 VIEWS = ("front", "left", "back", "right")      # Pixal3D's order; the first given view is the front
@@ -44,6 +45,8 @@ DEFAULT_URL = "http://127.0.0.1:8188"
 DEFAULT_FACES = 200_000                         # plenty for a ~25 mm figure; pokefit stays fast
 # Weights, by ComfyUI/models/<folder>: Hugging Face Comfy-Org/Pixal3D and Comfy-Org/BiRefNet.
 MODEL = "pixal3d_multiview_int8_convrot.safetensors"     # diffusion_models/ (int8: fits 16 GB)
+MODEL_SINGLE = "pixal3d_int8_convrot.safetensors"        # diffusion_models/ (one photo, any angle)
+MOGE_MODEL = "moge_2_vitl_normal_fp16.safetensors"       # geometry_estimation/ (Comfy-Org/MoGe): photo FOV
 CLIP = "dino_v3_L_naf_fp32.safetensors"                  # clip_vision/
 VAE_SHAPE = "trellis_2_shape_vae_bf16.safetensors"       # vae/
 VAE_TEXTURE = "trellis_2_texture_vae_bf16.safetensors"   # vae/
@@ -61,6 +64,7 @@ class Framed:
     image: Image.Image          # FRAME x FRAME RGB, figure on black
     scale: float                # photo pixels -> frame pixels
     box: tuple[int, int, int, int]   # mask bounding box in the photo (x0, y0, x1, y1)
+    mask: np.ndarray | None = None   # FRAME x FRAME bool: the figure's pixels in `image`
 
 
 def mask_box(mask: np.ndarray) -> tuple[int, int, int, int]:
@@ -89,9 +93,166 @@ def frame_views(photos: dict[str, Image.Image], masks: dict[str, np.ndarray]) ->
         scaled = on_black.resize((w, h), Image.Resampling.LANCZOS)
         cx, cy = (x0 + x1) / 2 * s, (y0 + y1) / 2 * s
         canvas = Image.new("RGB", (FRAME, FRAME))
-        canvas.paste(scaled, (round(FRAME / 2 - cx), round(FRAME / 2 - cy)))
-        out[v] = Framed(v, canvas, s, boxes[v])
+        at = (round(FRAME / 2 - cx), round(FRAME / 2 - cy))
+        canvas.paste(scaled, at)
+        m = Image.fromarray((np.clip(masks[v], 0, 1) * 255).astype(np.uint8)).resize((w, h), Image.Resampling.BILINEAR)
+        mcanvas = Image.new("L", (FRAME, FRAME))
+        mcanvas.paste(m, at)
+        out[v] = Framed(v, canvas, s, boxes[v], np.asarray(mcanvas) > 127)
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Photo colours back onto the mesh. Pixal3D's mesh sits in the rig's frame (silhouettes overlap the framed
+# photos with IoU 0.94-0.98 on the Squirtle), so each vertex can take the photos' colour where a view sees
+# it. The model's own colour is lighting-free albedo, darker than the photos (blue #6DAAB2 vs ~#8ECAD8),
+# and its small details (eye highlights, iris) are blurred; the photos have both right.
+
+VIEW_AZIMUTH = {"front": 0.0, "left": 90.0, "back": 180.0, "right": 270.0}
+FOV_DEG = 20.0
+MIN_COS = 0.45          # a view must face the surface at least this squarely (cos of the angle)
+EDGE_PX = 4             # photo pixels this close to the silhouette are not sampled (the mesh is a few px off)
+DEPTH_TOL = 0.012       # rig units (the figure spans ~1): how far behind the nearest surface still counts as seen
+
+
+def rig_view(name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(camera position, right, up, forward) of a rig view; z up, the figure facing -y (ComfyUI's
+    `_orbit_camera_to_world`: azimuth 0 = front, 90 = the figure's left)."""
+    a = np.radians(VIEW_AZIMUTH[name])
+    back = np.array([np.sin(a), -np.cos(a), 0.0])
+    right = np.array([np.cos(a), np.sin(a), 0.0])
+    up = np.cross(back, right)
+    dist = PAD * 0.5 / np.tan(np.radians(FOV_DEG) / 2)
+    return back * dist, right, up, -back
+
+
+def project(points: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pixel x, y (FRAME frame) and depth of rig-frame points in a view."""
+    cam, right, up, fwd = rig_view(name)
+    rel = points - cam
+    depth = rel @ fwd
+    k = (FRAME / 2) / (np.maximum(depth, 1e-9) * np.tan(np.radians(FOV_DEG) / 2))
+    return FRAME / 2 + (rel @ right) * k, FRAME / 2 - (rel @ up) * k, depth
+
+
+def photo_colours(vertices: np.ndarray, normals: np.ndarray, base: np.ndarray,
+                  views: dict[str, Framed]) -> tuple[np.ndarray, float]:
+    """Vertex colours (sRGB 0..255) from the framed photos; (colours, share of vertices a photo saw).
+
+    Per view: vertices facing it (cos > MIN_COS) and not behind the nearest surface (a z-buffer of vertex
+    splats, min-filtered to close the gaps between them) sample the photo bilinearly inside its mask
+    (eroded by EDGE_PX: along the silhouette the mesh and photo disagree by a few pixels), weighted by cos². Vertices no view sees keep the model's colour, corrected by the per-channel gain and
+    offset that maps the model's colours to the photos' on the vertices that were seen.
+    """
+    from scipy import ndimage
+
+    n = len(vertices)
+    acc = np.zeros((n, 3))
+    wsum = np.zeros(n)
+    for name, fr in views.items():
+        if fr.mask is None or name not in VIEW_AZIMUTH:
+            continue
+        cam, *_ = rig_view(name)
+        px, py, depth = project(vertices, name)
+        to_cam = cam - vertices
+        cos = np.einsum("ij,ij->i", normals, to_cam) / np.maximum(np.linalg.norm(to_cam, axis=1), 1e-12)
+        ix, iy = np.round(px).astype(int), np.round(py).astype(int)
+        inside = (ix >= 0) & (ix < FRAME) & (iy >= 0) & (iy < FRAME)
+        zbuf = np.full((FRAME, FRAME), np.inf)
+        np.minimum.at(zbuf, (iy[inside], ix[inside]), depth[inside])
+        zbuf = ndimage.minimum_filter(zbuf, size=5)
+        seen = inside & (cos > MIN_COS)
+        seen[seen] &= depth[seen] <= zbuf[iy[seen], ix[seen]] + DEPTH_TOL
+        inner = ndimage.binary_erosion(fr.mask, iterations=EDGE_PX)
+        seen[seen] &= inner[iy[seen], ix[seen]]
+        if not seen.any():
+            continue
+        img = np.asarray(fr.image.convert("RGB"), np.float64)
+        x, y = np.clip(px[seen], 0, FRAME - 1.001), np.clip(py[seen], 0, FRAME - 1.001)
+        x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+        fx, fy = (x - x0)[:, None], (y - y0)[:, None]
+        sample = (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
+                  + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
+        w = cos[seen] ** 2
+        acc[seen] += sample * w[:, None]
+        wsum[seen] += w
+    got = wsum > 0
+    out = np.asarray(base, np.float64).copy()
+    out[got] = acc[got] / wsum[got, None]
+    if got.sum() > 10 and (~got).any():
+        for c in range(3):                     # model colour -> photo colour, fitted where both exist
+            a, b = np.polyfit(base[got, c], out[got, c], 1)
+            out[~got, c] = a * base[~got, c] + b
+    return np.clip(out, 0, 255), float(got.mean())
+
+
+def vertex_colour_glb(vertices: np.ndarray, faces: np.ndarray, srgb: np.ndarray) -> bytes:
+    """A GLB with float COLOR_0 (LINEAR, per the glTF spec) under a white PBR material, as ComfyUI writes."""
+    import struct
+
+    lin = trimesh.visual.color.srgb_to_linear(np.clip(np.asarray(srgb, np.float64) / 255.0, 0, 1))
+    pos = np.asarray(vertices, np.float32)
+    chunks = [np.asarray(faces, np.uint32).tobytes(), pos.tobytes(), np.asarray(lin, np.float32).tobytes()]
+    offsets = np.cumsum([0] + [len(c) for c in chunks[:-1]]).tolist()
+    blob = b"".join(chunks)
+    n = len(pos)
+    doc = {"asset": {"version": "2.0", "generator": "pokefit imageto3d"}, "scene": 0,
+           "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+           "meshes": [{"primitives": [{"attributes": {"POSITION": 1, "COLOR_0": 2}, "indices": 0, "material": 0}]}],
+           "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0.0,
+                                                   "roughnessFactor": 1.0}, "doubleSided": True}],
+           "buffers": [{"byteLength": len(blob)}],
+           "bufferViews": [{"buffer": 0, "byteOffset": int(o), "byteLength": len(c)} for o, c in zip(offsets, chunks)],
+           "accessors": [{"bufferView": 0, "componentType": 5125, "count": int(np.size(faces)), "type": "SCALAR"},
+                         {"bufferView": 1, "componentType": 5126, "count": n, "type": "VEC3",
+                          "min": pos.min(0).tolist(), "max": pos.max(0).tolist()},
+                         {"bufferView": 2, "componentType": 5126, "count": n, "type": "VEC3"}]}
+    js = json.dumps(doc).encode()
+    js += b" " * (-len(js) % 4)
+    blob += bytes(-len(blob) % 4)
+    body = struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(blob), b"BIN" + bytes(1)) + blob
+    return struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body
+
+
+def _glb_vertex_colours(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(vertices, faces, sRGB 0..255 vertex colours) of a GLB, node transforms applied. Read from the
+    scene's geometry directly: `Scene.dump()` copies drop COLOR_0 kept as a vertex attribute."""
+    sc = trimesh.load(trimesh.util.wrap_as_stream(data), file_type="glb", force="scene", process=False)
+    assert isinstance(sc, trimesh.Scene)        # force="scene" always returns one
+    verts, faces, cols, base = [], [], [], 0
+    for node in sc.graph.nodes_geometry:
+        transform, name = sc.graph[node]
+        g = sc.geometry[name]
+        if not isinstance(g, trimesh.Trimesh):
+            continue
+        v = np.asarray(g.vertices, np.float64)
+        verts.append(v @ transform[:3, :3].T + transform[:3, 3])
+        faces.append(np.asarray(g.faces, np.int64) + base)
+        base += len(v)
+        raw = getattr(g.visual, "vertex_attributes", {}).get("color")
+        if raw is not None and len(raw) == len(v):
+            lin = np.asarray(raw, np.float64)[:, :3]
+            lin = lin / 255.0 if lin.max() > 1.0 else lin
+            cols.append(trimesh.visual.color.linear_to_srgb(lin) * 255.0)
+        elif isinstance(g.visual, trimesh.visual.ColorVisuals):
+            cols.append(np.asarray(g.visual.vertex_colors, np.float64)[:, :3])
+        else:
+            cols.append(np.full((len(v), 3), 128.0))     # no colour: the photos decide
+    if not verts:
+        raise ComfyError("the generated GLB has no mesh")
+    return np.vstack(verts), np.vstack(faces), np.vstack(cols)
+
+
+def recolour_glb(data: bytes, views: dict[str, Framed]) -> tuple[bytes, float]:
+    """The generated GLB with its vertex colours replaced by the photos' (see `photo_colours`)."""
+    vertices, faces, base = _glb_vertex_colours(data)
+    mesh = trimesh.Trimesh(vertices, faces, process=False)
+    # glTF is y-up; the rig is z-up with the figure facing -y: (x, y, z) -> (x, -z, y)
+    to_rig = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float64)
+    v_rig = vertices @ to_rig.T
+    n_rig = np.asarray(mesh.vertex_normals, np.float64) @ to_rig.T
+    colours, share = photo_colours(v_rig, n_rig, base, views)
+    return vertex_colour_glb(vertices, faces, colours), share
 
 
 class Comfy:
@@ -182,25 +343,22 @@ def mask_prompt(images: dict[str, str]) -> dict[str, Any]:
     return p
 
 
-def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_FACES,
-                    prefix: str = "pokefit/figure", fov: float = 20.0) -> dict[str, Any]:
-    """The Pixal3D multi-view template as an API prompt, from framed views to a vertex-coloured GLB.
-
-    Node settings are the template's (seeds offset by `seed`); the end of the chain is
-    RemeshMesh (UDF, 768) -> DecimateMesh(`faces`) -> PaintMesh -> GLB.
-    """
-    def ks(model: str, pos: tuple[str, int], neg: tuple[str, int], latent: tuple[str, int], s: int, steps: int,
-           cfg: float, scheduler: str) -> dict[str, Any]:
+def _pixal3d_chain(p: dict[str, Any], model: str, seed: int, faces: int, prefix: str) -> dict[str, Any]:
+    """Add the Pixal3D sampling chain after a conditioning node `cond` (positive 0, negative 1): the
+    templates' sampler settings (seeds offset by `seed`), then RemeshMesh (solid, 768) ->
+    DecimateMesh(`faces`) -> PaintMesh -> GLB (node `save`)."""
+    def ks(model_node: str, pos: tuple[str, int], neg: tuple[str, int], latent: tuple[str, int], s: int,
+           steps: int, cfg: float, scheduler: str) -> dict[str, Any]:
         return {"class_type": "KSampler", "inputs": {
-            "model": [model, 0], "seed": s, "steps": steps, "cfg": cfg, "sampler_name": "euler",
+            "model": [model_node, 0], "seed": s, "steps": steps, "cfg": cfg, "sampler_name": "euler",
             "scheduler": scheduler, "positive": list(pos), "negative": list(neg), "latent_image": list(latent),
             "denoise": 1.0}}
 
-    p: dict[str, Any] = {
+    p.update({
         "clip": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": CLIP}},
         "vae_shape": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_SHAPE}},
         "vae_tex": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_TEXTURE}},
-        "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": MODEL, "weight_dtype": "default"}},
+        "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
         # CFG override and rescale match the original pipeline's defaults (template note).
         "cfg_struct": {"class_type": "CFGOverride", "inputs": {"model": ["unet", 0], "cfg": 1.0,
                                                                "start_percent": 0.667, "end_percent": 1.0}},
@@ -209,13 +367,8 @@ def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_F
         "rescale_struct": {"class_type": "RescaleCFG", "inputs": {"model": ["cfg_struct", 0], "multiplier": 0.7}},
         "rescale_shape": {"class_type": "RescaleCFG", "inputs": {"model": ["cfg_shape", 0], "multiplier": 0.5}},
         "sampling": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["rescale_struct", 0], "shift": 5.0}},
-        "cond": {"class_type": "Pixal3DMultiViewConditioning",
-                 "inputs": {"clip_vision_model": ["clip", 0], "fov": fov}},
         "empty": {"class_type": "EmptyTrellis2LatentStructure", "inputs": {"batch_size": 1}},
-    }
-    for v, name in views.items():
-        p[f"view_{v}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
-        p["cond"]["inputs"][v] = [f"view_{v}", 0]
+    })
     p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, 12, 7.5, "normal")
     p["structure"] = {"class_type": "VaeDecodeStructureTrellis2",
                       "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0], "resolution": "32"}}
@@ -248,6 +401,41 @@ def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_F
     return p
 
 
+def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_FACES,
+                    prefix: str = "pokefit/figure", fov: float = FOV_DEG) -> dict[str, Any]:
+    """The Pixal3D multi-view template ("Multi Views to 3D") as an API prompt: framed rig views -> GLB."""
+    p: dict[str, Any] = {"cond": {"class_type": "Pixal3DMultiViewConditioning",
+                                  "inputs": {"clip_vision_model": ["clip", 0], "fov": fov}}}
+    for v, name in views.items():
+        p[f"view_{v}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        p["cond"]["inputs"][v] = [f"view_{v}", 0]
+    return _pixal3d_chain(p, MODEL, seed, faces, prefix)
+
+
+def single_prompt(photo: str, seed: int = 0, faces: int = DEFAULT_FACES,
+                  prefix: str = "pokefit/figure") -> dict[str, Any]:
+    """One photo from any angle -> GLB, as the template "Pixal3D & TRELLIS.2: Image to Model": BiRefNet
+    mask, crop to it (pad 1.1), MoGe-2 estimates the crop's horizontal FOV, single-view Pixal3D. The mesh is
+    posed as the photo shows it (turn it upright in pokefit's Figure card if the photo was angled)."""
+    p: dict[str, Any] = {
+        "load": {"class_type": "LoadImage", "inputs": {"image": photo}},
+        "bg": {"class_type": "LoadBackgroundRemovalModel", "inputs": {"bg_removal_name": BG_MODEL}},
+        "mask": {"class_type": "RemoveBackground", "inputs": {"bg_removal_model": ["bg", 0], "image": ["load", 0]}},
+        "crop": {"class_type": "ImageCropToMask", "inputs": {"images": ["load", 0], "masks": ["mask", 0],
+                                                             "width": FRAME, "height": FRAME, "pad_factor": PAD,
+                                                             "grow_mask": 0, "background": "#000000"}},
+        "moge": {"class_type": "LoadMoGeModel", "inputs": {"model_name": MOGE_MODEL}},
+        "geometry": {"class_type": "MoGeInference", "inputs": {
+            "moge_model": ["moge", 0], "image": ["crop", 0], "resolution_level": 9, "fov_x_degrees": 0.0,
+            "batch_size": 4, "force_projection": True, "apply_mask": True, "refine_steps": 3}},
+        "fov": {"class_type": "MoGeGeometryToFOV", "inputs": {"moge_geometry": ["geometry", 0],
+                                                              "axis": "horizontal", "unit": "degrees"}},
+        "cond": {"class_type": "Pixal3DConditioning", "inputs": {"clip_vision_model": ["clip", 0],
+                                                                 "image": ["crop", 0], "camera_angle_x": ["fov", 0]}},
+    }
+    return _pixal3d_chain(p, MODEL_SINGLE, seed, faces, prefix)
+
+
 def _png(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
@@ -266,9 +454,30 @@ def _first_file(outputs: dict[str, Any], node: str) -> dict[str, Any]:
     raise ComfyError(f"node {node} produced no file: {json.dumps(out)[:500]}")
 
 
+def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, faces: int = DEFAULT_FACES,
+                 log: Any = print) -> dict[str, Any]:
+    """One photo of the figure from any angle -> GLB (single-view Pixal3D, `single_prompt`). The colours
+    are the model's own (photo colours need the rig's known cameras: TODO for a single photo)."""
+    comfy = Comfy(url)
+    if not comfy.alive():
+        raise ComfyError(f"ComfyUI is not running at {url} (see AGENTS.md: Photos to 3D)")
+    tag = uuid.uuid4().hex[:8]
+    name = comfy.upload(f"pokefit_{tag}_photo.png", _png(Image.open(photo).convert("RGB")))
+    stage = "generating with Pixal3D (one photo, a few minutes)"
+    log(stage)
+    t0 = time.time()
+    outs = comfy.run(single_prompt(name, seed, faces, prefix=f"pokefit/{out.stem}_{tag}"),
+                     progress=lambda s: log(f"{stage}: {s:.0f} s"))
+    data = comfy.fetch(_first_file(outs, "save"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    return {"glb": str(out), "views": ["photo"], "generate_seconds": round(time.time() - t0, 1), "bytes": len(data),
+            "photo_colour_share": None}
+
+
 def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, seed: int = 0,
                   faces: int = DEFAULT_FACES, mirror_right: bool = False, work: Path | None = None,
-                  log: Any = print) -> dict[str, Any]:
+                  log: Any = print, photo_colour: bool = True) -> dict[str, Any]:
     """Run the whole pipeline; writes `out` (.glb) and the framed views next to it. Returns a report."""
     names = [v for v in VIEWS if v in photos]
     if not names or names[0] != "front":
@@ -303,7 +512,13 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, se
     outs = comfy.run(generate_prompt(views, seed, faces, prefix=f"pokefit/{out.stem}_{tag}"),
                      progress=lambda s: log(f"{stage}: {s:.0f} s"))
     data = comfy.fetch(_first_file(outs, "save"))
+    seen = None
+    if photo_colour:
+        (work / f"{out.stem}_model_colours.glb").write_bytes(data)     # the model's own colours, kept
+        log("putting the photos' colours on the model")
+        data, seen = recolour_glb(data, framed)
     out.write_bytes(data)
     return {"glb": str(out), "views": names, "mask_seconds": round(t1 - t0, 1),
             "generate_seconds": round(time.time() - t1, 1), "bytes": len(data),
+            "photo_colour_share": None if seen is None else round(seen, 3),
             "framing": {v: {"scale": round(f.scale, 4), "box": f.box} for v, f in framed.items()}}

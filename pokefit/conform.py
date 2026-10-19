@@ -54,6 +54,7 @@ DEFAULT_FILL = 2.5   # mm: largest gap under the figure the flat base fills
 FILL_CELL = 0.4      # mm: grid of the fill solid
 FILL_OVERLAP = 0.4   # mm the fill reaches into the figure (the slicer unions overlapping parts)
 FILL_NAME = "flat base"
+OUTLINE_ROUNDS = 3   # Laplacian passes rounding the fill's grid-stepped outline
 
 
 @dataclass
@@ -257,6 +258,28 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     return out, info
 
 
+def smooth_outline(px: np.ndarray, py: np.ndarray, walls: list[tuple[int, int]], rounds: int = OUTLINE_ROUNDS
+                   ) -> tuple[np.ndarray, np.ndarray]:
+    """Round off the flat base's grid-stepped outline: corners on its walls move toward the mean of their
+    two outline neighbours (Laplacian, `rounds` times). Corners with other than two outline neighbours
+    (a pinch) stay put. Top and bottom share these XY, so walls stay vertical and the solid closed."""
+    nbr: dict[int, list[int]] = {}
+    for e0, e1 in walls:
+        nbr.setdefault(e0, []).append(e1)
+        nbr.setdefault(e1, []).append(e0)
+    ring = np.array([k for k, v in nbr.items() if len(v) == 2], np.int64)
+    if not len(ring):
+        return px, py
+    a = np.array([nbr[k][0] for k in ring], np.int64)
+    b = np.array([nbr[k][1] for k in ring], np.int64)
+    x, y = px.astype(np.float64).copy(), py.astype(np.float64).copy()
+    for _ in range(rounds):
+        nx = 0.5 * x[ring] + 0.25 * (x[a] + x[b])
+        ny = 0.5 * y[ring] + 0.25 * (y[a] + y[b])
+        x[ring], y[ring] = nx, ny
+    return x, y
+
+
 def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float, cell: float, overlap: float,
               extruder: int) -> Part | None:
     """A solid filling the gap between the bed and the figure's underside over the disc.
@@ -313,8 +336,8 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
     px = field.x0 + (cj * b - 0.5) * field.step
     py = field.y0 + (ci * b - 0.5) * field.step
     n_c = len(ci)
-    verts = np.vstack([np.column_stack([px, py, corner[used]]), np.column_stack([px, py, np.zeros(n_c)])])
     faces: list[list[int]] = []
+    walls: list[tuple[int, int]] = []
     for i, j in zip(*np.nonzero(mask)):
         a, bb, c, d = idx[i, j], idx[i, j + 1], idx[i + 1, j + 1], idx[i + 1, j]   # CCW from above
         faces += [[a, bb, c], [a, c, d], [a + n_c, c + n_c, bb + n_c], [a + n_c, d + n_c, c + n_c]]
@@ -322,6 +345,9 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
                                    ((i, j - 1), (d, a))):
             if not (0 <= ni < cy and 0 <= nj < cx and mask[ni, nj]):
                 faces += [[e0 + n_c, e1 + n_c, e1], [e0 + n_c, e1, e0]]       # outward wall
+                walls.append((int(e0), int(e1)))
+    px, py = smooth_outline(px, py, walls)
+    verts = np.vstack([np.column_stack([px, py, corner[used]]), np.column_stack([px, py, np.zeros(n_c)])])
     import trimesh
     mesh = trimesh.Trimesh(verts, np.array(faces), process=True)
     mesh.fix_normals()

@@ -75,7 +75,13 @@ def layer_use(parts: list[Part], object_extruder: int, n_filaments: int, layer_h
                 lo.append(np.array([z.min()]))
                 hi.append(np.array([z.max()]))
                 st.append(np.array([s or base]))
-    zlo, zhi, state = np.concatenate(lo), np.concatenate(hi), np.concatenate(st)
+    return layer_use_arrays(np.concatenate(lo), np.concatenate(hi), np.concatenate(st), n_filaments, layer_height,
+                            first_layer)
+
+
+def layer_use_arrays(zlo: np.ndarray, zhi: np.ndarray, state: np.ndarray, n_filaments: int, layer_height: float,
+                     first_layer: float | None = None) -> np.ndarray:
+    """`layer_use` from (z bottom, z top, 1-based filament) per printed (sub-)triangle."""
     first = layer_height if first_layer is None else first_layer
     top = float(zhi.max())
     n_layers = max(1, int(np.ceil((top - first) / layer_height)) + 1)

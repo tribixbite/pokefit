@@ -15,7 +15,10 @@ import pytest
 import trimesh
 from PIL import Image
 
-from pokefit.imageto3d import FRAME, PAD, ComfyError, frame_views, generate_prompt, mask_prompt, photos_to_glb
+from pokefit.imageto3d import (FRAME, PAD, ComfyError, Framed, frame_views, generate_prompt, mask_prompt,
+                               single_prompt,
+                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb)
+from pokefit.model3mf import read_project
 
 
 def _photo(size: tuple[int, int], box: tuple[int, int, int, int], colour: tuple[int, int, int]) -> tuple[Image.Image, np.ndarray]:
@@ -71,6 +74,11 @@ def test_prompts_are_wired() -> None:
     assert g["decimate"]["inputs"]["target_face_count"] == 1234
     assert g["remesh"]["inputs"]["sign_mode"] == "solid"                       # one watertight solid
     assert g["s_struct"]["inputs"]["seed"] == 59
+    one = single_prompt("p.png", faces=999)
+    _links_ok(one)
+    assert one["cond"]["class_type"] == "Pixal3DConditioning" and one["cond"]["inputs"]["camera_angle_x"] == ["fov", 0]
+    assert one["unet"]["inputs"]["unet_name"].startswith("pixal3d_int8") and one["decimate"]["inputs"]["target_face_count"] == 999
+    assert g["unet"]["inputs"]["unet_name"].startswith("pixal3d_multiview")
     m = mask_prompt({"front": "f.png", "left": "l.png"})
     _links_ok(m)
     assert {k for k in m if k.startswith("save_")} == {"save_front", "save_left"}
@@ -151,7 +159,7 @@ def test_photos_to_glb_against_a_fake_comfy(tmp_path: Path, fake_comfy: str) -> 
         paths[v] = tmp_path / f"{v}.png"
         img.save(paths[v])
     out = tmp_path / "fig.glb"
-    rep = photos_to_glb(paths, out, url=fake_comfy, mirror_right=True, log=lambda *_: None)
+    rep = photos_to_glb(paths, out, url=fake_comfy, mirror_right=True, log=lambda *_: None, photo_colour=False)
     assert out.read_bytes() == FakeComfy.glb and rep["views"] == ["front", "left", "right"]
     gen = FakeComfy.prompts[1]
     assert set(gen["cond"]["inputs"]) >= {"front", "left", "right"} and "back" not in gen["cond"]["inputs"]
@@ -165,3 +173,39 @@ def test_needs_a_front_and_a_running_comfy(tmp_path: Path) -> None:
         photos_to_glb({"left": tmp_path / "l.png"}, tmp_path / "x.glb")
     with pytest.raises(ComfyError, match="not running"):
         photos_to_glb({"front": tmp_path / "f.png"}, tmp_path / "x.glb", url="http://127.0.0.1:9")
+
+
+def test_photo_colours_land_where_the_views_see() -> None:
+    """A sphere in the rig, a front photo red on the image's left and blue on its right: front vertices
+    take those colours by side; vertices facing away keep (a correction of) the model colour."""
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=0.4)
+    v, n = np.asarray(ball.vertices), np.asarray(ball.vertex_normals)
+    img = np.zeros((FRAME, FRAME, 3), np.uint8)
+    img[:, : FRAME // 2] = (220, 30, 30)
+    img[:, FRAME // 2:] = (30, 30, 220)
+    px, py, _ = project(v, "front")
+    mask = np.zeros((FRAME, FRAME), bool)
+    r = int(np.ptp(px) / 2) + 2
+    yy, xx = np.mgrid[:FRAME, :FRAME]
+    mask[(xx - FRAME / 2) ** 2 + (yy - FRAME / 2) ** 2 <= r * r] = True
+    base = np.column_stack([v[:, 0] * 50 + 100, v[:, 1] * 50 + 100, v[:, 2] * 50 + 100])   # varied model colour
+    out, share = photo_colours(v, n, base, {"front": Framed("front", Image.fromarray(img), 1.0, (0, 0, 0, 0), mask)})
+    front = n[:, 1] < -0.8                                     # facing the front camera (at -y)
+    left, right = front & (v[:, 0] < -0.05), front & (v[:, 0] > 0.05)
+    assert np.all(out[left, 0] > 180) and np.all(out[left, 2] < 80)
+    assert np.all(out[right, 2] > 180) and np.all(out[right, 0] < 80)
+    away = n[:, 1] > 0.5
+    assert 0.2 < share < 0.6 and not np.any(np.all(out[away] == img[0, 0], axis=1))
+
+
+def test_vertex_colour_glb_round_trips(tmp_path: Path) -> None:
+    box = trimesh.creation.box((0.02, 0.02, 0.02)).subdivide()
+    srgb = np.where(box.vertices[:, :1] > 0, [200, 40, 40], [40, 40, 200]).astype(float)
+    path = tmp_path / "c.glb"
+    path.write_bytes(vertex_colour_glb(box.vertices, box.faces, srgb))
+    cols = {tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in read_project(path).colours}
+    assert any(abs(r - 200) < 6 and b < 60 for r, _, b in cols) and any(abs(b - 200) < 6 and r < 60 for r, _, b in cols)
+    # recolour_glb keeps the geometry and writes colour (a view that sees nothing leaves the model colour)
+    empty = Framed("front", Image.new("RGB", (FRAME, FRAME)), 1.0, (0, 0, 0, 0), np.zeros((FRAME, FRAME), bool))
+    data, share = recolour_glb(path.read_bytes(), {"front": empty})
+    assert share == 0.0 and data[:4] == b"glTF"

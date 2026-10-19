@@ -246,15 +246,15 @@ class Handler(BaseHTTPRequestHandler):
         """Photos of a figure (base64, by view) -> a coloured GLB via ComfyUI, then loaded like a file.
 
         Runs as a job (minutes); its `progress` says what it is doing."""
-        from .imageto3d import VIEWS, photos_to_glb
+        from .imageto3d import VIEWS, photo_to_glb, photos_to_glb
         body = self._json_body()
         views = body.get("views") or {}
-        if not isinstance(views, dict) or not views.get("front"):
-            raise ApiError(400, "a front photo is required")
+        if not isinstance(views, dict) or not (views.get("front") or views.get("photo")):
+            raise ApiError(400, "a front photo (or one photo from any angle) is required")
         d = UPLOAD_DIR / f"photos_{uuid.uuid4().hex[:8]}"
         d.mkdir(parents=True, exist_ok=True)
         photos: dict[str, Path] = {}
-        for v in VIEWS:
+        for v in (*VIEWS, "photo"):
             if views.get(v):
                 raw = str(views[v]).split(",", 1)[-1]          # a data: URL or bare base64
                 try:
@@ -270,8 +270,12 @@ class Handler(BaseHTTPRequestHandler):
             _jobs[jid]["progress"] = text.strip()
 
         def run() -> dict[str, Any]:
-            rep = photos_to_glb(photos, d / f"{name}.glb", url=COMFY_URL, seed=int(body.get("seed") or 0),
-                                mirror_right=bool(body.get("mirror_right")), log=log)
+            seed = int(body.get("seed") or 0)
+            if "photo" in photos and "front" not in photos:
+                rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, seed=seed, log=log)
+            else:
+                rep = photos_to_glb({v: f for v, f in photos.items() if v != "photo"}, d / f"{name}.glb",
+                                    url=COMFY_URL, seed=seed, mirror_right=bool(body.get("mirror_right")), log=log)
             log("fitting the figure")
             return {**_load(d / f"{name}.glb"), "photos": rep}
         self._json({"job": _start_job(run, jid)})

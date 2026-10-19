@@ -36,7 +36,7 @@ def _bend(s: str) -> float | None:
 
 def cmd_photos(a: argparse.Namespace) -> int:
     """Photos -> coloured GLB with Pixal3D in a local ComfyUI (pokefit/imageto3d.py)."""
-    from .imageto3d import DEFAULT_FACES, photos_to_glb
+    from .imageto3d import DEFAULT_FACES, photo_to_glb, photos_to_glb
 
     import time
     photos = {v: getattr(a, v) for v in ("front", "left", "back", "right") if getattr(a, v)}
@@ -49,8 +49,13 @@ def cmd_photos(a: argparse.Namespace) -> int:
             print(text, flush=True)
             last_stage[0], last_t[0] = stage, time.time()
 
-    rep = photos_to_glb(photos, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES,
-                        mirror_right=a.mirror_right, log=log)
+    if a.photo and photos:
+        raise SystemExit("give either --photo (one photo, any angle) or --front/--left/--back/--right")
+    if a.photo:
+        rep = photo_to_glb(a.photo, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES, log=log)
+    else:
+        rep = photos_to_glb(photos, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES,
+                            mirror_right=a.mirror_right, log=log, photo_colour=not a.model_colours)
     print(json.dumps(rep, indent=1))
     print(f"next: python -m pokefit fit {a.out} --out <folder>")
     return 0
@@ -171,7 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     for view in ("front", "left", "back", "right"):
         ph.add_argument(f"--{view}", type=Path, help=f"photo of the figure's {view} side"
                         + (" (required; the pose the figure gets)" if view == "front" else ""))
+    ph.add_argument("--photo", type=Path, help="instead of the views: ONE photo from any angle (single-view model; "
+                                                "turn the result upright with --rotate-* when fitting)")
     ph.add_argument("--mirror-right", action="store_true", help="use the left photo mirrored as the right view")
+    ph.add_argument("--model-colours", action="store_true",
+                    help="keep the model's own colours (default: the photos' colours projected onto it)")
     ph.add_argument("--out", type=Path, required=True, help="the .glb to write")
     ph.add_argument("--comfy", default="http://127.0.0.1:8188", help="ComfyUI server URL")
     ph.add_argument("--seed", type=int, default=0)

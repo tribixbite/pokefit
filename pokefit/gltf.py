@@ -180,6 +180,7 @@ class TextureColours:
     adjacency: np.ndarray     # (n, 2) face pairs sharing an edge
     exact: bool               # the fine clusters are the file's own flat colours
     _cache: dict[int | None, tuple[list[str], dict[int, str], int]] = field(default_factory=dict)
+    _leaves: dict[int | None, tuple[list[list[int]], np.ndarray]] = field(default_factory=dict)
 
     @property
     def auto_count(self) -> int:
@@ -207,30 +208,70 @@ class TextureColours:
         order = np.argsort(-np.array(weights), kind="stable")
         return [groups[i] for i in order]
 
-    def paint(self, count: int | None = None) -> tuple[list[str], dict[int, str], int]:
-        """(palette hex colours, tri_extra paint per face, base filament) for a palette size."""
-        if count not in self._cache:
+    def leaves(self, count: int | None) -> tuple[list[list[int]], np.ndarray]:
+        """(groups, (faces, leaves) despeckled group per sub-triangle) for a palette size, cached."""
+        if count not in self._leaves:
             groups = self.groups(count)
             to_group = np.zeros(len(self.lab), np.intp)
             for gi, g in enumerate(groups):
                 to_group[g] = gi
-            leaf = to_group[self.labels]
-            leaf = self._despeckle(leaf, len(groups))
+            self._leaves[count] = (groups, self._despeckle(to_group[self.labels], len(groups)))
+        return self._leaves[count]
+
+    def paint(self, count: int | None = None) -> tuple[list[str], dict[int, str], int]:
+        """(palette hex colours, tri_extra paint per face, base filament) for a palette size."""
+        if count not in self._cache:
+            groups, leaf = self.leaves(count)
             n_leaf = leaf.shape[1]
             share = np.bincount(leaf.ravel(), weights=np.repeat(self.area / n_leaf, n_leaf), minlength=len(groups))
             base = int(np.argmax(share))
             extra = {i: f'paint_color="{encode_tree(tree_of(leaf[i] + 1))}"'
                      for i in np.nonzero((leaf != base).any(axis=1))[0].tolist()}
-            colours = []
-            for g in groups:
-                w = self.weight[g]
-                c = (self.rgb[g] * w[:, None]).sum(axis=0) / w.sum()
-                colours.append("#{:02X}{:02X}{:02X}".format(*(int(round(x)) for x in np.clip(c, 0, 255))))
-            self._cache[count] = (colours, extra, base + 1)
+            self._cache[count] = (self._palette(groups), extra, base + 1)
         return self._cache[count]
 
+    def _palette(self, groups: list[list[int]]) -> list[str]:
+        """Hex colour of each group: the surface-weighted mean of its fine clusters."""
+        colours = []
+        for g in groups:
+            w = self.weight[g]
+            c = (self.rgb[g] * w[:, None]).sum(axis=0) / w.sum()
+            colours.append("#{:02X}{:02X}{:02X}".format(*(int(round(x)) for x in np.clip(c, 0, 255))))
+        return colours
+
+    def colour_spans(self, count: int | None, corner_z: np.ndarray) -> tuple[list[str], np.ndarray, int]:
+        """(palette, spans, base filament) for a palette size without building paint: `spans` rows are
+        (face, filament 1-based, z bottom, z top) of each colour inside each triangle, from the heights of
+        its (despeckled) sub-triangles — exactly what the paint prints. `corner_z`: (faces, 3) corner z."""
+        groups, leaf = self.leaves(count)
+        n_faces, n_leaf = leaf.shape
+        n = len(groups)
+        rows = np.repeat(np.arange(n_faces), n_leaf)
+        depth = int(round(np.log(n_leaf) / np.log(4)))
+        bary = leaf_barycentrics(depth)                                       # (leaves, corner, weights)
+        lz = np.einsum("lkc,fc->flk", bary, np.asarray(corner_z, np.float64))  # (faces, leaves, 3)
+        # Per (face, colour): min / max over its sub-triangles, by sorting on the pair (faster than ufunc.at).
+        key = rows.astype(np.int64) * n + leaf.ravel()
+        order = np.argsort(key, kind="stable")
+        k_sorted = key[order]
+        starts = np.flatnonzero(np.r_[True, k_sorted[1:] != k_sorted[:-1]])
+        lo = np.minimum.reduceat(lz.min(axis=2).ravel()[order], starts)
+        hi = np.maximum.reduceat(lz.max(axis=2).ravel()[order], starts)
+        pair = k_sorted[starts]
+        share = np.bincount(leaf.ravel(), weights=np.repeat(self.area / n_leaf, n_leaf), minlength=n)
+        spans = np.column_stack([pair // n, pair % n + 1, lo, hi])
+        return self._palette(groups), spans, int(np.argmax(share)) + 1
+
+    @staticmethod
+    def _majority(leaf: np.ndarray, n: int) -> np.ndarray:
+        """Most common group per triangle (lowest index on ties, like bincount().argmax())."""
+        n_faces, n_leaf = leaf.shape
+        key = np.repeat(np.arange(n_faces, dtype=np.int64) * n, n_leaf) + leaf.ravel()
+        counts = np.bincount(key, minlength=n_faces * n).reshape(n_faces, n)
+        return np.asarray(counts.argmax(axis=1))
+
     def _despeckle(self, leaf: np.ndarray, n: int) -> np.ndarray:
-        """Specks join the colour around them (module doc, step 3)."""
+        """Specks join the colour around them (module doc, step 3). Vectorised: numpy throughout."""
         from scipy.sparse import coo_matrix
         from scipy.sparse.csgraph import connected_components
 
@@ -239,7 +280,7 @@ class TextureColours:
         total = float(self.area.sum())
         a, b = self.adjacency[:, 0], self.adjacency[:, 1]
         for _ in range(3):                  # a removed speck can leave a smaller one beside it
-            major = np.array([np.bincount(r, minlength=n).argmax() for r in leaf]) if n_leaf > 1 else leaf[:, 0]
+            major = self._majority(leaf, n) if n_leaf > 1 else leaf[:, 0]
             same = major[a] == major[b]
             graph = coo_matrix((np.ones(int(same.sum())), (a[same], b[same])), shape=(n_faces, n_faces))
             _, comp = connected_components(graph, directed=False)
@@ -252,32 +293,32 @@ class TextureColours:
             xs = np.concatenate([a[border], b[border]])
             ys = np.concatenate([b[border], a[border]])
             keep = small[xs]
+            if not keep.any():
+                break
             key = comp[xs[keep]].astype(np.int64) * n + major[ys[keep]]
             uniq, inv = np.unique(key, return_inverse=True)
             votes = np.bincount(inv.ravel(), weights=self.area[ys[keep]])
             order = np.lexsort((-votes, uniq // n))        # per patch, the strongest colour first
             first = np.ones(len(order), bool)
             first[1:] = (uniq[order] // n)[1:] != (uniq[order] // n)[:-1]
-            winner = {int(k // n): int(k % n) for k in uniq[order][first].tolist()}
-            changed = False
-            for f in np.nonzero(small)[0].tolist():
-                new = winner.get(int(comp[f]))
-                if new is not None and new != major[f]:
-                    leaf[f][leaf[f] == major[f]] = new
-                    changed = True
-            if not changed:
+            winner = np.full(int(comp.max()) + 1, -1, np.int64)
+            winner[uniq[order][first] // n] = uniq[order][first] % n
+            new = winner[comp]
+            change = small & (new >= 0) & (new != major)
+            if not change.any():
                 break
+            hit = change[:, None] & (leaf == major[:, None])
+            leaf = np.where(hit, new[:, None], leaf)
         # Sub-triangle flecks: a colour inside a triangle that is no neighbour's (or its own)
         # main colour does not continue anywhere; give it the triangle's main colour.
         if n_leaf > 1:
-            major = np.array([np.bincount(r, minlength=n).argmax() for r in leaf])
-            near: list[set[int]] = [{int(m)} for m in major]
-            for x, y in zip(a.tolist(), b.tolist()):
-                near[x].add(int(major[y]))
-                near[y].add(int(major[x]))
-            for f in np.nonzero((leaf != major[:, None]).any(axis=1))[0].tolist():
-                stray = ~np.isin(leaf[f], list(near[f]))
-                leaf[f][stray] = major[f]
+            major = self._majority(leaf, n)
+            allowed = np.zeros((n_faces, n), bool)
+            allowed[np.arange(n_faces), major] = True
+            allowed[a, major[b]] = True
+            allowed[b, major[a]] = True
+            stray = ~np.take_along_axis(allowed, leaf, axis=1)
+            leaf = np.where(stray, major[:, None], leaf)
         return leaf
 
 

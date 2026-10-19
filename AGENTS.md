@@ -156,6 +156,13 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
 - Views: the figure's own left (camera at +X when it faces -Y = it faces the image's left). Photos are framed
   by pokefit, not ComfyUI: one scale for all views (same height), largest extent at 1024/1.1 px, centred, on
   black (`frame_views`). `--mirror-right` adds the mirrored left photo as the right view.
+- Colours: by default the photos' own colours are projected back onto the mesh (`photo_colours`: the mesh
+  sits in the rig frame, silhouette IoU 0.94–0.98; z-buffered, masks eroded 4 px, cos² weights); vertices no
+  view sees keep the model colour, gain-corrected. Fixes the model's dark albedo and blurred eyes.
+  `--model-colours` keeps the model's own (also saved as `<name>_model_colours.glb`).
+- One photo from any angle: `--photo P` (or the dialog's "Or one photo, any angle"): BiRefNet crop, MoGe-2
+  FOV, single-view Pixal3D (`pixal3d_int8_convrot` + `models/geometry_estimation/moge_2_vitl_normal_fp16`).
+  The mesh is posed as the photo shows it (a side photo needs a 90° turn about Z); model colours only.
 - RemeshMesh must use `sign_mode: "solid"`: the template's `udf` gives a double-walled skin (92 % of the surface
   "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.
 - Measured: ~3.4 min for 3 views (int8 weights, 200k faces) while another app held 12 GB of the VRAM

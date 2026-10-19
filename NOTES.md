@@ -14,21 +14,19 @@ exist only on the original Windows machine (ask the user for the files).
    count's cost (Colours card chips). Ideas left: make auto prefer ≤ 2 colours per nozzle when the figure
    allows (2 colours on the X2D = no filament changes); hue-aware merging (closest-first merges the cream
    belly into blue at 3).
-3. **Photos -> 3D quality** (`pokefit/imageto3d.py`): eyes come out as black blobs (highlights / red iris
-   lost at vertex-colour resolution); colours are darker than the photos (PBR albedo, no lighting) — e.g.
-   blue #6DAAB2 vs photo ~#8ECAD8; idea: rescale each palette colour toward the photos' colour of the same
-   cluster. Try `RemeshMesh` resolution / `DecimateMesh` faces for finer colour; try the textured output
-   (UnwrapMesh + BakeTextureFromVoxel, as the template) vs `PaintMesh`.
-4. **Profile photos from ordinary photos** (user's stretch goal): only front/left/back[/right] at eye height
-   work now (front only also works: single view). Options to evaluate: Pixal3D's single-image node on the
-   best photo; a multi-view diffusion model to synthesise the orbit views (check what ComfyUI ships natively
-   first); the template's "turnaround sheet" route uses a paid Google API — avoid.
-5. **Flat base fill** (`conform.base_fill`): its outline is 0.4 mm steps with vertical walls, visible as a
-   pedestal between the legs in the preview; smooth the outline / slope the walls. Conform is designed for the
-   largest-fit scale and the default washer's floor (a smaller chosen size keeps the same shape).
-6. **Big meshes are slow** (600k-triangle LEGO GLB: 82 s locally; 200k-face photo Squirtle analyse 18.5 s,
-   of which conform ~5 s; the per-count toolchange table adds ~5 s on a glTF's first analysis): profile
-   `read_gltf`, mesh checks, conform's fit rounds.
+3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
+   (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
+   survive despeckling on the head), and a single-photo result keeps the model's own colours (its camera is
+   not the rig's; project with `Pixal3DConditioning`'s camera to fix). Auto-turn a single-photo result
+   upright/front (now a 90° turn by hand for a side photo).
+4. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
+   FOV). Not done: combining several arbitrary-angle photos (would need their camera poses — e.g. estimate
+   azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).
+5. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
+   size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
+6. **Big meshes** (200k-face photo Squirtle: load 6.6 s, analyse 20 s = mesh checks 10 s once per file,
+   conform ~9 s, colour-change table 4 s, was 30 s; 600k-triangle LEGO GLB 82 s): conform's fit rounds
+   (`fit.best_offset` Nelder–Mead) and `mesh_checks` are next.
 7. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default; note beambam
    is AGPL, so pokefit only calls it as a program); Cloudflare "Always Use HTTPS" (off; the page redirects
    itself); turning on `has_filament_switcher` (track switch) in the Bambu project (it is off there).

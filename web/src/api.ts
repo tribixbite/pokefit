@@ -205,7 +205,7 @@ export async function readPrinter(clear = false): Promise<Config> {
 
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
 export async function photosToFigure(
-  photos: Partial<Record<"front" | "left" | "back" | "right", File>>,
+  photos: Partial<Record<"front" | "left" | "back" | "right" | "photo", File>>,
   mirrorRight: boolean,
   onTick?: (seconds: number, progress: string) => void,
 ): Promise<LoadResponse> {

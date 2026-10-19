@@ -41,6 +41,7 @@ your own GPU by [Pixal3D](https://github.com/TencentARC/Pixal3D) in a local Comf
 
 ```sh
 python -m pokefit photos --front front.png --left left.png --back back.png --out figure.glb
+python -m pokefit photos --photo any-angle.jpg --out figure.glb      # one photo works too
 python -m pokefit fit figure.glb --out out/            # or "Make one from photos…" in the local web UI
 ```
 

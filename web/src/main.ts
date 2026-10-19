@@ -904,13 +904,15 @@ function bind(): void {
   photosDlg.addEventListener("click", (e) => { if (e.target === photosDlg) showPhotos(false); });
   $("photosGo").addEventListener("click", () => {
     const pick = (id: string): File | undefined => $<HTMLInputElement>(id).files?.[0];
-    const photos = { front: pick("photoFront"), left: pick("photoLeft"), back: pick("photoBack"), right: pick("photoRight") };
-    if (!photos.front) { toast("A front photo is needed: it is the pose the figure gets."); return; }
+    const any = pick("photoAny");
+    const photos = { front: pick("photoFront"), left: pick("photoLeft"), back: pick("photoBack"), right: pick("photoRight"),
+      photo: any };
+    if (!photos.front && !any) { toast("Add a front photo (the pose the figure gets), or one photo from any angle."); return; }
     const mirror = $<HTMLInputElement>("photoMirror").checked;
     showPhotos(false);
     void load(() => api.photosToFigure(photos, mirror, (s, what) => {
       $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
-    }), `${photos.front.name} (from photos)`);
+    }), `${(photos.front ?? any)?.name ?? "photo"} (from photos)`);
   });
 
   // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.

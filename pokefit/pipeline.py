@@ -744,16 +744,26 @@ def toolchange_info(session: Session, params: Params, final: list[Part], scale: 
     if tex is not None and ref:
         key = (session._key(params), round(scale, 5), params.slot, json.dumps(params.paint, sort_keys=True))
         if key not in session._tc_table:
+            # Per palette size from the texture's colour spans (TextureColours.colour_spans): no paint is
+            # built, so all sizes cost about one paint of the current one (30 s -> 3 s on 200k faces).
             rows = []
             unit = session.unit_parts(params)
+            p0 = unit[0]
+            corner_z = p0.vertices[p0.faces][:, :, 2] * scale
+            lh = float(ref.get("layer_height", 0.2) or 0.2)
+            first = float(ref.get("initial_layer_print_height", lh) or lh)
             for k in range(1, min(MAX_PICK, max(tex.auto_count + 2, 6)) + 1):
-                cols, extra, base = tex.paint(k)
-                p0 = unit[0]
-                shaped = [Part(p0.name, base, p0.vertices, p0.faces, dict(extra), p0.subtype), *unit[1:]]
+                cols, spans, base = tex.colour_spans(k, corner_z)
+                use = tc.layer_use_arrays(spans[:, 2], spans[:, 3], spans[:, 1].astype(np.int64), len(cols), lh, first)
+                rest = [Part(p.name, base, p.vertices, p.faces, {}, p.subtype) for p in unit[1:]]
+                if rest:                         # the flat base prints in the base filament
+                    extra_use = tc.layer_use(scaled(rest, scale), base, len(cols), lh, first)
+                    rows_n = max(len(use), len(extra_use))
+                    use = np.pad(use, ((0, rows_n - len(use)), (0, 0))) | np.pad(extra_use, ((0, rows_n - len(extra_use)), (0, 0)))
                 st_k = adapt_settings(ref, list(cols), session.slot(params), False)
-                est = _tc_estimate(scaled(shaped, scale), base, list(cols), st_k)
-                rows.append({"count": k, "changes": est["changes"], "purge_g": est["purge_g"],
-                             "minutes": est["minutes"]})
+                best, _ = tc.plan(use, tc.flush_matrix(st_k, len(cols)), n_nozzles=tc.nozzle_count(st_k))
+                rows.append({"count": k, "changes": best.changes, "purge_g": round(tc.grams(best), 1),
+                             "minutes": round(best.seconds / 60)})
             session._tc_table = {key: rows}
         info["by_count"] = session._tc_table[key]
     return info
