@@ -177,7 +177,8 @@ def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, 
     exe_path = find_exe(exe)
     if exe_path is None:
         return SliceResult(False, error=f"Bambu Studio not found at {exe or DEFAULT_EXE}", copies=copies)
-    out_dir = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="pokefit_slice_"))
+    # Absolute: the CLI runs with cwd = out_dir, so a relative --outputdir would land one level deeper.
+    out_dir = (Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="pokefit_slice_"))).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [str(exe_path), "--slice", "0"]
     if arrange:
