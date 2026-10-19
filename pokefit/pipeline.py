@@ -34,6 +34,7 @@ from .model3mf import (FigureObject, Part, Project, plate_size, read_project, re
                        write_project)
 from .gltf import MAX_PICK
 from .paint import decode_majority, leaves, parse_tree
+from .presets import PresetLibrary, PresetNote
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
 from .shell import flat_spot, from_manifold, to_manifold
@@ -80,6 +81,7 @@ class Params:
     object_id: str | None = None
     slot: int | None = None                      # reference filament slot for slicing/export
     settings_source: str = "reference"           # "reference" (user's printer) or "original"
+    process: str | None = None                   # an imported process preset's name (None = the project's own)
     # Import file: figure filament -> slot of the user's project (1-based; JSON keys are strings).
     filament_map: dict[str, int] | None = None
     # Colorize: the filament colours (index 0 = filament 1; None = the file's) and paint operations
@@ -131,6 +133,7 @@ class Session:
     work_dir: Path
     ball: Ball
     reference: dict | None
+    presets: PresetLibrary | None = None        # Bambu presets the user imported (presets.py)
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
     _frames: dict[tuple[str, float, float, float], list[Part]] = field(default_factory=dict)
     _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
@@ -141,6 +144,7 @@ class Session:
     _painted: dict[tuple, list[Part]] = field(default_factory=dict)     # (orientation, paint) -> parts
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
     _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
+    _settings: dict[tuple, dict] = field(default_factory=dict)          # (presets version, process) -> settings
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -248,6 +252,19 @@ class Session:
             return params.slot
         return default_slot(self.reference) if self.reference else 0
 
+    def settings(self, params: Params) -> dict | None:
+        """The settings exports and slices use: the reference project plus the imported presets.
+
+        Imported filaments are appended after the project's own slots (so `slot` can pick them);
+        `slot_matches` keeps using the project's real slots, which are what is loaded in the AMS.
+        """
+        if not self.reference or self.presets is None or not self.presets.presets:
+            return self.reference
+        key = (id(self.reference), self.presets.version, params.process)
+        if key not in self._settings:
+            self._settings[key] = self.presets.merged(self.reference, params.process)[0]
+        return self._settings[key]
+
 
 def scaled(parts: list[Part], s: float) -> list[Part]:
     return [p.transformed(np.diag([s, s, s, 1.0])) for p in parts]
@@ -264,14 +281,27 @@ def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
     return Session(sid, proj, wd, load_ball(ball_path, CACHE_DIR), ref)
 
 
-def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "") -> dict[str, Any]:
+def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "",
+               presets: PresetLibrary | None = None) -> dict[str, Any]:
     """What the UI needs before a file is loaded: washers, defaults, the reference printer's filament slots.
 
     `reference` is a project the user loaded (their own filament slots); default: DEFAULT_REFERENCE.
+    `presets` are Bambu presets the user imported: their filaments are listed after the project's
+    slots (flagged `imported`), their process presets in `processes`.
     """
     from .slicer import filament_slots
     ref = reference if reference is not None else (
         reference_settings(DEFAULT_REFERENCE) if DEFAULT_REFERENCE.exists() else None)
+    notes: list[PresetNote] = []
+    slots: list[dict[str, Any]] = list(filament_slots(ref)) if ref else []
+    processes = [str(ref.get("print_settings_id", ""))] if ref else []
+    if ref and presets is not None and presets.presets:
+        merged, notes = presets.merged(ref)
+        n_real = len(slots)
+        from .presets import plate_problem
+        slots = [{**s, "imported": i >= n_real, "warning": plate_problem(merged, i) if i >= n_real else ""}
+                 for i, s in enumerate(filament_slots(merged))]
+        processes += presets.processes(ref)
     ball = load_ball(DEFAULT_BALL)
     return {
         "washers": [w.to_dict() for w in CATALOGUE.values()],
@@ -279,7 +309,9 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         "ball_scales": [0.6, 1.0],
         "ball_r_inner": ball.r_inner,             # native: inner diameter = 2 · this · scale
         "params": asdict(Params()),
-        "slots": filament_slots(ref) if ref else [],
+        "slots": slots,
+        "processes": processes,
+        "presets": [n.to_dict() for n in notes],
         "default_slot": default_slot(ref) if ref else 0,
         "reference": reference_name if reference is not None else DEFAULT_REFERENCE.name,
         "printer": (ref or {}).get("printer_settings_id", ""),
@@ -583,8 +615,9 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
 
     t3 = time.time()
     solid = printable_solid(final)
-    layer = float((session.reference or {}).get("layer_height", 0.2) or 0.2)
-    angle = float((session.reference or {}).get("support_threshold_angle", 30) or 30)
+    st = session.settings(params) or {}
+    layer = float(st.get("layer_height", 0.2) or 0.2)
+    angle = float(st.get("support_threshold_angle", 30) or 30)
     ignore = [(p.x, p.y, params.pocket_diameter / 2, p.z + params.pocket_depth) for p in pockets] if params.magnets else []
     printing = [thickness_check(solid), overhang_check(solid, angle, ignore),
                 islands_check(solid, 2 * layer), bed_contact_check(solid)]
@@ -865,8 +898,9 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
 
 
 def export_settings(session: Session, params: Params, supports: bool = False) -> dict | None:
-    if params.settings_source == "reference" and session.reference:
-        return adapt_settings(session.reference, session.colours(params), session.slot(params), supports)
+    ref = session.settings(params)
+    if params.settings_source == "reference" and ref:
+        return adapt_settings(ref, session.colours(params), session.slot(params), supports)
     if params.colours and session.project.settings:
         return resize_filaments(session.project.settings, session.colours(params))
     return session.project.settings
@@ -959,8 +993,9 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
 
 
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:
-    if session.reference:
-        return adapt_settings(session.reference, session.colours(params), session.slot(params), supports)
+    ref = session.settings(params)
+    if ref:
+        return adapt_settings(ref, session.colours(params), session.slot(params), supports)
     st = dict(export_settings(session, params) or {})
     if st:
         st["enable_support"] = "1" if supports else "0"

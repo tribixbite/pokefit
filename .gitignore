@@ -17,3 +17,7 @@ original/
 printed/
 web/.pyodide-cache/
 web/.wheel-cache/
+
+# The user's own photos and Bambu preset exports (personal; not for the public repo)
+imageto3d/
+printer_config/

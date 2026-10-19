@@ -48,6 +48,8 @@ export interface Params {
   object_id: string | null;
   slot: number | null;
   settings_source: "reference" | "original";
+  /** An imported process preset's name; null = the project's own process. */
+  process: string | null;
 }
 
 export interface Washer {
@@ -195,6 +197,18 @@ export interface Slot {
   name: string;
   type: string;
   colour: string;
+  /** A filament preset the user imported (not one of the project's AMS slots). */
+  imported?: boolean;
+  /** Why an imported preset cannot print with the project as set up (e.g. its plate). */
+  warning?: string;
+}
+
+/** What became of one imported Bambu preset. */
+export interface PresetNote {
+  kind: "filament" | "process" | "printer";
+  name: string;
+  status: "used" | "approximate" | "skipped" | "available";
+  note: string;
 }
 
 export interface Config {
@@ -204,6 +218,9 @@ export interface Config {
   params: Params;
   slots: Slot[];
   default_slot: number;
+  /** The project's own process first, then imported process presets for the same printer. */
+  processes: string[];
+  presets: PresetNote[];
   reference: string;
   printer: string;
   process: string;

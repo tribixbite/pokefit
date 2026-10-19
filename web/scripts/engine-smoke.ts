@@ -115,7 +115,22 @@ console.log(`[${secs()} s] GLB: ${glbObj.parts.length} part, colours ${glbObj.co
   `${(glbLoaded.report.fit.scale * 100).toFixed(1)} %; textured: ${ballObj.colours.join(" ")}, ` +
   `${ballObj.parts[0].painted} painted, texture_colours ${JSON.stringify(ballObj.texture_colours)}`);
 
+// Bambu preset export (a "Filament presets.zip"): its filament becomes a selectable slot.
+pyodide.runPython(`
+import io, json, zipfile
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("eSUN PETG Basic.json", json.dumps({"filament_settings_id": ["eSUN PETG Basic"], "from": "User",
+        "inherits": "Generic PETG @BBL X2D 0.4 nozzle", "name": "eSUN PETG Basic", "nozzle_temperature": ["250"]}))
+open("/tmp/presets.zip", "wb").write(buf.getvalue())
+`);
+const presetCfg = JSON.parse(api.set_reference("Filament presets.zip", pyodide.FS.readFile("/tmp/presets.zip")));
+const imported = presetCfg.slots.filter((x: { imported?: boolean }) => x.imported);
+console.log(`[${secs()} s] presets: ${imported.map((x: { name: string }) => x.name).join(", ")} ` +
+  `(${presetCfg.presets.map((x: { status: string }) => x.status).join(", ")})`);
+
 const problems: string[] = [];
+if (imported.length !== 1 || imported[0].name !== "eSUN PETG Basic") problems.push("preset import");
 if (glbObj.parts.length !== 1 || glbObj.colours.join() !== "#1414C8,#C81414" || glbObj.parts[0].painted < 12) {
   problems.push("GLB colours");
 }

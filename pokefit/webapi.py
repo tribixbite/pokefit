@@ -15,12 +15,13 @@ from typing import Any
 
 from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, preview_glb,
                        safe_stem, washer_table)
-from .slicer import reference_settings
+from .presets import PresetLibrary, load_settings_file
 
 WORK = Path("/tmp/pokefit")
 _sessions: dict[str, Session] = {}
 _reference: dict | None = None          # the user's own Bambu project settings, if they loaded one
 _reference_name = ""
+_presets = PresetLibrary()              # imported Bambu presets (no system profiles in the browser)
 _ball_model: Path | None = None         # the user's copy of the ball model (for the washer-seat shell)
 
 
@@ -51,7 +52,7 @@ def _session(sid: str) -> Session:
 
 
 def config() -> str:
-    return _dump({**app_config(None, _reference, _reference_name), "engine": "browser"})
+    return _dump({**app_config(None, _reference, _reference_name, _presets), "engine": "browser"})
 
 
 def load(name: str, data: Any) -> str:
@@ -63,20 +64,23 @@ def load(name: str, data: Any) -> str:
     s = open_session(path, work_dir=folder / "work")
     if _reference is not None:
         s.reference = _reference
+    s.presets = _presets
     _sessions[s.id] = s
     rep, _ = analyse(s, Params())
     return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
 
 
 def set_reference(name: str, data: Any) -> str:
-    """Use the filament slots (and printer settings) of the user's own Bambu project."""
+    """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
     global _reference, _reference_name
     path = WORK / "reference" / Path(name).name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_raw(data))
-    _reference, _reference_name = reference_settings(path), path.name
-    for s in _sessions.values():
-        s.reference = _reference
+    ref = load_settings_file(path, _presets)
+    if ref is not None:
+        _reference, _reference_name = ref, path.name
+        for s in _sessions.values():
+            s.reference = _reference
     return config()
 
 

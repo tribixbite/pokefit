@@ -29,7 +29,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    filament_map: null, colours: null, paint: null, texture_colours: null,
+    process: null, filament_map: null, colours: null, paint: null, texture_colours: null,
   },
   report: null,
   focus: null,
@@ -109,19 +109,59 @@ async function init(): Promise<void> {
   for (const w of cfg.washers) ws.append(h("option", { value: w.key, textContent: w.label }));
   ws.append(h("option", { value: "custom", textContent: "Custom size…" }));
   ws.value = cfg.default_washer;
-  const ss = $<HTMLSelectElement>("slotSelect");
-  // One entry per distinct filament profile (the reference project lists AMS slots).
-  const seen = new Set<string>();
-  for (const s of cfg.slots) {
-    if (seen.has(s.name)) continue;
-    seen.add(s.name);
-    ss.append(h("option", { value: s.slot, textContent: s.name }));
-  }
-  ss.value = String(cfg.default_slot);
+  renderSlots(cfg);
   renderPrinter(cfg);
 
   const path = new URLSearchParams(location.search).get("path");
   if (path) await load(() => api.loadPath(path), path.split(/[\\/]/).pop() ?? path);
+}
+
+/** Material and process pickers: the project's filament profiles, then imported presets. */
+function renderSlots(cfg: Config): void {
+  const ss = $<HTMLSelectElement>("slotSelect");
+  const keep = state.params.slot;
+  ss.replaceChildren();
+  // One entry per distinct filament profile (the reference project lists AMS slots).
+  const seen = new Set<string>();
+  const own = h("optgroup", { label: "Your project" });
+  const imported = h("optgroup", { label: "Imported presets" });
+  for (const s of cfg.slots) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    (s.imported ? imported : own).append(h("option", { value: s.slot, title: s.warning ?? "",
+      textContent: s.warning ? `${s.name} ⚠ plate` : s.name }));
+  }
+  ss.append(own);
+  if (imported.children.length) ss.append(imported);
+  const valid = keep !== null && cfg.slots.some((s) => +s.slot === keep);
+  if (!valid) state.params.slot = null;
+  ss.value = String(valid ? keep : cfg.default_slot);
+
+  const ps = $<HTMLSelectElement>("processSelect");
+  ps.replaceChildren(...cfg.processes.map((p, i) =>
+    h("option", { value: i === 0 ? "" : p, textContent: i === 0 ? `${p} (project)` : p })));
+  if (state.params.process && !cfg.processes.includes(state.params.process)) state.params.process = null;
+  ps.value = state.params.process ?? "";
+  $("processRow").hidden = cfg.processes.length < 2;
+
+  // One line per kind: how many were added, and why any were left out or are approximate.
+  const notes = cfg.presets;
+  const lines: string[] = [];
+  for (const kind of ["filament", "process", "printer"] as const) {
+    const of = notes.filter((n) => n.kind === kind);
+    if (!of.length) continue;
+    const skipped = of.filter((n) => n.status === "skipped");
+    const approx = of.filter((n) => n.status === "approximate");
+    let line = `${of.length - skipped.length} ${kind} preset${of.length - skipped.length === 1 ? "" : "s"} added`;
+    if (approx.length) line += ` (${approx.length} approximate: Bambu Studio's base presets are not here, so unchanged settings come from your project's closest slot)`;
+    if (skipped.length) line += `; skipped ${skipped.map((n) => `${n.name} — ${n.note}`).join("; ")}`;
+    lines.push(line + ".");
+  }
+  const plate = cfg.slots.filter((s) => s.warning).map((s) => s.name);
+  if (plate.length) lines.push(`⚠ ${plate.length} can't print on your project's plate (Bambu refuses to slice them): ` +
+    `${plate.join(", ")}. Change the plate in Bambu Studio, or set that plate's temperature in the preset.`);
+  $("presetInfo").textContent = lines.join(" ");
+  $("presetInfo").hidden = !lines.length;
 }
 
 /** Print card: Bambu slicing needs the desktop slicer, so it only exists in the local version. */
@@ -134,7 +174,8 @@ function renderPrinter(cfg: Config): void {
       : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
   ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
   // Slicing controls only where a slicer exists (the local version).
-  $("slotRow").hidden = $("sliceRow").hidden = cfg.engine === "browser";
+  // The material picker also sets the exported 3MF's filament settings, so it shows everywhere.
+  $("sliceRow").hidden = cfg.engine === "browser";
   $("engineWhere").textContent = cfg.engine === "browser" ? "in your browser" : "local";
   // The bundled default project is a JSON profile: name it as such rather than by file name.
   $("refInfo").textContent = !cfg.reference ? "" : cfg.reference.endsWith(".json")
@@ -699,6 +740,7 @@ function bind(): void {
     busy(true, `Reading ${f.name}…`);
     try {
       state.config = await api.setReference(f);
+      renderSlots(state.config);
       renderPrinter(state.config);
       state.params.filament_map = null;
       if (state.session) await runAnalyse();
@@ -735,6 +777,10 @@ function bind(): void {
   $("autoPockets").addEventListener("click", () => { state.params.pockets = null; void runAnalyse(); });
   $<HTMLSelectElement>("slotSelect").addEventListener("change", (e) => {
     state.params.slot = +(e.target as HTMLSelectElement).value;
+  });
+  $<HTMLSelectElement>("processSelect").addEventListener("change", (e) => {
+    state.params.process = (e.target as HTMLSelectElement).value || null;
+    if (state.session) void runAnalyse();     // layer height feeds the islands check
   });
   // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.
   const about = $("about");

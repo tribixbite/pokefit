@@ -37,6 +37,13 @@
   filament numbers are matched by colour to the user's own Bambu project slots (for File > Import > Import
   geometry only); a JSON report; and, if the user loads their copy of the ball model, the bottom shell with a
   washer seat cut in.
+- Bambu presets: besides a project 3MF, the settings button reads Bambu Studio's preset exports (File > Export >
+  Export Preset Bundle: a .bbscfg printer bundle, a .bbsflmt filament bundle, or a printer/filament/process
+  presets .zip). A preset is a diff over a system preset (`inherits`); the local version resolves it against the
+  installed Bambu Studio's profiles, the browser lays it over the project's closest slot (marked approximate).
+  Filament presets become selectable materials, process presets for the same printer a "Process" choice, a
+  printer preset for the project's printer is applied, and a filament whose temperature for the project's plate
+  is 0 is flagged (Bambu refuses to slice it).
 - Multi-figure 3MF files: a picker chooses which figure to fit.
 
 ## Local version

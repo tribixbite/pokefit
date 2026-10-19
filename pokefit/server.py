@@ -35,7 +35,8 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        input_checks,
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
-from .slicer import find_exe, reference_settings
+from .presets import PresetLibrary, default_system_profiles, load_settings_file
+from .slicer import find_exe
 from .washer import CATALOGUE, DEFAULT_WASHER
 
 WEB_DIST = ROOT / "web" / "dist"
@@ -82,6 +83,7 @@ def _load(path: Path) -> dict[str, Any]:
         raise ApiError(400, f"Cannot read {path.name}: {type(exc).__name__}: {exc}") from exc
     if _reference is not None:
         s.reference = _reference
+    s.presets = _presets
     _register(s)
     with _locks[s.id]:
         rep, _ = analyse(s, Params())
@@ -91,11 +93,14 @@ def _load(path: Path) -> dict[str, Any]:
 # The user's own Bambu project (filament slots + printer settings), once they load one.
 _reference: dict | None = None
 _reference_name = ""
+# Bambu presets the user imported (.bbscfg / .bbsflmt / presets .zip); inherits resolve against the
+# installed Bambu Studio's system profiles.
+_presets = PresetLibrary(system=default_system_profiles())
 
 
 def _config() -> dict[str, Any]:
     exe = find_exe()
-    return {**app_config(str(exe) if exe else None, _reference, _reference_name), "engine": "local"}
+    return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets), "engine": "local"}
 
 
 def _run_job(job_id: str, fn: Any) -> None:
@@ -208,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(_load(path))
 
     def post_reference(self, q: dict[str, str]) -> None:
-        """Use the filament slots and printer settings of the user's own Bambu project."""
+        """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
         global _reference, _reference_name
         name = Path(unquote(self.headers.get("X-Filename") or "project.3mf")).name
         d = UPLOAD_DIR / "reference"
@@ -216,13 +221,14 @@ class Handler(BaseHTTPRequestHandler):
         path = d / name
         path.write_bytes(self._body())
         try:
-            ref = reference_settings(path)
+            ref = load_settings_file(path, _presets)
         except Exception as exc:  # noqa: BLE001 — any unreadable project is a 400
             raise ApiError(400, f"Cannot read {name}: {exc}") from exc
-        _reference, _reference_name = ref, name
-        with _registry_lock:
-            for s in _sessions.values():
-                s.reference = ref
+        if ref is not None:
+            _reference, _reference_name = ref, name
+            with _registry_lock:
+                for s in _sessions.values():
+                    s.reference = ref
         self._json(_config())
 
     def post_load_path(self, q: dict[str, str]) -> None:

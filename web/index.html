@@ -277,6 +277,9 @@
         <label id="slotRow">Filament for every colour
           <select id="slotSelect"></select>
         </label>
+        <label id="processRow" hidden>Process
+          <select id="processSelect"></select>
+        </label>
         <div class="row" id="sliceRow">
           <label class="check"><input id="x10Toggle" type="checkbox" checked /> also a plate of 10</label>
           <button id="sliceBtn" class="btn primary">Slice</button>
@@ -288,10 +291,11 @@
         <h2>Export</h2>
         <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell.</p>
         <div class="row">
-          <label class="btn" for="refInput" title="Read the filament slots of a Bambu Studio project you print from">Use my project's filaments</label>
-          <input id="refInput" type="file" accept=".3mf" hidden />
+          <label class="btn" for="refInput" title="A Bambu Studio project you print from (its filament slots and printer settings), or presets exported from Bambu Studio (File › Export › Export Preset Bundle: .bbscfg, .bbsflmt, or a presets .zip)">Project or presets…</label>
+          <input id="refInput" type="file" accept=".3mf,.json,.bbscfg,.bbsflmt,.zip" hidden />
           <span id="refInfo" class="muted"></span>
         </div>
+        <p id="presetInfo" class="hint" hidden></p>
         <div id="importMapBox" hidden>
           <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots:</p>
           <table class="tbl" id="importMap"></table>
@@ -330,7 +334,9 @@
           <i>Show regions</i> previews the parts. Exported as Bambu paint.</li>
         <li><b>Turn it</b> — rotate about X, Y and Z by any angle (45° works) if the model is not standing upright.</li>
         <li><b>Export</b> — the figure 3MF (opens as a Bambu Studio project), an <i>import</i> variant whose colours are renumbered to
-          your own project's filament slots (for <i>Import geometry only</i>), and a JSON report.</li>
+          your own project's filament slots (for <i>Import geometry only</i>), and a JSON report. <i>Project or presets…</i> also
+          reads Bambu Studio's preset exports (<i>File › Export › Export Preset Bundle</i>: .bbscfg, .bbsflmt, presets .zip):
+          their filaments become materials to print with, their process presets selectable settings.</li>
       </ol>
       <h2>What it checks</h2>
       <ul>

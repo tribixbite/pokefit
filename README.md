@@ -15,7 +15,11 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   eyes, bib…), a separate piece or a brush patch, exported as Bambu paint;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
-  filament slots for *Import geometry only*.
+  filament slots for *Import geometry only*;
+- **reads your Bambu Studio presets**: a project 3MF, or the preset exports from *File › Export › Export Preset
+  Bundle* (`.bbscfg` printer bundle, `.bbsflmt` filament bundle, printer/filament/process presets `.zip`). Their
+  filaments become materials to print with, their process presets selectable settings; a filament that cannot
+  print on your project's plate is flagged (Bambu would refuse to slice it).
 
 The website runs the whole engine **in your browser** (Python → WebAssembly via Pyodide); files are never
 uploaded. The local version adds **Bambu Studio slicing** (print time and filament for 1 and 10 copies, supports).
