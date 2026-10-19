@@ -86,7 +86,7 @@ def frame_views(photos: dict[str, Image.Image], masks: dict[str, np.ndarray]) ->
         alpha = np.clip(masks[v].astype(np.float32), 0.0, 1.0)[..., None]
         on_black = Image.fromarray((rgb * alpha * 255.0 + 0.5).astype(np.uint8))
         w, h = max(1, round(photo.width * s)), max(1, round(photo.height * s))
-        scaled = on_black.resize((w, h), Image.LANCZOS)
+        scaled = on_black.resize((w, h), Image.Resampling.LANCZOS)
         cx, cy = (x0 + x1) / 2 * s, (y0 + y1) / 2 * s
         canvas = Image.new("RGB", (FRAME, FRAME))
         canvas.paste(scaled, (round(FRAME / 2 - cx), round(FRAME / 2 - cy)))
@@ -279,7 +279,7 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, se
     work = work or out.with_suffix("")
     work.mkdir(parents=True, exist_ok=True)
     tag = uuid.uuid4().hex[:8]
-    images = {v: Image.open(photos[v]) for v in names}
+    images: dict[str, Image.Image] = {v: Image.open(photos[v]) for v in names}
     t0 = time.time()
     uploaded = {v: comfy.upload(f"pokefit_{tag}_{v}.png", _png(images[v].convert("RGB"))) for v in names}
     log(f"masks: BiRefNet on {', '.join(names)}")
@@ -289,7 +289,7 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, se
         m = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, f"save_{v}")))).convert("L")
         masks[v] = np.asarray(m.resize(images[v].size), np.float32) / 255.0
     if mirror_right and "left" in names and "right" not in names:
-        images["right"] = images["left"].transpose(Image.FLIP_LEFT_RIGHT)
+        images["right"] = images["left"].transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         masks["right"] = masks["left"][:, ::-1].copy()
         names.append("right")
     framed = frame_views({v: images[v] for v in names}, masks)
