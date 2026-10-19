@@ -115,28 +115,40 @@ EDGE_PX = 4             # photo pixels this close to the silhouette are not samp
 DEPTH_TOL = 0.012       # rig units (the figure spans ~1): how far behind the nearest surface still counts as seen
 
 
-def rig_view(name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """(camera position, right, up, forward) of a rig view; z up, the figure facing -y (ComfyUI's
+@dataclass(frozen=True)
+class Camera:
+    """Pixal3D's view cameras: on a circle round the origin, z up, looking at it; `pad` = how far the unit
+    cube is framed (the multi-view rig: FOV 20°, 1.1; the single-image node: MoGe's FOV, 1.0 — its
+    camera-to-world is `build_proj_transform_matrix`, the rig's front view at distance 0.5/tan(fov/2))."""
+    fov: float = FOV_DEG
+    pad: float = PAD
+
+
+RIG = Camera()
+
+
+def rig_view(name: str, cam: Camera = RIG) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(camera position, right, up, forward) of a view; z up, the figure facing -y (ComfyUI's
     `_orbit_camera_to_world`: azimuth 0 = front, 90 = the figure's left)."""
     a = np.radians(VIEW_AZIMUTH[name])
     back = np.array([np.sin(a), -np.cos(a), 0.0])
     right = np.array([np.cos(a), np.sin(a), 0.0])
     up = np.cross(back, right)
-    dist = PAD * 0.5 / np.tan(np.radians(FOV_DEG) / 2)
+    dist = cam.pad * 0.5 / np.tan(np.radians(cam.fov) / 2)
     return back * dist, right, up, -back
 
 
-def project(points: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def project(points: np.ndarray, name: str, cam: Camera = RIG) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pixel x, y (FRAME frame) and depth of rig-frame points in a view."""
-    cam, right, up, fwd = rig_view(name)
-    rel = points - cam
+    pos, right, up, fwd = rig_view(name, cam)
+    rel = points - pos
     depth = rel @ fwd
-    k = (FRAME / 2) / (np.maximum(depth, 1e-9) * np.tan(np.radians(FOV_DEG) / 2))
+    k = (FRAME / 2) / (np.maximum(depth, 1e-9) * np.tan(np.radians(cam.fov) / 2))
     return FRAME / 2 + (rel @ right) * k, FRAME / 2 - (rel @ up) * k, depth
 
 
 def photo_colours(vertices: np.ndarray, normals: np.ndarray, base: np.ndarray,
-                  views: dict[str, Framed]) -> tuple[np.ndarray, float]:
+                  views: dict[str, Framed], cam: Camera = RIG) -> tuple[np.ndarray, float]:
     """Vertex colours (sRGB 0..255) from the framed photos; (colours, share of vertices a photo saw).
 
     Per view: vertices facing it (cos > MIN_COS) and not behind the nearest surface (a z-buffer of vertex
@@ -152,9 +164,9 @@ def photo_colours(vertices: np.ndarray, normals: np.ndarray, base: np.ndarray,
     for name, fr in views.items():
         if fr.mask is None or name not in VIEW_AZIMUTH:
             continue
-        cam, *_ = rig_view(name)
-        px, py, depth = project(vertices, name)
-        to_cam = cam - vertices
+        pos, *_ = rig_view(name, cam)
+        px, py, depth = project(vertices, name, cam)
+        to_cam = pos - vertices
         cos = np.einsum("ij,ij->i", normals, to_cam) / np.maximum(np.linalg.norm(to_cam, axis=1), 1e-12)
         ix, iy = np.round(px).astype(int), np.round(py).astype(int)
         inside = (ix >= 0) & (ix < FRAME) & (iy >= 0) & (iy < FRAME)
@@ -243,7 +255,7 @@ def _glb_vertex_colours(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray
     return np.vstack(verts), np.vstack(faces), np.vstack(cols)
 
 
-def recolour_glb(data: bytes, views: dict[str, Framed]) -> tuple[bytes, float]:
+def recolour_glb(data: bytes, views: dict[str, Framed], cam: Camera = RIG) -> tuple[bytes, float]:
     """The generated GLB with its vertex colours replaced by the photos' (see `photo_colours`)."""
     vertices, faces, base = _glb_vertex_colours(data)
     mesh = trimesh.Trimesh(vertices, faces, process=False)
@@ -251,7 +263,7 @@ def recolour_glb(data: bytes, views: dict[str, Framed]) -> tuple[bytes, float]:
     to_rig = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float64)
     v_rig = vertices @ to_rig.T
     n_rig = np.asarray(mesh.vertex_normals, np.float64) @ to_rig.T
-    colours, share = photo_colours(v_rig, n_rig, base, views)
+    colours, share = photo_colours(v_rig, n_rig, base, views, cam)
     return vertex_colour_glb(vertices, faces, colours), share
 
 
@@ -432,6 +444,15 @@ def single_prompt(photo: str, seed: int = 0, faces: int = DEFAULT_FACES,
                                                               "axis": "horizontal", "unit": "degrees"}},
         "cond": {"class_type": "Pixal3DConditioning", "inputs": {"clip_vision_model": ["clip", 0],
                                                                  "image": ["crop", 0], "camera_angle_x": ["fov", 0]}},
+        # What photo colours need back: the crop the model saw, its mask, and the FOV.
+        "mask_img": {"class_type": "MaskToImage", "inputs": {"mask": ["mask", 0]}},
+        "mask_crop": {"class_type": "ImageCropToMask", "inputs": {"images": ["mask_img", 0], "masks": ["mask", 0],
+                                                                  "width": FRAME, "height": FRAME, "pad_factor": PAD,
+                                                                  "grow_mask": 0, "background": "#000000"}},
+        "save_crop": {"class_type": "SaveImage", "inputs": {"images": ["crop", 0], "filename_prefix": f"{prefix}_crop"}},
+        "save_mask": {"class_type": "SaveImage", "inputs": {"images": ["mask_crop", 0],
+                                                            "filename_prefix": f"{prefix}_mask"}},
+        "show_fov": {"class_type": "PreviewAny", "inputs": {"source": ["fov", 0]}},
     }
     return _pixal3d_chain(p, MODEL_SINGLE, seed, faces, prefix)
 
@@ -455,9 +476,10 @@ def _first_file(outputs: dict[str, Any], node: str) -> dict[str, Any]:
 
 
 def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, faces: int = DEFAULT_FACES,
-                 log: Any = print) -> dict[str, Any]:
-    """One photo of the figure from any angle -> GLB (single-view Pixal3D, `single_prompt`). The colours
-    are the model's own (photo colours need the rig's known cameras: TODO for a single photo)."""
+                 log: Any = print, photo_colour: bool = True) -> dict[str, Any]:
+    """One photo of the figure from any angle -> GLB (single-view Pixal3D, `single_prompt`). The side the
+    photo shows takes the photo's colours (the camera is the single-image node's: MoGe's FOV); the rest
+    keeps the model's, gain-corrected to match."""
     comfy = Comfy(url)
     if not comfy.alive():
         raise ComfyError(f"ComfyUI is not running at {url} (see AGENTS.md: Photos to 3D)")
@@ -470,9 +492,20 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, 
                      progress=lambda s: log(f"{stage}: {s:.0f} s"))
     data = comfy.fetch(_first_file(outs, "save"))
     out.parent.mkdir(parents=True, exist_ok=True)
+    seen = None
+    fov = None
+    if photo_colour:
+        fov = float(outs.get("show_fov", {}).get("text", ["nan"])[0])
+        crop = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, "save_crop")))).convert("RGB")
+        mimg = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, "save_mask")))).convert("L")
+        if np.isfinite(fov) and crop.size == (FRAME, FRAME):
+            (out.parent / f"{out.stem}_model_colours.glb").write_bytes(data)
+            log("putting the photo's colours on the model")
+            view = Framed("front", crop, 1.0, (0, 0, FRAME, FRAME), np.asarray(mimg.resize(crop.size)) > 127)
+            data, seen = recolour_glb(data, {"front": view}, Camera(fov=fov, pad=1.0))
     out.write_bytes(data)
     return {"glb": str(out), "views": ["photo"], "generate_seconds": round(time.time() - t0, 1), "bytes": len(data),
-            "photo_colour_share": None}
+            "photo_colour_share": None if seen is None else round(seen, 3), "fov": fov}
 
 
 def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, seed: int = 0,

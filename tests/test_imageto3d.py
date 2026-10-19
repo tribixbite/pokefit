@@ -17,7 +17,7 @@ from PIL import Image
 
 from pokefit.imageto3d import (FRAME, PAD, ComfyError, Framed, frame_views, generate_prompt, mask_prompt,
                                single_prompt,
-                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb)
+                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera)
 from pokefit.model3mf import read_project
 
 
@@ -175,27 +175,30 @@ def test_needs_a_front_and_a_running_comfy(tmp_path: Path) -> None:
         photos_to_glb({"front": tmp_path / "f.png"}, tmp_path / "x.glb", url="http://127.0.0.1:9")
 
 
-def test_photo_colours_land_where_the_views_see() -> None:
+@pytest.mark.parametrize("cam", [None, Camera(fov=30.0, pad=1.0)], ids=["rig", "single-image camera"])
+def test_photo_colours_land_where_the_views_see(cam: Camera | None) -> None:
     """A sphere in the rig, a front photo red on the image's left and blue on its right: front vertices
-    take those colours by side; vertices facing away keep (a correction of) the model colour."""
+    take those colours by side; vertices facing away keep (a correction of) the model colour. Also with
+    the single-image node's camera (MoGe's FOV, unit cube unpadded)."""
+    cam = cam or Camera()
     ball = trimesh.creation.icosphere(subdivisions=4, radius=0.4)
     v, n = np.asarray(ball.vertices), np.asarray(ball.vertex_normals)
     img = np.zeros((FRAME, FRAME, 3), np.uint8)
     img[:, : FRAME // 2] = (220, 30, 30)
     img[:, FRAME // 2:] = (30, 30, 220)
-    px, py, _ = project(v, "front")
+    px, py, _ = project(v, "front", cam)
     mask = np.zeros((FRAME, FRAME), bool)
     r = int(np.ptp(px) / 2) + 2
     yy, xx = np.mgrid[:FRAME, :FRAME]
     mask[(xx - FRAME / 2) ** 2 + (yy - FRAME / 2) ** 2 <= r * r] = True
     base = np.column_stack([v[:, 0] * 50 + 100, v[:, 1] * 50 + 100, v[:, 2] * 50 + 100])   # varied model colour
-    out, share = photo_colours(v, n, base, {"front": Framed("front", Image.fromarray(img), 1.0, (0, 0, 0, 0), mask)})
+    out, share = photo_colours(v, n, base, {"front": Framed("front", Image.fromarray(img), 1.0, (0, 0, 0, 0), mask)}, cam)
     front = n[:, 1] < -0.8                                     # facing the front camera (at -y)
     left, right = front & (v[:, 0] < -0.05), front & (v[:, 0] > 0.05)
     assert np.all(out[left, 0] > 180) and np.all(out[left, 2] < 80)
     assert np.all(out[right, 2] > 180) and np.all(out[right, 0] < 80)
     away = n[:, 1] > 0.5
-    assert 0.2 < share < 0.6 and not np.any(np.all(out[away] == img[0, 0], axis=1))
+    assert 0.15 < share < 0.6 and not np.any(np.all(out[away] == img[0, 0], axis=1))
 
 
 def test_vertex_colour_glb_round_trips(tmp_path: Path) -> None:

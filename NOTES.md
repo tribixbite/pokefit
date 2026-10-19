@@ -16,9 +16,9 @@ exist only on the original Windows machine (ask the user for the files).
    the starred count instead (it trades detail for hours of print time).
 3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
-   survive despeckling on the head), and a single-photo result keeps the model's own colours (its camera is
-   not the rig's; project with `Pixal3DConditioning`'s camera to fix). Auto-turn a single-photo result
-   upright/front (now a 90° turn by hand for a side photo).
+   survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
+   (21 % of the Squirtle's vertices from its side photo). Auto-turn a single-photo result to face front
+   (now a 90° turn by hand for a side photo).
 4. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
    FOV). Not done: combining several arbitrary-angle photos (would need their camera poses — e.g. estimate
    azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).

@@ -164,7 +164,9 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   `--model-colours` keeps the model's own (also saved as `<name>_model_colours.glb`).
 - One photo from any angle: `--photo P` (or the dialog's "Or one photo, any angle"): BiRefNet crop, MoGe-2
   FOV, single-view Pixal3D (`pixal3d_int8_convrot` + `models/geometry_estimation/moge_2_vitl_normal_fp16`).
-  The mesh is posed as the photo shows it (a side photo needs a 90° turn about Z); model colours only.
+  The mesh is posed as the photo shows it (a side photo needs a 90° turn about Z). Its camera is the rig's
+  front view with MoGe's FOV and no padding (`Camera(fov, pad=1)`), so the photographed side gets the
+  photo's colours too (the graph returns the crop, its mask and the FOV via `PreviewAny`).
 - RemeshMesh must use `sign_mode: "solid"`: the template's `udf` gives a double-walled skin (92 % of the surface
   "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.
 - Measured: ~3.4 min for 3 views (int8 weights, 200k faces) while another app held 12 GB of the VRAM
