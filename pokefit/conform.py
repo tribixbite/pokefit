@@ -47,6 +47,7 @@ MAX_SLOPE = np.tan(np.radians(40.0))
 LIMB_TOP = 0.5       # a low part whose first solid span ends below this fraction of the height is a limb
 MIN_GAIN = 0.01      # auto bend is kept only if the figure fits at least 1 % larger
 ROUNDS = 3
+FIT_TOL = 2e-3       # relative tolerance of the conform step's fits (rounds settle at 0.5 %)
 FLAT_TARGET = 0.6    # share of the footprint over the disc the flat base aims to touch
 MIN_DEPTH = 0.02     # mm; shallower presses are skipped (the base is flat already)
 DEFAULT_MAX_DEPTH = 1.2
@@ -158,9 +159,10 @@ def _with_vertices(parts: list[Part], v: np.ndarray) -> list[Part]:
     return out
 
 
-def _fit(v: np.ndarray, cavity: Cavity) -> tuple[float, np.ndarray] | None:
-    """(largest scale, figure-frame XY of the ball axis) — no pockets."""
-    res = max_scale(prepare_points(v), cavity)
+def _fit(v: np.ndarray, cavity: Cavity, hint: float | None = None) -> tuple[float, np.ndarray] | None:
+    """(largest scale, figure-frame XY of the ball axis) — no pockets. To FIT_TOL: the rounds stop at
+    0.5 % change; `hint` (the previous round's scale) narrows the search."""
+    res = max_scale(prepare_points(v), cavity, tol=FIT_TOL, hint=hint)
     if res is None:
         return None
     return res.max_scale, -np.asarray(res.offset) / res.max_scale
@@ -222,7 +224,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
         """Shape, refitting until the design scale settles; returns (shape, its largest fit scale)."""
         s, axis = s0, first[1]
         shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height)
-        got = _fit(shaped.v, cavity)
+        got = _fit(shaped.v, cavity, hint=s)
         for _ in range(ROUNDS if strength > 0 else 0):
             if got is None:
                 break
@@ -231,7 +233,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
             if settled or spec.scale:
                 break
             shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height)
-            got = _fit(shaped.v, cavity)
+            got = _fit(shaped.v, cavity, hint=s)
         return shaped, (got[0] if got else 0.0)
 
     flat, flat_scale = solve(0.0)

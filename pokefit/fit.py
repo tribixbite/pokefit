@@ -25,6 +25,7 @@ from scipy.spatial import ConvexHull, QhullError
 from .ball import Cavity
 
 N_SLABS = 200
+HINT_SPAN = 0.15      # max_scale(hint=...): bracket searched around the hint first
 
 
 @dataclass
@@ -138,8 +139,13 @@ def best_offset(points: HullPoints, cavity: Cavity, s: float,
             m = np.minimum(m, np.min(np.minimum(r - annulus[0], annulus[1] - r), axis=1))
         return m
 
+    qx, qy = np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1])
+
     def neg_margin(o: np.ndarray) -> float:
-        return -float(margins(o[None, :])[0])
+        """One offset (Nelder–Mead calls this ~10⁴ times per fit): hypot on columns, no (k, n, 2) array."""
+        if use_annulus:
+            return -float(margins(o[None, :])[0])
+        return -float(np.min(allowed - np.hypot(qx + o[0], qy + o[1])))
 
     centre = -(q.min(axis=0) + q.max(axis=0)) / 2
     starts = [centre]                      # concave case: any start reaches the optimum
@@ -179,8 +185,12 @@ def _nelder_mead_restarts(f, x0: np.ndarray, step: float = 1.0, max_restarts: in
 
 
 def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | None = None,
-              annulus: tuple[float, float] | None = None, tol: float = 1e-3) -> FitResult | None:
+              annulus: tuple[float, float] | None = None, tol: float = 1e-3,
+              hint: float | None = None) -> FitResult | None:
     """Largest figure scale that fits (bisection to `tol` relative). None if even 5 % does not fit.
+
+    `hint`: a scale the answer is probably near (a previous fit of a slightly changed figure); when it
+    brackets the answer within ±HINT_SPAN the bisection starts there (about half the steps).
 
     The cavity fit is bisected first. If the pockets (scaled with the figure)
     cannot also sit on the washer's steel ring there, the combined constraint
@@ -202,6 +212,10 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
 
     if not ok(lo):
         return None
+    if hint is not None and lo < hint < hi:
+        a, b = max(lo, hint * (1 - HINT_SPAN)), min(hi, hint * (1 + HINT_SPAN))
+        if ok(a) and not ok(b):
+            lo, hi = a, b
     if ok(hi):
         lo = hi
     while (hi - lo) / lo > tol:

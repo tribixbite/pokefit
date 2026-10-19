@@ -24,9 +24,9 @@ exist only on the original Windows machine (ask the user for the files).
    azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).
 5. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
    size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
-6. **Big meshes** (200k-face photo Squirtle: load 6.6 s, analyse 20 s = mesh checks 10 s once per file,
-   conform ~9 s, colour-change table 4 s, was 30 s; 600k-triangle LEGO GLB 82 s): conform's fit rounds
-   (`fit.best_offset` Nelder–Mead) and `mesh_checks` are next.
+6. **Big meshes** (200k-face photo Squirtle: load 6.6 s, first analyse 18.7 s = conform 6.1 s (was 8.4),
+   colour-change table 4.5 s (was 30), pockets 2.5, printability 2.5; 600k-triangle LEGO GLB 82 s, not
+   re-measured): next would be conform's height fields (7 per run, 2.4 s) and `prepare_points` (1.4 s).
 7. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default; note beambam
    is AGPL, so pokefit only calls it as a program); Cloudflare "Always Use HTTPS" (off; the page redirects
    itself); turning on `has_filament_switcher` (track switch) in the Bambu project (it is off there).
