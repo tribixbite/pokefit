@@ -111,6 +111,7 @@
         <div>
           <p class="drop-title">Drop a Pokémon 3MF / STL here</p>
           <p class="drop-sub">or use <b>Open figure</b>. It is scaled to fit the ball, gets magnet pockets in its underside, and is checked for printing. Everything runs on your device.</p>
+          <p id="photosRow" class="drop-sub" hidden><button id="photosBtn" class="btn">Make one from photos…</button></p>
         </div>
       </div>
       <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Analysing…</span></div>
@@ -329,6 +330,24 @@
   </main>
 
   <!-- About: real text for people, search engines and AI crawlers (also in /llms.txt). -->
+  <section id="photos" class="about" aria-labelledby="photosTitle" hidden>
+    <div class="about-inner photos-inner">
+      <button id="photosClose" class="btn about-close" aria-label="Close">✕</button>
+      <h1 id="photosTitle">Make a figure from photos</h1>
+      <p>Photos of a toy or figure from the front, its left side and the back (the right side is optional) become a coloured
+        3D model, made on this computer by <a href="https://github.com/TencentARC/Pixal3D" target="_blank" rel="noopener">Pixal3D</a>
+        in ComfyUI. Plain background, the whole figure in each photo, camera at its middle height. It takes a few minutes.</p>
+      <div class="photo-grid">
+        <label>Front (needed)<input id="photoFront" type="file" accept="image/*" /></label>
+        <label>Left side<input id="photoLeft" type="file" accept="image/*" /></label>
+        <label>Back<input id="photoBack" type="file" accept="image/*" /></label>
+        <label>Right side<input id="photoRight" type="file" accept="image/*" /></label>
+      </div>
+      <label class="check"><input id="photoMirror" type="checkbox" /> no right photo: use the left one mirrored (symmetric figures)</label>
+      <div class="row"><button id="photosGo" class="btn primary">Make the figure</button><span id="photosStatus" class="muted"></span></div>
+    </div>
+  </section>
+
   <section id="about" class="about" aria-labelledby="aboutTitle" hidden>
     <div class="about-inner">
       <button id="aboutClose" class="btn about-close" aria-label="Close">✕</button>
@@ -374,6 +393,9 @@
 cd pokefit &amp;&amp; pip install -e .
 cd web &amp;&amp; bun install &amp;&amp; bun run build &amp;&amp; cd ..
 python -m pokefit serve --open</code></pre>
+      <p>With an NVIDIA GPU (16 GB) and <a href="https://github.com/Comfy-Org/ComfyUI" target="_blank" rel="noopener">ComfyUI</a>
+        running Pixal3D, the local version also <b>makes a figure from photos</b> (front, left side, back): a coloured
+        model in a few minutes, ready to fit. Setup: AGENTS.md in the repository, "Photos to 3D".</p>
       <h2>Questions</h2>
       <dl>
         <dt>Are my files uploaded anywhere?</dt>

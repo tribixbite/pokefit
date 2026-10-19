@@ -3,6 +3,7 @@
   python -m pokefit fit figure.3mf [--ball 0.6 | --diameter 44] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
   python -m pokefit serve [--port 8765] [--open]
   python -m pokefit ball [--ball 0.6] [--washer M6]
+  python -m pokefit photos --front F.png [--left L.png] [--back B.png] [--right R.png | --mirror-right] --out fig.glb
 """
 from __future__ import annotations
 
@@ -28,13 +29,41 @@ def _fmt_time(sec: float) -> str:
     return f"{h}h {m:02d}m" if h else f"{m} min"
 
 
+def _bend(s: str) -> float | None:
+    """'auto', 'off' or a strength 0..1."""
+    return None if s == "auto" else 0.0 if s == "off" else float(s)
+
+
+def cmd_photos(a: argparse.Namespace) -> int:
+    """Photos -> coloured GLB with Pixal3D in a local ComfyUI (pokefit/imageto3d.py)."""
+    from .imageto3d import DEFAULT_FACES, photos_to_glb
+
+    import time
+    photos = {v: getattr(a, v) for v in ("front", "left", "back", "right") if getattr(a, v)}
+    last_stage, last_t = [""], [0.0]
+
+    def log(text: str) -> None:
+        """Each stage once, then its elapsed time every 30 s (the client reports every poll)."""
+        stage = text.split(":", 1)[0]
+        if stage != last_stage[0] or time.time() - last_t[0] > 30:
+            print(text, flush=True)
+            last_stage[0], last_t[0] = stage, time.time()
+
+    rep = photos_to_glb(photos, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES,
+                        mirror_right=a.mirror_right, log=log)
+    print(json.dumps(rep, indent=1))
+    print(f"next: python -m pokefit fit {a.out} --out <folder>")
+    return 0
+
+
 def cmd_fit(a: argparse.Namespace) -> int:
     from .pipeline import Params, analyse, export, open_session, slice_variants
 
     params = Params(ball_scale=a.ball, ball_diameter=a.diameter, washer=a.washer, clearance=a.clearance,
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
                     rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
-                    texture_colours=a.texture_colours)
+                    texture_colours=a.texture_colours, bend=_bend(a.bend), flat_base=a.flat_base,
+                    flat_depth=a.press, flat_fill=a.fill)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
     f = rep.fit
@@ -123,6 +152,11 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--colours", type=int, metavar="N", dest="texture_colours",
                    help="GLB/glTF: reduce the file's colours (texture, vertex colours) to N filaments "
                         "(default: as many as are clearly distinct, up to 8)")
+    f.add_argument("--bend", default="auto", help="bend legs/tail lying out past the washer up along the sphere: "
+                                                  "auto (default), off, or a strength 0..1")
+    f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the washer's; 0 = off)")
+    f.add_argument("--press", type=float, default=1.2, help="press the base flat by up to this, mm (0 = off)")
+    f.add_argument("--fill", type=float, default=2.5, help="fill gaps up to this under the base, mm (0 = off)")
     f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")
     f.add_argument("--slice", action="store_true", help="Bambu Studio time/filament, supports off vs auto")
@@ -132,6 +166,17 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("ball", help="print the cavity profile")
     common(b)
     b.set_defaults(fn=cmd_ball)
+
+    ph = sub.add_parser("photos", help="photos of a figure -> coloured GLB (needs a local ComfyUI, see AGENTS.md)")
+    for view in ("front", "left", "back", "right"):
+        ph.add_argument(f"--{view}", type=Path, help=f"photo of the figure's {view} side"
+                        + (" (required; the pose the figure gets)" if view == "front" else ""))
+    ph.add_argument("--mirror-right", action="store_true", help="use the left photo mirrored as the right view")
+    ph.add_argument("--out", type=Path, required=True, help="the .glb to write")
+    ph.add_argument("--comfy", default="http://127.0.0.1:8188", help="ComfyUI server URL")
+    ph.add_argument("--seed", type=int, default=0)
+    ph.add_argument("--faces", type=int, help="triangles in the result (default 200000)")
+    ph.set_defaults(fn=cmd_photos)
 
     s = sub.add_parser("serve", help="web UI")
     s.add_argument("--host", default="127.0.0.1")

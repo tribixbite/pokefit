@@ -147,3 +147,44 @@ def test_colour_count_and_preview(tmp_path: Path) -> None:
     assert sum(len(g.faces) for g in glb.geometry.values()) > len(s.unit_parts(Params())[0].faces)
     with pytest.raises(ValueError):
         Params(texture_colours=0)
+
+
+def _glb_vertex_colours(vertices: np.ndarray, faces: np.ndarray, linear: np.ndarray) -> bytes:
+    """A minimal GLB like ComfyUI's MeshToFile3D writes: float COLOR_0 (linear) under a white PBR material.
+    (trimesh's own exporter writes a COLOR_0 accessor with the wrong count for this case.)"""
+    import json as _json
+    import struct
+    pos = np.asarray(vertices, np.float32).tobytes()
+    col = np.asarray(linear, np.float32).tobytes()
+    idx = np.asarray(faces, np.uint32).tobytes()
+    blob = idx + pos + col
+    n = len(vertices)
+    doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+           "meshes": [{"primitives": [{"attributes": {"POSITION": 1, "COLOR_0": 2}, "indices": 0, "material": 0}]}],
+           "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0}}],
+           "buffers": [{"byteLength": len(blob)}],
+           "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(idx)},
+                           {"buffer": 0, "byteOffset": len(idx), "byteLength": len(pos)},
+                           {"buffer": 0, "byteOffset": len(idx) + len(pos), "byteLength": len(col)}],
+           "accessors": [{"bufferView": 0, "componentType": 5125, "count": int(np.size(faces)), "type": "SCALAR"},
+                         {"bufferView": 1, "componentType": 5126, "count": n, "type": "VEC3",
+                          "min": np.min(vertices, 0).tolist(), "max": np.max(vertices, 0).tolist()},
+                         {"bufferView": 2, "componentType": 5126, "count": n, "type": "VEC3"}]}
+    js = _json.dumps(doc).encode()
+    js += b" " * (-len(js) % 4)
+    blob += b"\0" * (-len(blob) % 4)
+    body = struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(blob), b"BIN\0") + blob
+    return struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body
+
+
+def test_vertex_colours_under_a_pbr_material_are_linear(tmp_path: Path) -> None:
+    """COLOR_0 under a material (ComfyUI's PaintMesh writes this) multiplies the base colour and is LINEAR."""
+    box = trimesh.creation.box((0.02, 0.02, 0.02)).subdivide()
+    lin = np.where(box.vertices[:, :1] > 0, [0.2, 0.2, 0.9], [0.9, 0.05, 0.05])     # two halves, linear RGB
+    path = tmp_path / "paint.glb"
+    path.write_bytes(_glb_vertex_colours(box.vertices, box.faces, lin))
+    proj = read_project(path)
+    srgb = {tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in proj.colours}
+    # linear 0.2 -> sRGB 124, 0.9 -> 243, 0.05 -> 63 (not 51 / 230 / 13 as plain 8-bit would give)
+    assert any(abs(r - 124) < 8 and abs(b - 243) < 8 for r, _, b in srgb), srgb
+    assert any(abs(r - 243) < 8 and abs(g - 63) < 10 for r, g, _ in srgb), srgb

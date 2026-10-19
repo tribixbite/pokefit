@@ -197,6 +197,33 @@ export async function exportFiles(session: string, params: Params): Promise<Expo
   return res;
 }
 
+/** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
+export async function photosToFigure(
+  photos: Partial<Record<"front" | "left" | "back" | "right", File>>,
+  mirrorRight: boolean,
+  onTick?: (seconds: number, progress: string) => void,
+): Promise<LoadResponse> {
+  if (mode !== "local") throw new Error("Photos to 3D runs on your computer: install pokefit and ComfyUI (see About).");
+  const dataUrl = (f: File): Promise<string> => new Promise((ok, fail) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result));
+    r.onerror = () => fail(r.error ?? new Error(`cannot read ${f.name}`));
+    r.readAsDataURL(f);
+  });
+  const views: Record<string, string> = {};
+  for (const [v, f] of Object.entries(photos)) if (f) views[v] = await dataUrl(f);
+  const name = (photos.front?.name ?? "figure").replace(/\.[^.]+$/, "").replace(/[-_ ]?front$/i, "") || "figure";
+  const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name });
+  const t0 = performance.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const j = (await (await check(await fetch(`/api/job?id=${job}`))).json()) as Job<LoadResponse>;
+    onTick?.((performance.now() - t0) / 1000, j.progress ?? "");
+    if (j.state === "done" && j.result) return j.result;
+    if (j.state === "error") throw new Error(j.error ?? "photos to 3D failed");
+  }
+}
+
 /** Start the Bambu slices and poll until they finish (local engine only). */
 export async function slice(
   session: string,

@@ -67,6 +67,16 @@ def _image_rgb(img: Any) -> np.ndarray:
     return np.asarray(img.convert("RGB").filter(ImageFilter.MedianFilter(3)))
 
 
+def _unit_colours(c: np.ndarray) -> np.ndarray:
+    """glTF colour accessor values -> floats in 0..1 (normalised uint8 / uint16, or floats)."""
+    if c.dtype == np.uint8:
+        return c.astype(np.float64) / 255.0
+    if c.dtype == np.uint16:
+        return c.astype(np.float64) / 65535.0
+    c = c.astype(np.float64)
+    return c / 255.0 if c.size and float(c.max()) > 1.0 else c
+
+
 def _sampler(mesh: trimesh.Trimesh) -> tuple[Sampler, bool]:
     """How to read this primitive's colour at points on its faces, and whether it varies
     across a face (texture or vertex colours) or is one colour per primitive."""
@@ -96,12 +106,23 @@ def _sampler(mesh: trimesh.Trimesh) -> tuple[Sampler, bool]:
                 return img[y, x]
 
             return sample, True
+        vcol = getattr(vis, "vertex_attributes", {}).get("color")
+        if tex is None and vcol is not None and len(vcol) == len(mesh.vertices):
+            # COLOR_0 under a PBR material (e.g. ComfyUI's PaintMesh): it multiplies the base colour
+            # factor and, per the glTF spec, is LINEAR (PaintMesh stores pow(srgb, 2.2)).
+            lin = _unit_colours(np.asarray(vcol))[:, :3] * np.clip(factor, 0, 1)
+            vc_srgb = trimesh.visual.color.linear_to_srgb(lin) * 255.0
+            faces = np.asarray(mesh.faces)
+            return (lambda fi, b: np.einsum("ij,ijk->ik", b, vc_srgb[faces[fi]])), True
         try:
             c = np.asarray(mat.main_color, np.float64)[:3]   # factor, or a texture's mean without UVs
             return _flat((int(c[0]), int(c[1]), int(c[2]))), False
         except Exception:                                  # a material with neither
             pass
     if isinstance(vis, trimesh.visual.ColorVisuals) and vis.kind == "vertex":
+        # TODO: trimesh loads (and writes) a material-less COLOR_0 as 8-bit values with no
+        # linear/sRGB conversion, so these are used as sRGB; a spec-following exporter's linear
+        # colours read too dark here. The PBR path above converts.
         vc = np.asarray(vis.vertex_colors, np.float64)[:, :3]
         faces = np.asarray(mesh.faces)
         return (lambda fi, b: np.einsum("ij,ijk->ik", b, vc[faces[fi]])), True

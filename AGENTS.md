@@ -66,7 +66,7 @@ Files NOT in the repo (tests needing them skip; get them from the user if needed
 
 ```bash
 python -m mypy                     # strict-ish, must be clean
-python -m pytest -q                # ~110 tests, ~75 s; real-file/Bambu tests skip without their files
+python -m pytest -q                # ~135 tests, ~100 s; real-file/Bambu tests skip without their files
 cd web && bun run typecheck && bun test && bun run build
 node scripts/engine-smoke.ts       # the whole engine under Pyodide in Node 24 (~25 s): load, analyse,
                                    # magnets, colorize, export, GLB flat + textured colour
@@ -81,6 +81,9 @@ summary + Bambu slice: time, grams, colour changes, purge).
 |---|---|
 | `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb`, `pick`. Start here. |
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
+| `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
+| `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
+| `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
 | `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), `apply_paint`. |
@@ -118,6 +121,36 @@ summary + Bambu slice: time, grams, colour changes, purge).
 - **Dark Reader** in the user's Chrome re-tints pages; `index.html` has `<meta name="darkreader-lock">`.
 - Real figures are messy (non-manifold, floating parts). Checks report, they don't block; `planar._xor`
   repairs section loops GEOS rejects.
+
+## Photos to 3D (local only, needs an NVIDIA GPU with 16 GB)
+
+`pokefit/imageto3d.py` drives a **ComfyUI** server running **Pixal3D multi-view** (Tencent ARC, MIT, Sep 2026;
+ComfyUI's native nodes in `comfy_extras/nodes_trellis2.py`, pure PyTorch, so no custom CUDA builds on Windows /
+Blackwell). Chosen 2026-10-19 over Hunyuan3D-2mv (non-commercial in EU/UK/KR, custom rasteriser builds) and
+TRELLIS.2 (24 GB, Linux). A web page cannot run it (~9 GB of weights, sparse 3D convolutions).
+
+Setup (verified on the original machine: RTX 5080 Laptop 16 GB, driver CUDA 13.3, Python 3.11):
+```bash
+git clone --depth 1 --branch v0.42.1 https://github.com/Comfy-Org/ComfyUI.git ../comfyui-3d
+cd ../comfyui-3d && py -3.11 -m venv .venv
+.venv/Scripts/python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+.venv/Scripts/python -m pip install -r requirements.txt
+# weights (8.8 GB + 0.44 GB), from https://huggingface.co/Comfy-Org/Pixal3D and .../Comfy-Org/BiRefNet:
+#   models/diffusion_models/pixal3d_multiview_int8_convrot.safetensors
+#   models/clip_vision/dino_v3_L_naf_fp32.safetensors
+#   models/vae/trellis_2_shape_vae_bf16.safetensors, models/vae/trellis_2_texture_vae_bf16.safetensors
+#   models/background_removal/birefnet.safetensors
+.venv/Scripts/python main.py --listen 127.0.0.1 --port 8188 --disable-auto-launch
+```
+Then `python -m pokefit photos --front f.png --left l.png --back b.png --out fig.glb` (or the UI button, which
+appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http://127.0.0.1:8188).
+- Views: the figure's own left (camera at +X when it faces -Y = it faces the image's left). Photos are framed
+  by pokefit, not ComfyUI: one scale for all views (same height), largest extent at 1024/1.1 px, centred, on
+  black (`frame_views`). `--mirror-right` adds the mirrored left photo as the right view.
+- RemeshMesh must use `sign_mode: "solid"`: the template's `udf` gives a double-walled skin (92 % of the surface
+  "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.
+- Measured: ~3.4 min for 3 views (int8 weights, 200k faces) while another app held 12 GB of the VRAM
+  (ComfyUI streams weights). Squirtle photos -> watertight solid, 8 colours, slices in Bambu.
 
 ## Testing the UI with a browser agent
 

@@ -19,8 +19,10 @@ API (all JSON unless noted):
 """
 from __future__ import annotations
 
+import base64
 import json
 import mimetypes
+import os
 import sys
 import threading
 import traceback
@@ -100,7 +102,9 @@ _presets = PresetLibrary(system=default_system_profiles())
 
 def _config() -> dict[str, Any]:
     exe = find_exe()
-    return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets), "engine": "local"}
+    from .imageto3d import Comfy
+    return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets), "engine": "local",
+            "photos": Comfy(COMFY_URL).alive(timeout=1.5)}
 
 
 def _run_job(job_id: str, fn: Any) -> None:
@@ -111,11 +115,15 @@ def _run_job(job_id: str, fn: Any) -> None:
         traceback.print_exc()
 
 
-def _start_job(fn: Any) -> str:
-    jid = uuid.uuid4().hex[:10]
-    _jobs[jid] = {"state": "running"}
+def _start_job(fn: Any, jid: str | None = None) -> str:
+    jid = jid or uuid.uuid4().hex[:10]
+    _jobs.setdefault(jid, {}).update(state="running")
     threading.Thread(target=_run_job, args=(jid, fn), daemon=True).start()
     return jid
+
+
+# Photos -> 3D: a local ComfyUI with Pixal3D (pokefit/imageto3d.py, AGENTS.md "Photos to 3D").
+COMFY_URL = os.environ.get("POKEFIT_COMFY", "http://127.0.0.1:8188")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -230,6 +238,40 @@ class Handler(BaseHTTPRequestHandler):
                 for s in _sessions.values():
                     s.reference = ref
         self._json(_config())
+
+    def post_photos(self, q: dict[str, str]) -> None:
+        """Photos of a figure (base64, by view) -> a coloured GLB via ComfyUI, then loaded like a file.
+
+        Runs as a job (minutes); its `progress` says what it is doing."""
+        from .imageto3d import VIEWS, photos_to_glb
+        body = self._json_body()
+        views = body.get("views") or {}
+        if not isinstance(views, dict) or not views.get("front"):
+            raise ApiError(400, "a front photo is required")
+        d = UPLOAD_DIR / f"photos_{uuid.uuid4().hex[:8]}"
+        d.mkdir(parents=True, exist_ok=True)
+        photos: dict[str, Path] = {}
+        for v in VIEWS:
+            if views.get(v):
+                raw = str(views[v]).split(",", 1)[-1]          # a data: URL or bare base64
+                try:
+                    (d / f"{v}.png").write_bytes(base64.b64decode(raw))
+                except ValueError as exc:
+                    raise ApiError(400, f"{v} photo is not base64 image data") from exc
+                photos[v] = d / f"{v}.png"
+        name = safe_stem(str(body.get("name") or "figure")) or "figure"
+        jid = uuid.uuid4().hex[:10]
+        _jobs[jid] = {"state": "running", "progress": "starting"}
+
+        def log(text: str) -> None:
+            _jobs[jid]["progress"] = text.strip()
+
+        def run() -> dict[str, Any]:
+            rep = photos_to_glb(photos, d / f"{name}.glb", url=COMFY_URL, seed=int(body.get("seed") or 0),
+                                mirror_right=bool(body.get("mirror_right")), log=log)
+            log("fitting the figure")
+            return {**_load(d / f"{name}.glb"), "photos": rep}
+        self._json({"job": _start_job(run, jid)})
 
     def post_load_path(self, q: dict[str, str]) -> None:
         p = Path(str(self._json_body().get("path", ""))).expanduser()

@@ -237,6 +237,8 @@ export interface Config {
   engine: "local" | "browser";
   /** Native inner radius of the ball model (mm): inner diameter = 2 · this · ball scale. */
   ball_r_inner: number;
+  /** Local engine with a reachable ComfyUI: "From photos" can make a figure. */
+  photos?: boolean;
 }
 
 export interface SliceResult {
@@ -263,6 +265,8 @@ export interface Job<T> {
   state: "running" | "done" | "error";
   result?: T;
   error?: string;
+  /** What a long job is doing now (photos -> 3D). */
+  progress?: string;
 }
 
 export interface ExportResponse {

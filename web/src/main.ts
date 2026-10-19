@@ -181,6 +181,7 @@ function renderPrinter(cfg: Config): void {
   $("refInfo").textContent = !cfg.reference ? "" : cfg.reference.endsWith(".json")
     ? "default slots — load your project to match its filaments" : `slots from ${cfg.reference}`;
   $("ballModelRow").hidden = cfg.engine !== "browser";
+  $("photosRow").hidden = !cfg.photos;
 }
 
 /** Header chip: where the engine runs and, in the browser, its start-up progress. */
@@ -825,6 +826,23 @@ function bind(): void {
     state.params.process = (e.target as HTMLSelectElement).value || null;
     if (state.session) void runAnalyse();     // layer height feeds the islands check
   });
+  // Photos -> 3D (local engine with ComfyUI): a dialog of view photos, then a long job.
+  const photosDlg = $("photos");
+  const showPhotos = (on: boolean): void => { photosDlg.hidden = !on; };
+  $("photosBtn").addEventListener("click", () => showPhotos(true));
+  $("photosClose").addEventListener("click", () => showPhotos(false));
+  photosDlg.addEventListener("click", (e) => { if (e.target === photosDlg) showPhotos(false); });
+  $("photosGo").addEventListener("click", () => {
+    const pick = (id: string): File | undefined => $<HTMLInputElement>(id).files?.[0];
+    const photos = { front: pick("photoFront"), left: pick("photoLeft"), back: pick("photoBack"), right: pick("photoRight") };
+    if (!photos.front) { toast("A front photo is needed: it is the pose the figure gets."); return; }
+    const mirror = $<HTMLInputElement>("photoMirror").checked;
+    showPhotos(false);
+    void load(() => api.photosToFigure(photos, mirror, (s, what) => {
+      $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
+    }), `${photos.front.name} (from photos)`);
+  });
+
   // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.
   const about = $("about");
   const showAbout = (on: boolean): void => {
@@ -835,7 +853,11 @@ function bind(): void {
   $("aboutBtn").addEventListener("click", () => showAbout(about.hidden));
   $("aboutClose").addEventListener("click", () => showAbout(false));
   about.addEventListener("click", (e) => { if (e.target === about) showAbout(false); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !about.hidden) showAbout(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!about.hidden) showAbout(false);
+    if (!photosDlg.hidden) showPhotos(false);
+  });
   if (location.hash === "#about") showAbout(true);
   $("sliceBtn").addEventListener("click", () => void doSlice());
   $("exportBtn").addEventListener("click", () => void doExport());
