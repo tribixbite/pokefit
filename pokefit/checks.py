@@ -241,9 +241,10 @@ def overhang_check(m: trimesh.Trimesh, threshold_deg: float,
                      f"Only tiny down-facing patches (each < {OVERHANG_MIN_AREA} mm²).", 0.0)
     pts = np.vstack([centres[g] for g in big])
     lowest = min(float(centres[g, 2].min()) for g in big)
-    return Check("overhang", "Overhangs", "warn",
+    # "info": a detail of the "Supports needed" verdict, which carries the warning.
+    return Check("overhang", "Overhangs", "info",
                  f"{len(big)} down-facing area(s), {total:.0f} mm² flatter than {threshold_deg:.0f}° "
-                 f"(lowest at z {lowest:.1f} mm) — needs support unless they bridge.", round(total, 1), _sample(pts))
+                 f"(lowest at z {lowest:.1f} mm) — supported unless they bridge.", round(total, 1), _sample(pts))
 
 
 def islands_check(m: trimesh.Trimesh, layer: float = 0.2) -> Check:
@@ -267,9 +268,10 @@ def islands_check(m: trimesh.Trimesh, layer: float = 0.2) -> Check:
             prev = cur
     if not found:
         return Check("islands", "Floating islands", "pass", "Every layer region rests on the one below.", 0)
-    return Check("islands", "Floating islands", "fail",
+    # "info", like overhangs: printing with supports on handles them; the verdict carries the warning.
+    return Check("islands", "Floating islands", "info",
                  f"{len(found)} region(s) start in mid-air (first at z {found[0][2]:.1f} mm): "
-                 f"they need support.", len(found), found[:MAX_HIGHLIGHTS])
+                 f"these need supports.", len(found), found[:MAX_HIGHLIGHTS])
 
 
 def bed_contact_check(m: trimesh.Trimesh) -> Check:
@@ -295,10 +297,12 @@ def supports_verdict(checks: list[Check]) -> Check:
     """Combine overhang + island findings into the yes/no answer."""
     by = {c.id: c for c in checks}
     reasons = []
-    if "islands" in by and by["islands"].status == "fail":
+    if "islands" in by and by["islands"].status != "pass":
         reasons.append(f"{by['islands'].value} floating region(s)")
     if "overhang" in by and by["overhang"].status != "pass":
         reasons.append(f"{by['overhang'].value} mm² of steep overhang")
     if reasons:
-        return Check("supports", "Supports needed", "warn", "Yes — " + " and ".join(reasons) + ".", "yes")
+        return Check("supports", "Supports needed", "warn",
+                     "Yes — " + " and ".join(reasons) + ". Turn supports on when you slice it.",
+                     "yes")
     return Check("supports", "Supports needed", "pass", "No — prints without supports.", "no")

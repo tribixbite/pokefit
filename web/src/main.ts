@@ -27,7 +27,7 @@ const state: State = {
     ball_scale: 0.6, ball_diameter: null, washer: "M6", clearance: 1, figure_scale: null,
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
-    pocket_grip: 1.2, pocket_max_seat: 2.0, object_id: null, slot: null, settings_source: "reference",
+    pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
     filament_map: null,
   },
   report: null,
@@ -289,6 +289,15 @@ function renderMagnets(rep: Report): void {
   document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
     b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === n)));
   for (const [id, key] of POCKET_INPUTS) $<HTMLInputElement>(id).value = String(rep.params[key]);
+  const raised = rep.params.pocket_seat === "raised";
+  document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
+    b.setAttribute("aria-checked", String(b.dataset.seat === rep.params.pocket_seat)));
+  $("seatHint").textContent = raised
+    ? "Under a part that floats above the bed, the pocket opening moves up into it: the magnet is hidden but sits above the steel, so it holds less."
+    : "Every magnet rests on the washer. Under a part that floats above the bed, the pocket only goes as far into it as the magnet reaches, and the magnet shows below it.";
+  $<HTMLInputElement>("pkMaxSeat").disabled = !raised;
+  $("maxSeatLabel").classList.toggle("off", !raised);
+  for (const e of [$("seatMode").closest<HTMLElement>(".seat-row"), $("seatHint")]) if (e) e.hidden = n === 0;
   $("underside").hidden = n === 0;
   underside.render(rep.underside, rep.pockets);
   $("pocketInfo").textContent = !n ? "no magnets" : rep.params.pockets ? "placed by hand"
@@ -299,7 +308,16 @@ function renderMagnets(rep: Report): void {
     // Nothing placed: say why, and offer the one fix that is a single number.
     const items: HTMLElement[] = [h("li", { cls: under.status }, h("span", { textContent: under.message }))];
     const low = typeof under.value === "number" ? under.value : NaN;
-    if (/above the washer everywhere/.test(under.message) && low > rep.params.pocket_max_seat) {
+    if (!raised && /Raised into the figure/.test(under.message)) {
+      const b = h("button", { cls: "btn", textContent: "Raise the pockets into the figure" });
+      b.addEventListener("click", () => {
+        state.params.pocket_seat = "raised";
+        state.params.pocket_max_seat = Math.max(state.params.pocket_max_seat, low);
+        void runAnalyse();
+      });
+      items.push(h("li", {}, b));
+    }
+    if (raised && /above the washer everywhere/.test(under.message) && low > rep.params.pocket_max_seat) {
       const allow = low;                    // already rounded up to 0.1 mm by the server
       const b = h("button", { cls: "btn", textContent: `Allow pockets up to ${allow.toFixed(1)} mm high` });
       b.addEventListener("click", () => { state.params.pocket_max_seat = allow; void runAnalyse(); });
@@ -311,7 +329,11 @@ function renderMagnets(rep: Report): void {
   // One line per pocket: how high its opening is and its check status.
   $("pocketList").replaceChildren(...rep.pockets.map((p, i) => {
     const c = rep.checks.find((x) => x.id === `pocket:${i + 1}`);
-    const seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
+    let seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
+    const shows = c?.message.match(/shows up to ([\d.]+) mm/);
+    const short = c?.message.match(/Only ([\d.]+) mm of the pocket is walled/);
+    if (short) seat += ` · only ${short[1]} mm walled, glue it`;
+    else if (shows) seat += ` · shows ${shows[1]} mm`;
     return h("li", { cls: c?.status ?? "" }, h("span", { cls: "n", textContent: String(i + 1) }),
       h("span", { textContent: c?.status === "fail" ? c.message : seat }));
   }));
@@ -668,6 +690,13 @@ function bind(): void {
       state.params.magnets = n;
       state.params.pockets = null;          // a new count is placed automatically
       void runAnalyse();
+    }));
+  document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const seat = b.dataset.seat === "raised" ? "raised" : "washer";
+      if (seat === state.params.pocket_seat) return;
+      state.params.pocket_seat = seat;
+      void runAnalyse();                    // hand-placed pockets keep their XY; their seats follow the mode
     }));
   for (const [id, key] of POCKET_INPUTS) {
     $<HTMLInputElement>(id).addEventListener("change", (e) => {

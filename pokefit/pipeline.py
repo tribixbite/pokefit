@@ -70,7 +70,8 @@ class Params:
     pocket_wall: float = 0.8
     pocket_ceiling: float = 0.6
     pocket_grip: float = 1.2                     # min. pocket height surrounded by wall (sloped undersides)
-    pocket_max_seat: float = 2.0                 # auto placement: highest pocket opening above the washer
+    pocket_max_seat: float = 2.0                 # raised, auto placement: highest pocket opening above the washer
+    pocket_seat: str = "washer"                  # "washer": openings on the washer; "raised": into floating parts
     object_id: str | None = None
     slot: int | None = None                      # reference filament slot for slicing/export
     settings_source: str = "reference"           # "reference" (user's printer) or "original"
@@ -82,6 +83,8 @@ class Params:
         if isinstance(self.magnets, bool):
             self.magnets = 2 if self.magnets else 0
         self.magnets = max(0, min(3, int(self.magnets)))
+        if self.pocket_seat not in ("washer", "raised"):
+            raise ValueError(f"pocket_seat must be 'washer' or 'raised', not {self.pocket_seat!r}")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Params":
@@ -91,7 +94,7 @@ class Params:
     @property
     def spec(self) -> PocketSpec:
         return PocketSpec(self.pocket_diameter, self.pocket_depth, self.pocket_wall, self.pocket_ceiling,
-                          self.pocket_grip, self.pocket_max_seat)
+                          self.pocket_grip, self.pocket_max_seat, self.pocket_seat == "washer")
 
 
 @dataclass

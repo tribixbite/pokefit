@@ -214,6 +214,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .pocket-list li { display: flex; gap: 8px; align-items: baseline; }
 .pocket-list .n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #dfe6f0; color: #12151c; font-weight: 700; font-size: 12px; flex: none; }
 .pocket-list .warn { color: var(--warn); }
+.seat-row { gap: 10px; flex-wrap: wrap; }
+.seat-row .seg button { padding: 0 12px; }
+label.off { opacity: .45; }
 .pocket-list .fail { color: var(--fail); }
 
 details.adv { margin-top: 8px; }

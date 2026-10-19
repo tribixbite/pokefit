@@ -35,6 +35,8 @@ export interface Params {
   pocket_grip: number;
   /** Automatic placement: highest pocket opening above the washer. */
   pocket_max_seat: number;
+  /** "washer": every opening on the washer; "raised": openings move up into parts above the bed. */
+  pocket_seat: "washer" | "raised";
   /** Import file: figure filament -> project slot (1-based). */
   filament_map: Record<string, number> | null;
   object_id: string | null;

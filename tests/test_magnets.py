@@ -4,10 +4,11 @@ import trimesh
 
 from conftest import two_footed
 from pokefit.magnets import (Pocket, PocketSpec, auto_pockets, cut_pockets, find_feet, height_field, required_washer,
-                             validate_pockets)
+                             seat_pockets, validate_pockets)
 from pokefit.model3mf import Part
 
-SPEC = PocketSpec()
+SPEC = PocketSpec()                     # default: openings on the washer
+RAISED = PocketSpec(flush=False)        # openings move up into parts above the bed
 
 
 def _part(m: trimesh.Trimesh) -> Part:
@@ -115,16 +116,16 @@ def _raised_body(post: float = 2.0, lift: float = 1.5) -> trimesh.Trimesh:
 
 
 def test_pocket_in_raised_underside() -> None:
-    """No flat foot: the pocket goes into the raised belly and stands proud, but never below the bed."""
+    """Raised: the pocket goes into the raised belly and the magnet shows below it, never below the bed."""
     m = _raised_body()
-    pockets, checks = auto_pockets([m], SPEC, count=1)
+    pockets, checks = auto_pockets([m], RAISED, count=1)
     assert len(pockets) == 1 and checks[0].status == "pass"
     (p,) = pockets
     # Seat = belly height + grip − depth = 1.5 + 1.2 − 2.2.
     assert p.z == pytest.approx(0.5, abs=0.02)
-    (v,) = validate_pockets([m], pockets, SPEC)
-    assert v.status == "pass" and "proud" in v.message
-    (new,), _ = cut_pockets([_part(m)], pockets, SPEC)
+    (v,) = validate_pockets([m], pockets, RAISED)
+    assert v.status == "pass" and "shows" in v.message
+    (new,), _ = cut_pockets([_part(m)], pockets, RAISED)
     assert new.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)   # still stands on the same plane
     r = SPEC.diameter / 2
     area = 0.5 * 48 * r * r * np.sin(2 * np.pi / 48)
@@ -133,9 +134,9 @@ def test_pocket_in_raised_underside() -> None:
 
 def test_high_belly_warns() -> None:
     m = _raised_body(lift=3.0)
-    pockets, _ = auto_pockets([m], SPEC, count=1)
+    pockets, _ = auto_pockets([m], RAISED, count=1)
     assert pockets[0].z == pytest.approx(2.0, abs=0.02)
-    (v,) = validate_pockets([m], pockets, SPEC)
+    (v,) = validate_pockets([m], pockets, RAISED)
     assert v.status == "warn" and "weaker hold" in v.message
 
 
@@ -145,10 +146,10 @@ def test_sloped_underside() -> None:
     pts[pts[:, 2] == 0, 2] = (pts[pts[:, 2] == 0, 0] + 15) / 10        # underside z = (x + 15) / 10
     wedge = trimesh.convex.convex_hull(pts)
     wedge.apply_translation([0, 0, -wedge.bounds[0][2]])
-    pockets, checks = auto_pockets([wedge], SPEC, count=1)
+    pockets, checks = auto_pockets([wedge], RAISED, count=1)
     (p,) = pockets
-    need = SPEC.diameter / 2 + SPEC.wall
-    assert p.z == pytest.approx(max(0.0, (p.x + need + 15) / 10 + SPEC.grip - SPEC.depth), abs=0.03)
+    need = RAISED.diameter / 2 + RAISED.wall
+    assert p.z == pytest.approx(max(0.0, (p.x + need + 15) / 10 + RAISED.grip - RAISED.depth), abs=0.03)
     assert p.z >= 0
 
 
@@ -179,5 +180,69 @@ def test_height_field_overlapping_parts() -> None:
 
 def test_too_high_everywhere_fails() -> None:
     m = _raised_body(lift=4.0)                       # seat 3.0 mm > max_seat 2.0
-    pockets, checks = auto_pockets([m], SPEC, count=1)
+    pockets, checks = auto_pockets([m], RAISED, count=1)
     assert pockets == [] and checks[0].status == "fail" and "3.0 mm above the washer" in checks[0].message
+
+
+# --------------------------------------------------------------- on the washer (default)
+
+
+def test_washer_pocket_under_floating_part() -> None:
+    """Belly 1 mm above the bed: the pocket opens on the washer and only goes 1.2 mm into the belly."""
+    m = _raised_body(lift=1.0)
+    pockets, checks = auto_pockets([m], SPEC, count=1)
+    assert len(pockets) == 1 and checks[0].status == "pass"
+    (p,) = pockets
+    assert p.z == 0.0
+    (v,) = validate_pockets([m], pockets, SPEC)
+    assert v.status == "pass" and "Sits on the washer" in v.message and "shows up to 1.0 mm" in v.message
+    (new,), _ = cut_pockets([_part(m)], pockets, SPEC)
+    assert new.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)
+    r = SPEC.diameter / 2
+    area = 0.5 * 48 * r * r * np.sin(2 * np.pi / 48)
+    assert m.volume - new.mesh().volume == pytest.approx(area * (SPEC.depth - 1.0), rel=0.02)
+
+
+def test_washer_pocket_short_grip_warns() -> None:
+    """Belly 1.5 mm up: 0.7 mm of pocket left in the figure, less than the 1.2 mm grip: cut, with a warning."""
+    m = _raised_body(lift=1.5)
+    pockets, _ = auto_pockets([m], SPEC, count=1)
+    assert pockets and pockets[0].z == 0.0
+    (v,) = validate_pockets([m], pockets, SPEC)
+    assert v.status == "warn" and "Only 0.7 mm" in v.message and "glue" in v.message
+
+
+def test_washer_too_far_up_fails_with_raised_hint() -> None:
+    """Belly 2 mm up: 0.2 mm would be walled, which holds nothing; the message gives the raised alternative."""
+    m = _raised_body(lift=2.0)
+    pockets, checks = auto_pockets([m], SPEC, count=1)
+    assert pockets == [] and checks[0].status == "fail"
+    assert "Raised into the figure" in checks[0].message and checks[0].value == pytest.approx(1.0)
+
+
+def test_washer_prefers_where_the_figure_reaches_the_washer() -> None:
+    """A long body 0.8 mm above the bed with one wide foot at its end: the single pocket goes in the foot,
+    although the middle of the footprint (preferred for one pocket) has room too."""
+    body = trimesh.creation.box([40, 12, 6]).apply_translation([0, 0, 0.8 + 3])
+    foot = trimesh.creation.box([10, 10, 1.3]).apply_translation([14, 0, 0.65])
+    m = trimesh.boolean.union([body, foot], engine="manifold")
+    pockets, _ = auto_pockets([m], SPEC, count=1)
+    (p,) = pockets
+    assert p.x - SPEC.diameter / 2 >= 9 - 0.15 and p.z == 0.0        # the pocket itself is inside the foot
+    (v,) = validate_pockets([m], pockets, SPEC)
+    assert v.status == "pass" and "shows" not in v.message
+
+
+def test_hand_placed_washer_pocket_follows_the_mode() -> None:
+    """A pocket placed by hand under a floating part: seat 0 on the washer, raised otherwise."""
+    m = _raised_body(lift=1.0)
+    f = height_field([m], margin=3.0)
+    assert seat_pockets(f, [Pocket(0, 0)], SPEC)[0].z == 0.0
+    assert seat_pockets(f, [Pocket(0, 0)], RAISED)[0].z == pytest.approx(0.0, abs=0.02)
+    m2 = _raised_body(lift=1.5)
+    f2 = height_field([m2], margin=3.0)
+    assert seat_pockets(f2, [Pocket(0, 0)], SPEC)[0].z == 0.0
+    assert seat_pockets(f2, [Pocket(0, 0)], RAISED)[0].z == pytest.approx(0.5, abs=0.02)
+    far = _raised_body(lift=2.0)
+    (v,) = validate_pockets([far], [Pocket(0, 0)], SPEC)
+    assert v.status == "fail" and "2.0 mm above the washer here" in v.message and "Not cut" in v.message

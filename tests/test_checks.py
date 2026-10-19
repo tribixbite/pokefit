@@ -61,7 +61,7 @@ def test_t_shape_needs_supports() -> None:
     bar = trimesh.creation.box([20, 4, 3]).apply_translation([0, 0, 11.4])
     t = printable_solid([_part(stem), _part(bar)])
     oh = overhang_check(t, 30)
-    assert oh.status == "warn" and oh.value > 60          # 2 x 8 x 4 mm² under the arms
+    assert oh.status == "info" and oh.value > 60          # 2 x 8 x 4 mm² under the arms
     assert supports_verdict([oh, islands_check(t)]).value == "yes"
 
 
@@ -70,7 +70,7 @@ def test_floating_island_detected() -> None:
     floating = trimesh.creation.box([3, 3, 3]).apply_translation([20, 0, 6])
     m = printable_solid([_part(base), _part(floating)])
     isl = islands_check(m)
-    assert isl.status == "fail" and isl.value == 1
+    assert isl.status == "info" and isl.value == 1
     assert abs(isl.highlight[0][0] - 20) < 1.6
 
 
@@ -84,7 +84,7 @@ def test_pocket_ceiling_ignored() -> None:
     cube = trimesh.creation.box([10, 10, 10]).apply_translation([0, 0, 5])
     hole = trimesh.creation.cylinder(radius=2.09, height=3.2, sections=48).apply_translation([0, 0, 0.6])
     cut = cube.difference(hole, engine="manifold")
-    assert overhang_check(cut, 30).status == "warn"
+    assert overhang_check(cut, 30).status == "info"
     assert overhang_check(cut, 30, ignore_xy=[(0, 0, 2.09, 2.2)]).status == "pass"
 
 

@@ -61,9 +61,14 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   [--rotate-x/-y/-z DEG]
   [--washers] [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
 - Magnets (1–3): placed on a rasterised height field of the underside (`magnets.HeightField`), so
-  sloped/raised undersides work. Each pocket opens as low as possible, never below the bed
-  plane, with ≥ `grip` (1.2 mm) of it walled; auto placement keeps openings ≤ 2 mm above the
-  washer (UI offers raising it when nothing lower fits). Pocket z = opening height in reports.
+  sloped/raised undersides work. Seat mode `pocket_seat` (CLI `--magnet-seat`):
+  `washer` (default, user's request 2026-10-18): every opening at z 0, magnet rests on the steel;
+  under floating parts it shows below them; ≥ 0.5 mm (`MIN_CUT_GRIP`) must be walled, less than
+  `grip` (1.2) is cut with a "glue it" warning; scoring penalises showing magnet 8 mm/mm.
+  `raised`: opening as low as possible with ≥ `grip` walled, ≤ `max_seat` (2 mm). Eevee
+  (Downloads/eevee+v3 (1).3mf): washer → 2 pockets between belly and front legs, 0.8 mm walled
+  (paws are ~4 mm wide, too narrow for a walled Ø4.18 pocket); raised → one in the tail at 1.2 mm.
+- Islands/overhangs are "info" details; "Supports needed" is the single amber warning.
 - Export also writes `<name>_pokefit_<pct>_import.3mf` for dragging into an open Bambu project
   ("Import geometry only" keeps part filaments + paint, which then mean that project's slots):
   filaments renumbered to the closest-colour slot of the reference project (CIELAB ΔE ≤ 25, else

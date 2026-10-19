@@ -26,14 +26,10 @@
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="An open Pokéball with a small green figure standing on a steel washer inside, next to the pokefit title." />
-  <meta property="og:image" content="https://pokefit.party/og.jpg" />
-  <meta property="og:image:type" content="image/jpeg" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
   <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
-  <meta name="twitter:image" content="https://pokefit.party/og.jpg" />
+  <meta name="twitter:image" content="https://pokefit.party/og.gif" />
   <meta name="twitter:image:alt" content="An open Pokéball with a small green figure inside, next to the pokefit title." />
   <link rel="manifest" href="site.webmanifest" />
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
@@ -198,7 +194,14 @@
             <button role="radio" data-n="0">Off</button><button role="radio" data-n="1">1</button><button role="radio" data-n="2">2</button><button role="radio" data-n="3">3</button>
           </div>
         </div>
-        <p class="hint">Push-in pockets for 4 × 2 mm disc magnets. The underside need not be flat: a pocket goes in as low as it can and never below the plane the figure stands on. Underside view — drag a pocket to move it.</p>
+        <p class="hint">Push-in pockets for 4 × 2 mm disc magnets. Underside view — drag a pocket to move it.</p>
+        <div class="row seat-row">
+          <span class="muted">Seat</span>
+          <div class="seg" id="seatMode" role="radiogroup" aria-label="Where the magnets sit">
+            <button role="radio" data-seat="washer" title="Every magnet rests on the washer. Under a part that floats above the bed the magnet shows below it.">On the washer</button><button role="radio" data-seat="raised" title="Pockets move up into parts that float above the bed: the magnet is hidden, but sits above the steel and holds less.">Raised into the figure</button>
+          </div>
+        </div>
+        <p class="hint" id="seatHint"></p>
         <div id="underside" class="underside-host"></div>
         <div class="legend">
           <span><i class="lg height"></i>underside, low → high</span><span><i class="lg feet"></i>on the bed</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>steel ring</span>
@@ -215,8 +218,8 @@
             <label>Depth <span class="unit"><input id="pkDepth" type="number" min="0.5" max="20" step="0.05" inputmode="decimal" /> mm</span></label>
             <label>Wall <span class="unit"><input id="pkWall" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
             <label>Ceiling <span class="unit"><input id="pkCeil" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
-            <label title="How much of the pocket must be walled all round; on a slope the magnet may stand proud below that">Grip <span class="unit"><input id="pkGrip" type="number" min="0.2" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
-            <label title="Automatic placement will not put a pocket opening higher above the washer than this">Max height <span class="unit"><input id="pkMaxSeat" type="number" min="0" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label title="How much of the pocket should be walled all round; below that the magnet shows">Grip <span class="unit"><input id="pkGrip" type="number" min="0.2" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label id="maxSeatLabel" title="Raised seat: automatic placement will not put a pocket opening higher above the washer than this">Max height <span class="unit"><input id="pkMaxSeat" type="number" min="0" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
           </div>
         </details>
       </section>
