@@ -36,6 +36,25 @@ def merged(part: Part) -> trimesh.Trimesh:
     return m
 
 
+def shell_volumes(m: trimesh.Trimesh, edge_counts: np.ndarray, edge_inverse: np.ndarray | None) -> list[float]:
+    """Volume of each connected shell (0 for one that is not closed), from face labels: what
+    `mesh.split()` + `volume` gives, without building a submesh per shell (a 16k-brick LEGO set: 12 s).
+
+    `edge_counts` / `edge_inverse`: `np.unique(m.edges_sorted, return_counts, return_inverse)` (the
+    inverse only needed when some edge is not shared by exactly two faces)."""
+    n_faces = len(m.faces)
+    labels = trimesh.graph.connected_component_labels(m.face_adjacency, node_count=n_faces)
+    n = int(labels.max()) + 1 if n_faces else 0
+    tri = m.triangles
+    signed = np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])) / 6.0
+    vol = np.abs(np.bincount(labels, weights=signed, minlength=n))
+    if edge_inverse is not None:
+        bad_edge = edge_counts[edge_inverse.ravel()] != 2          # per row of edges_sorted (3 per face)
+        open_faces = np.unique(m.edges_face[bad_edge])
+        vol[np.unique(labels[open_faces])] = 0.0
+    return vol.tolist()
+
+
 def mesh_checks(part: Part) -> list[Check]:
     """Watertight, manifold, winding, degenerate faces, stray shells, self-intersections."""
     m = merged(part)
@@ -43,12 +62,11 @@ def mesh_checks(part: Part) -> list[Check]:
     out: list[Check] = []
 
     edges = m.edges_sorted
-    _, counts = np.unique(edges, axis=0, return_counts=True)
+    uniq, inv, counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
     open_e, nonman = int((counts == 1).sum()), int((counts > 2).sum())
     if open_e or nonman:
         # Highlight midpoints of the offending edges.
-        uniq, inv, cnt = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
-        bad = uniq[cnt != 2]
+        bad = uniq[counts != 2]
         mids = m.vertices[bad].mean(axis=1)
         out.append(Check(f"watertight:{pid}", f"{name}: closed surface", "fail",
                          f"{open_e} open edges and {nonman} edges shared by more than two faces.",
@@ -80,15 +98,15 @@ def mesh_checks(part: Part) -> list[Check]:
         out.append(Check(f"manifold:{pid}", f"{name}: solid", "fail",
                          f"Not a valid solid for booleans ({exc}); pockets cannot be cut into it."))
 
-    bodies = m.split(only_watertight=False)
-    if len(bodies) > 1:
-        vols = sorted((abs(b.volume) if b.is_watertight else 0.0 for b in bodies), reverse=True)
+    vols = shell_volumes(m, counts, inv if open_e or nonman else None)
+    if len(vols) > 1:
+        vols = sorted(vols, reverse=True)
         stray = [v for v in vols[1:] if v < 0.01 * max(vols[0], 1e-9)]
         status: Status = "warn" if stray else "info"
         out.append(Check(f"shells:{pid}", f"{name}: separate shells", status,
-                         f"{len(bodies)} shells; {len(stray)} tiny (< 1 % of the largest)." if stray else
-                         f"{len(bodies)} separate shells (intended pieces such as eyes are normal).",
-                         len(bodies)))
+                         f"{len(vols)} shells; {len(stray)} tiny (< 1 % of the largest)." if stray else
+                         f"{len(vols)} separate shells (intended pieces such as eyes are normal).",
+                         len(vols)))
 
     out.append(_self_intersections(m, name, pid))
     return out
