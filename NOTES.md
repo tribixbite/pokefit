@@ -1,6 +1,24 @@
-# Pokeball (SketchUp 2017 → STL)
+# Pokeball / pokefit — working tracker
 
-## Mesh repair
+Agents: read `AGENTS.md` first (rules, setup, architecture, gotchas). This file holds open work and the
+measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:\git\pokeball_backup_*`
+exist only on the original Windows machine (ask the user for the files).
+
+## To do (prioritised)
+1. **Check the live site after the GLB-colour deploy** (commit 415aeb5+): open a textured GLB on
+   https://pokefit.party (browser engine, ~15 s), move the Filaments slider, confirm no console errors.
+   Only the local server and the Pyodide smoke test were checked.
+2. **Phone-width check of the Colours card** (new Filaments row: label + slider + value + Auto) at ~390 px.
+3. **GLB palette quality** (`pokefit/gltf.py`): "auto" favours fidelity over purge (Squirtle: 7 colours =
+   233 changes / 129 g vs 4 = 127 / 74 g for a ~3 g figure). Ideas: show an estimated colour-change cost
+   per count in the UI; weigh small clusters by how many layers they span; hue-aware merging (closest-first
+   merges Squirtle's cream belly into blue at 3 colours).
+4. **Big GLB scenes are slow** (600k-triangle LEGO GLB: 82 s locally): profile `read_gltf` + mesh checks.
+5. GitHub Actions: checkout/setup-python/deploy-pages@v4 run on deprecated Node 20 — bump majors.
+6. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
+   Cloudflare "Always Use HTTPS" (off; the page redirects itself).
+
+## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
 SketchUp exports here are at **16× working scale** and often non-manifold.
 - Check: `python scripts/diag_stl.py <file.stl>` (needs `pip install trimesh pymeshfix manifold3d`)
 - Fix: `python scripts/repair_shell.py <in.stl> <out.stl> --scale 16 --flat-z <bed plane z in source units>`
@@ -85,8 +103,8 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   upstream Sep 2026) — harmless.
 - Multi-figure 3MFs: picker card at the top of the panel; meshes are parsed per object on demand
   (14 × 500k-face file opens in ~6 s; was 99 s because the regex fast path never matched).
-- Gates: `python -m mypy`, `python -m pytest` (86 incl. slow real-file/Bambu tests, ~1 min),
-  `cd web && bun run typecheck && bun test && bun run build && bun run smoke` (engine under Node).
+- Gates and end-to-end checks: see `AGENTS.md` and `.claude/skills/pokefit-verify`. Export check:
+  `python scripts/verify_export.py <export.3mf>` (paint summary + Bambu slice incl. colour changes/purge).
 - Social preview: `cd web && bun run og`, open http://127.0.0.1:8791/ → writes public/og.gif + og.jpg
   (original creature; no third-party model). Icons: `python scripts/make_icons.py`.
 - Slicing uses the user's X2D/PETG/0.16 project settings (`pokeball60goodPrinted.3mf`, or the
@@ -103,9 +121,6 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
 - Site assets are cache-busted per build (`web/src/version.ts`, `?v=<hash of inputs>` from build.ts): Cloudflare
   rewrites .js/.wasm/.zip to a 4 h browser cache. Discord caches link embeds per URL; an old embed of
   pokefit.party (GIF + JPEG) can persist until Discord refetches — only og.gif is declared now.
-- Site: GitHub Actions warns that checkout/setup-python/deploy-pages@v4 run on Node 20 (forced to 24);
-  bump the action majors when convenient. No LICENSE file yet (public repo = all rights reserved
-  by default) — the user's call. Cloudflare "Always Use HTTPS" is off (the page redirects itself).
 - pokefit known limits (not bugs): ring radius is the minimum over all angles (the latch
   notch sets it, so a figure could be a little bigger turned away from the latch — would need
   yaw-dependent ring profile); manual pockets stay at absolute mm when the size changes;
@@ -123,13 +138,10 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   emissive texture; copy in scratchpad `manex/manex.glb`, not committed): 19.8k tris, depth-3 samples, auto 7
   colours; Bambu CLI slice 60% ball: auto 7 = 233 changes / 129 g / 9.0 h, 4 colours = 127 / 74 g / 5.4 h
   (figure itself ~3 g; the rest is purge). Opens in ~15 s in the browser engine, ~5 s locally.
-  Open: auto count favours fidelity over purge (could weigh area vs. change cost); the 3-colour cut merges
-  cream into blue (closest-first merge) — a hue-aware merge might pick better small palettes. Its base sits
-  1.7 mm above the washer except a tiny bed contact → "raised" magnet seat needed.
-- Big glTF scenes are slow: a 600k-triangle LEGO GLB (Downloads/41714-1-dbix_conv_v3.glb) took 82 s to open
-  locally. Not supported: Draco/meshopt compression, .gltf with external .bin/textures. `planar._xor`
+  Its base sits 1.7 mm above the washer except a tiny bed contact → "raised" magnet seat needed.
+- glTF not supported: Draco/meshopt compression, .gltf with external .bin/textures. `planar._xor`
   repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
-- **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
+- (SketchUp, original machine) **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
   `%APPDATA%\SketchUp\SketchUp 2017\SketchUp\Plugins\tt_cleanup`, but TT_Lib² is not
   installed. Not on GitHub (`thomthom/tt-lib` is the different tt-lib³; `thomthom/cleanup`
   master 3.4.6 still requires TT_Lib²), no Wayback copy. Only source: SketchUp's
