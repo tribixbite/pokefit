@@ -207,6 +207,8 @@ export interface ToolchangeInfo extends ToolchangeCost {
   one_nozzle: ToolchangeCost;
   /** glTF colour: the cost of each palette size. */
   by_count?: (ToolchangeCost & { count: number })[];
+  /** Best-value palette size (before the biggest jump in changes; pokefit/toolchange.best_value_count). */
+  best_count?: number | null;
 }
 
 export interface LoadResponse {
@@ -233,6 +235,8 @@ export interface AmsSlot {
   colour: string;
   type: string;
   name: string;
+  /** Nozzle the AMS unit feeds (firmware id: 0 right, 1 left); null = either (track switch) or unknown. */
+  extruder?: number | null;
 }
 
 /** What became of one imported Bambu preset. */
@@ -265,6 +269,8 @@ export interface Config {
   photos?: boolean;
   /** Local engine with beambam installed: the printer's loaded filaments can be read. */
   printer_link?: boolean;
+  /** The printer has a Filament Track Switch: any AMS spool can feed either nozzle. */
+  track_switch?: boolean;
   /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */
   ams: AmsSlot[];
 }

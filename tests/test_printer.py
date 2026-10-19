@@ -9,12 +9,12 @@ import pytest
 import trimesh
 
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, open_session
-from pokefit.printer import PrinterError, ams_slots, beambam_command, read_state
+from pokefit.printer import PrinterError, ams_slots, beambam_command, read_state, track_switch
 
 STATE = {"print": {
     "ams": {"ams": [
-        {"id": "1", "tray": [{"id": "0", "tray_type": "PLA", "tray_color": "FFFFFFFF", "state": 11}]},
-        {"id": "0", "tray": [
+        {"id": "1", "info": "10001103", "tray": [{"id": "0", "tray_type": "PLA", "tray_color": "FFFFFFFF", "state": 11}]},
+        {"id": "0", "info": "10001003", "tray": [
             {"id": "1", "tray_type": "PETG", "tray_color": "1414C8FF", "tray_sub_brands": "PETG HF", "state": 11},
             {"id": "0", "tray_type": "PETG", "tray_color": "C81414FF", "state": 11},
             {"id": "2", "state": 0},                                   # empty
@@ -29,6 +29,19 @@ def test_slots_in_ams_order_with_labels() -> None:
     got = [(a.label, a.slot, a.type, a.colour) for a in ams_slots(STATE)]
     assert got == [("A1", 0, "PETG", "#C81414"), ("A2", 1, "PETG", "#1414C8"), ("B1", 4, "PLA", "#FFFFFF"),
                    ("Ext", 254, "TPU", "#000000")]
+
+
+def test_nozzle_routing_from_the_unit_info() -> None:
+    # Unit 0 feeds nozzle 0, unit 1 nozzle 1, the external spool is not an AMS unit.
+    assert [a.extruder for a in ams_slots(STATE)] == [0, 0, 1, None]
+    assert not track_switch(STATE)
+    # With a Filament Track Switch (X2D report): bits 8-11 read 0xE and `device.fila_switch` is present.
+    fts = json.loads(json.dumps(STATE))
+    for unit in fts["print"]["ams"]["ams"]:
+        unit["info"] = "10001E03"
+    fts["print"]["device"] = {"fila_switch": {"in": [-1, -1], "info": 0, "out": [1, 0], "stat": 0}}
+    assert [a.extruder for a in ams_slots(fts)] == [None] * 4
+    assert track_switch(fts)
 
 
 def _fake(tmp_path: Path, body: str, code: int = 0) -> str:

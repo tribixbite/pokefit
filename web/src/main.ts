@@ -4,7 +4,7 @@ import { ColorizePanel } from "./colorize";
 import { formatDuration, pct } from "./geometry";
 import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { Viewer } from "./scene";
-import type { Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
+import type { AmsSlot, Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
 import { UndersideEditor } from "./underside";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -209,8 +209,11 @@ function renderPrinter(cfg: Config): void {
   $("photosRow").hidden = !cfg.photos;
   $("amsRow").hidden = !cfg.printer_link;
   $("amsClear").hidden = !cfg.ams.length;
+  // Without a track switch each AMS unit is wired to one nozzle: show which (R / L) beside each spool.
+  const side = (a: AmsSlot): string => (cfg.track_switch || a.extruder == null ? "" : a.extruder === 1 ? " (L)" : " (R)");
   $("amsInfo").textContent = cfg.ams.length
-    ? `${cfg.ams.length} loaded: ${cfg.ams.map((a) => `${a.label} ${a.type}`).join(", ")}` : "";
+    ? `${cfg.ams.length} loaded: ${cfg.ams.map((a) => `${a.label} ${a.type}${side(a)}`).join(", ")}` +
+      (cfg.track_switch ? ". Track switch: any spool can feed either nozzle." : "") : "";
 }
 
 /** Header chip: where the engine runs and, in the browser, its start-up progress. */
