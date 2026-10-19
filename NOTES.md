@@ -100,6 +100,9 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   US #10×3/4″ 33.6, M5 off steel.
 
 ## Open
+- Site assets are cache-busted per build (`web/src/version.ts`, `?v=<hash of inputs>` from build.ts): Cloudflare
+  rewrites .js/.wasm/.zip to a 4 h browser cache. Discord caches link embeds per URL; an old embed of
+  pokefit.party (GIF + JPEG) can persist until Discord refetches — only og.gif is declared now.
 - Site: GitHub Actions warns that checkout/setup-python/deploy-pages@v4 run on Node 20 (forced to 24);
   bump the action majors when convenient. No LICENSE file yet (public repo = all rights reserved
   by default) — the user's call. Cloudflare "Always Use HTTPS" is off (the page redirects itself).
