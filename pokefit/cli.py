@@ -156,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
                         "that float above the bed")
     f.add_argument("--colours", type=int, metavar="N", dest="texture_colours",
                    help="GLB/glTF: reduce the file's colours (texture, vertex colours) to N filaments "
-                        "(default: as many as are clearly distinct, up to 8)")
+                        "(default: the best value, the count before an added colour costs many more filament "
+                             "changes; else as many as are clearly distinct, up to 8)")
     f.add_argument("--bend", default="auto", help="bend legs/tail lying out past the washer up along the sphere: "
                                                   "auto (default), off, or a strength 0..1")
     f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the washer's; 0 = off)")

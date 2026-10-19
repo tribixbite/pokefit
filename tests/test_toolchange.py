@@ -9,7 +9,7 @@ import trimesh
 from pokefit.model3mf import Part
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, open_session
 from pokefit.slicer import reference_settings
-from pokefit.toolchange import flush_matrix, grams, layer_use, nozzle_count, plan, simulate
+from pokefit.toolchange import best_value_count, flush_matrix, grams, layer_use, nozzle_count, plan, simulate
 
 
 def _box(lo: tuple[float, float, float], hi: tuple[float, float, float], ext: int, name: str) -> Part:
@@ -84,6 +84,14 @@ def test_report_has_colour_change_estimates(tmp_path: Path) -> None:
     assert tc["one_nozzle"]["changes"] > 10                                    # one nozzle must swap
     counts = {r["count"]: r for r in tc["by_count"]}
     assert counts[1]["changes"] == 0 and counts[2]["changes"] == 0
+
+
+def test_best_value_is_the_count_before_the_biggest_jump() -> None:
+    # The Manex Squirtle's table: the 4th colour (black eyes) adds 130 changes.
+    rows = [{"count": i + 1, "changes": c} for i, c in enumerate([0, 0, 29, 159, 180, 287, 287])]
+    assert best_value_count(rows) == 3
+    assert best_value_count([{"count": 1, "changes": 0}, {"count": 2, "changes": 10}]) is None
+    assert best_value_count([]) is None
 
 
 def test_settings_without_nozzles_mean_one() -> None:

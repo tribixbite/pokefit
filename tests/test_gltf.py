@@ -149,6 +149,44 @@ def test_colour_count_and_preview(tmp_path: Path) -> None:
         Params(texture_colours=0)
 
 
+def test_auto_count_is_the_best_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import pokefit.pipeline as pl
+
+    f = tmp_path / "ball.glb"
+    f.write_bytes(_textured_sphere().export(file_type="glb"))
+    s = open_session(f, reference_path=pl.BUNDLED_REFERENCE, work_dir=tmp_path / "w")
+    real = pl.colour_rows
+    seen: list[float] = []
+
+    def knee_at_two(session: pl.Session, params: Params, scale: float) -> list[dict]:
+        seen.append(scale)
+        rows = real(session, params, scale)
+        assert [r["count"] for r in rows][:3] == [1, 2, 3]          # the real table is built
+        return [dict(r, changes=[0, 10, 200][i] if i < 3 else 200 + i) for i, r in enumerate(rows)]
+
+    monkeypatch.setattr(pl, "colour_rows", knee_at_two)
+    rep, _ = analyse(s, Params())
+    o, tcinfo = rep.to_dict()["object"], rep.to_dict()["toolchange"]
+    # The third colour (the dot) is a jump in changes: auto keeps 2.
+    assert o["texture_colours"]["auto"] == 2 and o["texture_colours"]["count"] == 2
+    assert len(o["colours"]) == 2 and tcinfo["best_count"] == 2
+    assert set(np.unique(_states(s.figure_parts(Params())[0])).tolist()) == {1, 2}
+    # Decided at the largest size that fits, whatever size is chosen.
+    fit = max(seen)
+    rep_small, _ = analyse(s, Params(figure_scale=fit * 0.5))
+    assert rep_small.to_dict()["object"]["texture_colours"]["auto"] == 2
+    # A chosen count still wins.
+    rep3, _ = analyse(s, Params(texture_colours=3))
+    assert len(rep3.to_dict()["object"]["colours"]) == 3
+
+    # No jump in the table: the file's own palette (3 colours here).
+    monkeypatch.setattr(pl, "colour_rows", lambda session, params, scale: [
+        dict(r, changes=0) for r in real(session, params, scale)])
+    s2 = open_session(f, reference_path=pl.BUNDLED_REFERENCE, work_dir=tmp_path / "w2")
+    rep4, _ = analyse(s2, Params())
+    assert rep4.to_dict()["object"]["texture_colours"]["auto"] == 3
+
+
 def _glb_vertex_colours(vertices: np.ndarray, faces: np.ndarray, linear: np.ndarray) -> bytes:
     """A minimal GLB like ComfyUI's MeshToFile3D writes: float COLOR_0 (linear) under a white PBR material.
     (trimesh's own exporter writes a COLOR_0 accessor with the wrong count for this case.)"""

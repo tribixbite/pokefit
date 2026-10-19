@@ -169,7 +169,8 @@ class Session:
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
     _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
     _settings: dict[tuple, dict] = field(default_factory=dict)          # (presets version, process) -> settings
-    _tc_table: dict[tuple, list[dict[str, Any]]] = field(default_factory=dict)   # palette-size cost table
+    _tc_table: dict[tuple, list[dict[str, Any]]] = field(default_factory=dict)   # palette-size cost tables
+    _auto_count: dict[tuple, int | None] = field(default_factory=dict)     # glTF auto palette size per setup
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -242,21 +243,51 @@ class Session:
         glTF, the palette of the chosen colour count)."""
         if params.colours:
             return list(params.colours)
-        if self.project.texture is not None and params.texture_colours is not None:
-            return list(self.project.texture.paint(params.texture_colours)[0])
+        n = self.texture_count(params)
+        if self.project.texture is not None and n is not None:
+            return list(self.project.texture.paint(n)[0])
         return list(self.project.colours)
 
+    def texture_count(self, params: Params) -> int | None:
+        """A glTF's filament count: the chosen one, else the automatic one (`auto_texture_count`); None for
+        other files, or for the file's own automatic palette."""
+        if self.project.texture is None:
+            return None
+        if params.texture_colours is not None:
+            return params.texture_colours
+        return self.auto_texture_count(params)
+
+    def auto_texture_count(self, params: Params) -> int | None:
+        """Automatic filament count of a glTF: the best value of the colour-change cost table at the largest
+        size that fits (`toolchange.best_value_count`: the count before the biggest jump in filament changes),
+        so "auto" trades detail for hours of print time only where a colour is expensive. None (the file's
+        own palette, by colour distance) when no added colour is a jump, or no settings / fit are known.
+        At the fit limit rather than the chosen size, so resizing the figure does not change its palette."""
+        key = (self._key(params), round(self.ball_scale(params), 6), params.washer, params.clearance, params.slot,
+               params.process, self.presets.version if self.presets else 0)
+        if key not in self._auto_count:
+            if len(self._auto_count) > 16:
+                self._auto_count.clear()
+            best = None
+            cavity = Cavity(self.ball, self.ball_scale(params), get_washer(params.washer), params.clearance)
+            free = max_scale(self.points(params), cavity)
+            if free is not None and free.max_scale > 0:
+                best = tc.best_value_count(colour_rows(self, params, free.max_scale))
+            self._auto_count[key] = best
+        return self._auto_count[key]
+
     def textured_parts(self, params: Params) -> list[Part]:
-        """`unit_parts` with a glTF's colour reduced to `params.texture_colours` filaments
-        (the file loads with the automatic count; geometry and face order are identical)."""
+        """`unit_parts` with a glTF's colour reduced to `texture_count` filaments (the file loads with
+        its own automatic palette; geometry and face order are identical)."""
         parts = self.unit_parts(params)
-        if self.project.texture is None or params.texture_colours is None:
+        n = self.texture_count(params)
+        if self.project.texture is None or n is None:
             return parts
-        key = (self._key(params), params.texture_colours)
+        key = (self._key(params), n)
         if key not in self._textured:
             if len(self._textured) > 8:
                 self._textured.clear()
-            _, extra, base = self.project.texture.paint(params.texture_colours)
+            _, extra, base = self.project.texture.paint(n)
             p0 = parts[0]
             # The conform step's flat base prints in the base filament, which depends on the count.
             rest = [Part(p.name, base, p.vertices, p.faces, p.tri_extra, p.subtype) if p.name == FILL_NAME else p
@@ -277,7 +308,7 @@ class Session:
         parts = self.textured_parts(params)
         if not params.paint:
             return parts
-        key = (self._key(params), params.texture_colours, json.dumps(params.paint, sort_keys=True))
+        key = (self._key(params), self.texture_count(params), json.dumps(params.paint, sort_keys=True))
         if key not in self._painted:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
                 self._painted.clear()
@@ -304,7 +335,7 @@ class Session:
         if not targets:
             return []
         obj = self.obj(params)
-        ukey = f"{obj.id}:{params.texture_colours}:{json.dumps(params.paint, sort_keys=True)}"
+        ukey = f"{obj.id}:{self.texture_count(params)}:{json.dumps(params.paint, sort_keys=True)}"
         if ukey not in self._used:
             parts = self.figure_parts(params)
             self._used[ukey] = used_filaments(parts, obj.extruder)
@@ -739,34 +770,47 @@ def toolchange_info(session: Session, params: Params, final: list[Part], scale: 
         return {}
     obj = session.obj(params)
     info = _tc_estimate(final, obj.extruder, colours, st)
+    rows = colour_rows(session, params, scale)
+    if rows:
+        info["by_count"] = rows
+        info["best_count"] = tc.best_value_count(rows)
+    return info
+
+
+def colour_rows(session: Session, params: Params, scale: float) -> list[dict[str, Any]]:
+    """A glTF's estimated colour-change cost per palette size at figure scale `scale`: rows {count, changes,
+    purge_g, minutes} (empty for other files or without printer settings). From the texture's colour spans
+    (TextureColours.colour_spans): no paint is built, so all sizes cost about one paint (30 s -> 3 s on
+    200k faces). The two most recent scales are kept (the fit limit for "auto", the chosen size)."""
     tex = session.project.texture
     ref = session.settings(params)
-    if tex is not None and ref:
-        key = (session._key(params), round(scale, 5), params.slot, json.dumps(params.paint, sort_keys=True))
-        if key not in session._tc_table:
-            # Per palette size from the texture's colour spans (TextureColours.colour_spans): no paint is
-            # built, so all sizes cost about one paint of the current one (30 s -> 3 s on 200k faces).
-            rows = []
-            unit = session.unit_parts(params)
-            p0 = unit[0]
-            corner_z = p0.vertices[p0.faces][:, :, 2] * scale
-            lh = float(ref.get("layer_height", 0.2) or 0.2)
-            first = float(ref.get("initial_layer_print_height", lh) or lh)
-            for k in range(1, min(MAX_PICK, max(tex.auto_count + 2, 6)) + 1):
-                cols, spans, base = tex.colour_spans(k, corner_z)
-                use = tc.layer_use_arrays(spans[:, 2], spans[:, 3], spans[:, 1].astype(np.int64), len(cols), lh, first)
-                rest = [Part(p.name, base, p.vertices, p.faces, {}, p.subtype) for p in unit[1:]]
-                if rest:                         # the flat base prints in the base filament
-                    extra_use = tc.layer_use(scaled(rest, scale), base, len(cols), lh, first)
-                    rows_n = max(len(use), len(extra_use))
-                    use = np.pad(use, ((0, rows_n - len(use)), (0, 0))) | np.pad(extra_use, ((0, rows_n - len(extra_use)), (0, 0)))
-                st_k = adapt_settings(ref, list(cols), session.slot(params), False)
-                best, _ = tc.plan(use, tc.flush_matrix(st_k, len(cols)), n_nozzles=tc.nozzle_count(st_k))
-                rows.append({"count": k, "changes": best.changes, "purge_g": round(tc.grams(best), 1),
-                             "minutes": round(best.seconds / 60)})
-            session._tc_table = {key: rows}
-        info["by_count"] = session._tc_table[key]
-    return info
+    if tex is None or not ref or scale <= 0:
+        return []
+    key = (session._key(params), round(scale, 5), params.slot, params.process,
+           session.presets.version if session.presets else 0)
+    if key not in session._tc_table:
+        rows = []
+        unit = session.unit_parts(params)
+        p0 = unit[0]
+        corner_z = p0.vertices[p0.faces][:, :, 2] * scale
+        lh = float(ref.get("layer_height", 0.2) or 0.2)
+        first = float(ref.get("initial_layer_print_height", lh) or lh)
+        for k in range(1, min(MAX_PICK, max(tex.auto_count + 2, 6)) + 1):
+            cols, spans, base = tex.colour_spans(k, corner_z)
+            use = tc.layer_use_arrays(spans[:, 2], spans[:, 3], spans[:, 1].astype(np.int64), len(cols), lh, first)
+            rest = [Part(p.name, base, p.vertices, p.faces, {}, p.subtype) for p in unit[1:]]
+            if rest:                         # the flat base prints in the base filament
+                extra_use = tc.layer_use(scaled(rest, scale), base, len(cols), lh, first)
+                rows_n = max(len(use), len(extra_use))
+                use = np.pad(use, ((0, rows_n - len(use)), (0, 0))) | np.pad(extra_use, ((0, rows_n - len(extra_use)), (0, 0)))
+            st_k = adapt_settings(ref, list(cols), session.slot(params), False)
+            best, _ = tc.plan(use, tc.flush_matrix(st_k, len(cols)), n_nozzles=tc.nozzle_count(st_k))
+            rows.append({"count": k, "changes": best.changes, "purge_g": round(tc.grams(best), 1),
+                         "minutes": round(best.seconds / 60)})
+        if len(session._tc_table) > 1:
+            session._tc_table.pop(next(iter(session._tc_table)))
+        session._tc_table[key] = rows
+    return session._tc_table[key]
 
 
 
@@ -902,10 +946,16 @@ def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, 
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
             # glTF colour: the automatic filament count and the count in use (None for other files).
+            # "auto": the count used when none is chosen (best value, else the file's own palette).
             "texture_colours": None if session.project.texture is None else {
-                "auto": session.project.texture.auto_count,
-                "count": params.texture_colours or session.project.texture.auto_count, "max": MAX_PICK},
+                "auto": _auto_count(session, params),
+                "count": params.texture_colours or _auto_count(session, params), "max": MAX_PICK},
             "objects": [{"id": o.id, "name": o.name, "faces": o.face_count} for o in session.project.objects]}
+
+
+def _auto_count(session: Session, params: Params) -> int:
+    assert session.project.texture is not None
+    return session.auto_texture_count(params) or session.project.texture.auto_count
 
 
 def _ball_info(cavity: Cavity, washer: Washer) -> dict[str, Any]:
