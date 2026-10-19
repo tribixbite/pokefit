@@ -3,6 +3,8 @@ name = "pokefit"
 version = "0.1.0"
 description = "Fit a figure inside a scaled Pokéball, add magnet pockets, verify printability"
 requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 # The engine also runs in the browser (Pyodide): keep this list to packages Pyodide
 # ships (manifold3d is swapped for its WebAssembly build there, see pokefit/geom.py).
 dependencies = [
@@ -10,7 +12,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

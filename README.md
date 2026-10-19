@@ -72,5 +72,11 @@ washer-seat bottom shell: put `pokeball.3mf` in the repo folder, or load it on t
 
 Every push to `main` runs the gates and deploys `web/dist` to GitHub Pages (`.github/workflows/deploy.yml`).
 
+## Licence
+
+pokefit is free software under the [GNU Affero General Public License v3.0](LICENSE) or (at your option) any
+later version, the same licence as [beambam](https://github.com/tribixbite/beambam). If you run a modified
+version as a website, offer its users the source (AGPL section 13).
+
 pokefit is a fan-made tool, not affiliated with or endorsed by Nintendo, Game Freak, Creatures or The Pokémon
 Company. Pokémon and Poké Ball are trademarks of their respective owners.

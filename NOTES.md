@@ -5,15 +5,15 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **Printer link next steps** (`docs/integration.md` "Next steps"; needs the user): beambam credentials on
-   this PC (`~/.x2d/credentials`) to try "Use my printer's AMS" for real; then send-to-printer (the print
-   file `.gcode.3mf` now comes out of Slice; next `beambam print … --ams-mapping`) — blocked in beambam by the
-   dual-nozzle `nozzle_mapping` print start (err 84033544); live view (`beambam camera` MJPEG on :8766) and
-   AMS load/unload in a local "Printer" card. Ask before any action that changes the printer.
-2. **Palette choice** (`pokefit/gltf.py`): a chosen count now merges by a softened Ward cost (3 colours keep
-   blue / cream / brown; black eyes come in at 4). "Auto" still picks by colour distance (7 for the
-   Squirtles) and the Colours card stars the best-value count; ask the user whether auto should default to
-   the starred count instead (it trades detail for hours of print time).
+1. **Printer link next steps** (`docs/integration.md` "Next steps"). Credentials are set up
+   (`~/.x2d/credentials`, never in the repo); `beambam status` and "Use my printer's AMS" work on the X2D
+   (4 AMS, 16 spools, track switch installed). Next, read-only first: live view (`beambam camera` MJPEG on
+   :8766) and print progress in a local "Printer" card; then send-to-printer (`beambam print …
+   --ams-mapping` with the Slice step's `.gcode.3mf`), blocked in beambam by the dual-nozzle
+   `nozzle_mapping` print start (err 84033544); AMS load/unload. **Ask the user before any action that
+   changes the printer**, every time.
+2. **craftmatic push**: the "Fit in a Pokéball" handoff is committed in craftmatic (`343cd48a`, `d4182af6`,
+   `VIEW-19`) but not pushed; another agent session works in that repo. Push only when the user says so.
 3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
@@ -28,11 +28,10 @@ exist only on the original Windows machine (ask the user for the files).
    4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 65-69 s, was 289 s
    under shapely 2.2 — islands now section each body when loops cross). Next: conform's height fields
    (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's islands sections (~35-49 s, per body).
-7. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default; note beambam
-   is AGPL, so pokefit only calls it as a program); Cloudflare "Always Use HTTPS" (off; the page redirects
-   itself); turning on `has_filament_switcher` (track switch) in the Bambu project (it is off there).
-8. craftmatic side of the handoff (its repo, ~15 lines, snippet in `docs/integration.md`): ask before
-   changing that repo (it has an unpushed local commit).
+7. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
+   Off now: an `http://` visit gets the page over plain HTTP and only then redirects itself with a script;
+   on, Cloudflare answers every `http://` request with a redirect before any content. Explained to the user
+   2026-10-19; it is their account, so they flip it.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
 SketchUp exports here are at **16× working scale** and often non-manifold.
@@ -159,8 +158,12 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   at 390 px. The browser's palette differs slightly from the local one (8,715 vs 8,481 painted triangles at
   auto 7; colour 6 grey-green vs dark brown): Pyodide's scipy k-means lands differently with the same seed.
   Each engine is self-consistent (export uses the same engine); make it deterministic only if users compare.
+- Auto palette = best value (`toolchange.best_value_count`, decided at the fit limit; the user chose this
+  2026-10-19). Manex Squirtle with today's palettes, Bambu slices: 1/2/3/4 colours = 0.67/1.76/5.32/6.35 h,
+  0/0/120/151 changes; estimate 0/0/120/161 changes, +46/+255/+327 min vs sliced +65/+279/+341 -> auto 2.
+  `has_filament_switcher` 0 vs 1: identical slice (7 colours 10.19 h / 145.7 g / 425 changes).
 - Toolchange model (`pokefit/toolchange.py`), Bambu CLI on the X2D project. Manex Squirtle palette sizes
-  1/2/3/4/7: 0.67/1.57/2.35/5.45/10.19 h, 2.8/17.3/28.9/73.8/145.7 g (fit: 104.6 s and 0.43 g per filament
+  (older palettes) 1/2/3/4/7: 0.67/1.57/2.35/5.45/10.19 h, 2.8/17.3/28.9/73.8/145.7 g (fit: 104.6 s and 0.43 g per filament
   change incl. flush, 18 s per nozzle switch; predictions within 0.4 h / 12 g). Photo Squirtle, 5 colours, all
   16 nozzle splits: 6.94 h (Bambu's auto 1,2,2,2,2 = the planner's pick) to 10.79 h / 156.9 g (one nozzle).
   Manex 7 colours: Bambu auto 1,1,1,2,2,1,2 = 10.19 h beat the planner's 1,2,1,2,2,2,2 = 10.34 h, so exports

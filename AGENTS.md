@@ -86,8 +86,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
-| `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`). Calibrated on Bambu slices. |
-| `printer.py` | The printer's loaded AMS filaments via beambam's CLI (subprocess: beambam is AGPL, never imported); colours matched with `remap.match_slots`. |
+| `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`), `best_value_count` = a glTF's "auto" palette size (`Session.auto_texture_count`). Calibrated on Bambu slices. |
+| `printer.py` | The printer's loaded AMS filaments via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide); per-unit nozzle routing and track-switch detection; colours matched with `remap.match_slots`. Credentials live in `~/.x2d/credentials`, never in the repo. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
@@ -174,9 +174,10 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
 
 ## Ecosystem: beambam and craftmatic
 
-Plan and boundaries: `docs/integration.md`. beambam (printer control, AGPL) is used only as a subprocess
-(`POKEFIT_BEAMBAM`, default `beambam` on PATH; a venv is at `C:/git/beambam/.venv` on the original machine).
-craftmatic (TS) hands models over as files (`web/src/handoff.ts`).
+Plan and boundaries: `docs/integration.md`. beambam (printer control; AGPL-3.0-or-later like
+pokefit) is used as a subprocess (`POKEFIT_BEAMBAM`, default `beambam` on PATH; a venv is at `C:/git/beambam/.venv`
+on the original machine). craftmatic (TS) hands models over as files (`web/src/handoff.ts`; its side is
+`web/src/viewer/pokefit-handoff.ts`, "Fit in a Pokéball").
 
 ## Testing the UI with a browser agent
 

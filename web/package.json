@@ -1,6 +1,7 @@
 {
   "name": "pokefit-web",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "build": "bun run build.ts",
