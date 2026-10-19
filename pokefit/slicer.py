@@ -46,6 +46,7 @@ class SliceResult:
     support_seconds: float = 0.0   # time Bambu spends printing support features
     grams_per_filament: list[float] = field(default_factory=list)
     features: dict[str, float] = field(default_factory=dict)   # seconds per feature type (all plates)
+    print_file: str = ""           # the sliced .gcode.3mf (G-code, thumbnails, md5) when one was asked for
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -172,8 +173,13 @@ def read_result(out_dir: Path, copies: int) -> SliceResult:
 
 
 def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, arrange: bool = False,
-              work_dir: str | Path | None = None, timeout: float = TIMEOUT_S) -> SliceResult:
-    """Slice every plate of a 3MF; never raises for slicer problems (they come back as `error`)."""
+              work_dir: str | Path | None = None, timeout: float = TIMEOUT_S,
+              export_name: str | None = None) -> SliceResult:
+    """Slice every plate of a 3MF; never raises for slicer problems (they come back as `error`).
+
+    `export_name`: also write the sliced project — G-code, plate thumbnails, md5 — as this
+    `.gcode.3mf` in the output folder: the file a Bambu printer prints (Handy, SD card, LAN). The CLI
+    takes `--export-3mf` relative to `--outputdir`, so it is a bare name."""
     exe_path = find_exe(exe)
     if exe_path is None:
         return SliceResult(False, error=f"Bambu Studio not found at {exe or DEFAULT_EXE}", copies=copies)
@@ -183,6 +189,8 @@ def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, 
     cmd = [str(exe_path), "--slice", "0"]
     if arrange:
         cmd += ["--arrange", "1"]
+    if export_name:
+        cmd += ["--export-3mf", Path(export_name).name]
     cmd += ["--outputdir", str(out_dir), str(Path(path).resolve())]
     t0 = time.time()
     rc: int | None = None
@@ -199,6 +207,8 @@ def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, 
                                copies=copies)
     res = read_result(out_dir, copies)
     res.wall_time = time.time() - t0
+    if export_name and res.ok and (out_dir / Path(export_name).name).is_file():
+        res.print_file = str(out_dir / Path(export_name).name)
     if not res.ok and rc and not res.error:
         res.error = f"exit code {rc}"
     return res

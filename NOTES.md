@@ -6,8 +6,8 @@ exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
 1. **Printer link next steps** (`docs/integration.md` "Next steps"; needs the user): beambam credentials on
-   this PC (`~/.x2d/credentials`) to try "Use my printer's AMS" for real; then send-to-printer (slice to
-   `.gcode.3mf` with the CLI's `--export-3mf`, `beambam print … --ams-mapping`) — blocked in beambam by the
+   this PC (`~/.x2d/credentials`) to try "Use my printer's AMS" for real; then send-to-printer (the print
+   file `.gcode.3mf` now comes out of Slice; next `beambam print … --ams-mapping`) — blocked in beambam by the
    dual-nozzle `nozzle_mapping` print start (err 84033544); live view (`beambam camera` MJPEG on :8766) and
    AMS load/unload in a local "Printer" card. Ask before any action that changes the printer.
 2. **Palette choice** (`pokefit/gltf.py`): a chosen count now merges by a softened Ward cost (3 colours keep

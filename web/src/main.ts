@@ -559,7 +559,12 @@ async function doSlice(): Promise<void> {
         res.x10 ? sliceLine(`10× ${needs ? "with" : "no"} supports`, res.x10) : h("tr")));
     applySlicerVerdict(res);
     const warn = [...res.off.warnings, ...res.auto.warnings].filter(Boolean);
-    out.replaceChildren(verdict, tbl, per, ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
+    const pf = res.print_file;
+    const print = pf ? h("div", {},
+      h("a", { href: pf.url, download: pf.name, textContent: `⬇ ${pf.name}`,
+        title: "Sliced and ready to print: send it from Bambu Studio or Handy, copy it to the SD card, or beambam print" }),
+      h("span", { cls: "muted", textContent: ` — ready to print (${needs ? "with" : "no"} supports)` })) : "";
+    out.replaceChildren(verdict, tbl, per, print, ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
     out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {

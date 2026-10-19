@@ -63,8 +63,9 @@ Measured with the Bambu CLI on the user's X2D project (PETG, 0.16 mm, prime towe
 1. **beambam credentials on this PC** (`~/.x2d/credentials`: ip, access code, serial) → the "Use my
    printer's AMS" button works (it is hidden unless `beambam` is found; set `POKEFIT_BEAMBAM` to
    `C:/git/beambam/.venv/Scripts/beambam.exe`, which this session installed).
-2. **Send to printer**: slice to a `.gcode.3mf` (Bambu CLI `--export-3mf`), then `beambam print <file>
-   --ams-mapping …` from the AMS match. Needs the per-install signing key (`~/.x2d/printer_sign_key.pem`,
+2. **Send to printer**: the local Slice step now writes the print file (`…_auto.gcode.3mf` /
+   `…_off.gcode.3mf`, with the plate thumbnails the touchscreen needs) and offers it as a download; next is
+   `beambam print <file> --ams-mapping …` from the AMS match. Needs the per-install signing key (`~/.x2d/printer_sign_key.pem`,
    extracted from Bambu Handy via adb, per beambam's docs). **Blocker in beambam**: the dual-nozzle
    `nozzle_mapping` in `project_file` is not reproduced yet (err 84033544) — capture one real dual-nozzle
    print start (Bambu Studio → printer) and add it to beambam first. Until then: upload with

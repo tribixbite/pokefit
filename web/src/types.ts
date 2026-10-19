@@ -287,6 +287,8 @@ export interface SliceVariants {
   auto: SliceResult;
   x10?: SliceResult;
   supports_needed: boolean | null;
+  /** The sliced print file (.gcode.3mf) of the recommended variant, ready for the printer. */
+  print_file?: { name: string; path: string; url: string } | null;
 }
 
 export interface Job<T> {

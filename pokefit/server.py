@@ -367,7 +367,16 @@ class Handler(BaseHTTPRequestHandler):
             s.unit_parts(params)
 
         def run() -> dict[str, Any]:
-            return slice_variants(s, params, x10=x10)
+            res = slice_variants(s, params, x10=x10)
+            # Offer the print file (.gcode.3mf) as a download next to the exports.
+            if res.get("print_file"):
+                src = Path(res["print_file"])
+                dest = OUT_DIR / safe_stem(s.project.path.name) / src.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(src.read_bytes())
+                res["print_file"] = {"name": dest.name, "path": str(dest),
+                                     "url": "/api/download?file=" + quote(str(dest.relative_to(OUT_DIR)).replace("\\", "/"))}
+            return res
         self._json({"job": _start_job(run)})
 
     def get_job(self, q: dict[str, str]) -> None:

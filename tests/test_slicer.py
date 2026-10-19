@@ -124,3 +124,20 @@ def test_exit_hang_is_cut_short(tmp_path: Path) -> None:
     rc = _run_until_result([sys.executable, str(script)], tmp_path, timeout=30, grace=1.0)
     assert rc is None and time.time() - t0 < 10
     assert read_result(tmp_path, 1).seconds == 5
+
+
+@pytest.mark.skipif(find_exe() is None or not REF.exists(), reason="Bambu Studio or reference not present")
+def test_slice_writes_a_print_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--export-3mf: the sliced .gcode.3mf a printer takes (G-code, its md5, plate thumbnail). Also a
+    RELATIVE output folder (the CLI runs inside it, so a relative --outputdir once landed one deeper)."""
+    import zipfile
+    box = trimesh.creation.box([10, 10, 6]).apply_translation([0, 0, 3])
+    proj = read_project(write_inline_3mf(tmp_path / "b.3mf", box, np.eye(4)))
+    ref = reference_settings(REF)
+    f = write_project(proj, "b", 1, [Part("b", 0, np.asarray(box.vertices), np.asarray(box.faces))], tmp_path / "b1.3mf",
+                      settings=adapt_settings(ref, ["#FF0000"], default_slot(ref), False))
+    monkeypatch.chdir(tmp_path)
+    res = slice_3mf(f, work_dir="out", export_name="b.gcode.3mf")
+    assert res.ok, res.error
+    names = zipfile.ZipFile(res.print_file).namelist()
+    assert {"Metadata/plate_1.gcode", "Metadata/plate_1.gcode.md5", "Metadata/plate_1.png"} <= set(names)

@@ -1126,12 +1126,16 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     root = Path(work_root) if work_root else session.work_dir / f"slice_{int(time.time() * 1000)}"
     root.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {}
+    stem = safe_stem(session.project.path.name)
     for name, sup in (("off", False), ("auto", True)):
         f = write_project(session.project, obj.name, obj.extruder, final, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))
-        out[name] = slice_3mf(f, work_dir=root / name).to_dict()
+        out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{name}.gcode.3mf").to_dict()
     needs = out["auto"].get("support_seconds", 0) > 0
     out["supports_needed"] = needs if out["auto"].get("ok") else None
+    # The print file of the variant the slicer says to print (supports only if it generated any).
+    chosen = out["auto"] if needs else out["off"]
+    out["print_file"] = chosen.get("print_file") or None
     if x10:
         v = np.vstack([p.vertices for p in final])
         ext = np.ptp(v, axis=0)

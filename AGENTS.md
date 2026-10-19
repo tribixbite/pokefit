@@ -117,6 +117,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 - **Bambu CLI nozzle map** (X2D/H2D): the CLI takes `filament_map_mode` / `filament_maps` from the PLATE's
   metadata in `Metadata/model_settings.config`, not from `project_settings.config` (a "Manual" map there
   is silently replaced by its auto choice).
+- **Bambu CLI print file**: `--export-3mf NAME` writes the sliced `.gcode.3mf` (G-code, md5, plate
+  thumbnails rendered by the CLI) and takes NAME relative to `--outputdir` (an absolute path writes nothing).
 - **Bambu CLI**: a 3MF must carry `<metadata name="Application">BambuStudio-…` or embedded settings are
   ignored; it writes `result.json` into its cwd; it sometimes hangs after writing it (handled: poll + kill).
 - **Cloudflare** in front of GitHub Pages keeps .js/.wasm/.zip for 4 h while HTML is 600 s: every asset

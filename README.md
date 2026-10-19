@@ -34,7 +34,8 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   print on your project's plate is flagged (Bambu would refuse to slice it).
 
 The website runs the whole engine **in your browser** (Python → WebAssembly via Pyodide); files are never
-uploaded. The local version adds **Bambu Studio slicing** (print time and filament for 1 and 10 copies, supports)
+uploaded. The local version adds **Bambu Studio slicing** (print time and filament for 1 and 10 copies, supports,
+and the sliced **print file** — `.gcode.3mf` with thumbnails — ready to send to the printer)
 and **photos to 3D**: photos of a toy from the front, left and back become a coloured, printable model, made on
 your own GPU by [Pixal3D](https://github.com/TencentARC/Pixal3D) in a local ComfyUI (setup in `AGENTS.md`, "Photos to
 3D"; about 3–4 minutes on a 16 GB laptop GPU):
