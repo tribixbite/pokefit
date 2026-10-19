@@ -59,7 +59,24 @@ const ballModel = join(root, "pokeball.3mf");
 const haveBall = existsSync(ballModel);
 if (haveBall) console.log(`[${secs()} s] ball model: ${api.set_ball_model("pokeball.3mf", new Uint8Array(readFileSync(ballModel)))}`);
 
-const glb = api.preview(loaded.session, params);
+// Colorize: tap the left leg's outer side (figure frame, file size); a region stops at the box edges,
+// a piece is the whole leg. Paint the leg with a second, added colour.
+const plain = JSON.stringify(rep.params);
+const side = JSON.parse(api.pick_face(loaded.session, plain,
+  JSON.stringify({ point: [-13, 0, 6], normal: [-1, 0, 0], mode: "region", angle: 30 })));
+const leg = JSON.parse(api.pick_face(loaded.session, plain,
+  JSON.stringify({ point: [-13, 0, 6], normal: [-1, 0, 0], mode: "piece", angle: 30 })));
+const painted = JSON.stringify({ ...rep.params, colours: ["#E05028", "#161616"],
+  paint: [{ part: leg.part, face: leg.face, filament: 2, mode: "piece", angle: 30 }] });
+const rep3 = JSON.parse(api.run_analyse(loaded.session, painted));
+const regionGlb = api.preview(loaded.session, painted, JSON.stringify({ mode: "region", angle: 30 }));
+const regionBytes = regionGlb.toJs().length;
+regionGlb.destroy();
+console.log(`[${secs()} s] colorize: region ${side.faces} faces, piece ${leg.faces} faces; ` +
+  `painted ${rep3.object.parts.map((x: { painted: number }) => x.painted).join("+")} faces; regions preview ${regionBytes} B`);
+const [paintedJson] = api.run_export(loaded.session, painted).toJs({ create_proxies: false });
+
+const glb = api.preview(loaded.session, params, "null");
 const bytes = glb.toJs();
 glb.destroy();
 const [resJson, files] = api.run_export(loaded.session, params).toJs({ create_proxies: false });
@@ -68,6 +85,10 @@ console.log(`[${secs()} s] preview ${bytes.length} B; export ${files.map(([n, b]
 
 const problems: string[] = [];
 if (!(rep.fit.scale > 0)) problems.push("figure does not fit");
+if (side.faces !== 2) problems.push(`region pick: expected 2 faces (one box side), got ${side.faces}`);
+if (leg.faces !== 12) problems.push(`piece pick: expected 12 faces (the leg box), got ${leg.faces}`);
+if (!rep3.object.parts.some((x: { painted: number }) => x.painted >= 12)) problems.push("paint was not applied");
+if (JSON.parse(paintedJson).status === undefined) problems.push("painted export failed");
 if (rep.pockets.length !== 2) problems.push(`expected 2 pockets, got ${rep.pockets.length}`);
 if (rep2.ball.inner_diameter.toFixed(1) !== "50.0") problems.push(`diameter ${rep2.ball.inner_diameter}`);
 if (String.fromCharCode(...bytes.slice(0, 4)) !== "glTF") problems.push("preview is not a GLB");

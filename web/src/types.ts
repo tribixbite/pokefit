@@ -39,6 +39,10 @@ export interface Params {
   pocket_seat: "washer" | "raised";
   /** Import file: figure filament -> project slot (1-based). */
   filament_map: Record<string, number> | null;
+  /** Colorize: filament colours (index 0 = filament 1); null = the file's. */
+  colours: string[] | null;
+  /** Colorize paint operations, applied in order. */
+  paint: PaintOp[] | null;
   object_id: string | null;
   slot: number | null;
   settings_source: "reference" | "original";
@@ -90,7 +94,46 @@ export interface ObjectInfo {
   faces: number;
   parts: { name: string; extruder: number; faces: number; painted: number }[];
   colours: string[];
+  /** The file's own colours (before colorize changes). */
+  file_colours: string[];
   objects: { id: string; name: string; faces: number }[];
+}
+
+/** part: up to concave valleys; region: up to any crease; piece: connected shell; brush: a disc; face: one triangle. */
+export type PaintMode = "part" | "region" | "piece" | "brush" | "face";
+
+/** Paint the region (by `mode`, crease `angle` in degrees) of one source triangle with a filament (0 = erase). */
+export interface PaintOp {
+  part: number;
+  face: number;
+  filament: number;
+  mode: PaintMode;
+  angle: number;
+  /** Brush radius in the file's mm (print mm ÷ figure scale). */
+  radius: number;
+}
+
+/** Colour the preview by what a tap would paint. */
+export interface RegionView {
+  mode: PaintMode;
+  angle: number;
+}
+
+export interface PickRequest {
+  point: number[];
+  normal: number[] | null;
+  mode: PaintMode;
+  angle: number;
+  radius: number;
+}
+
+export interface PickResult {
+  part: number;
+  face: number;
+  distance: number;
+  faces: number;
+  share: number;
+  area_mm2: number;
 }
 
 export interface Underside {

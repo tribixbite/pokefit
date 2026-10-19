@@ -10,6 +10,8 @@ API (all JSON unless noted):
   POST /api/analyse     {session, params}                          -> report
   POST /api/washers     {session, params}                          -> [washer rows]
   GET  /api/preview.glb ?session&object&rx&ry                      -> GLB (figure at scale 1)
+  POST /api/preview     {session, params, regions?: {mode, angle}} -> GLB (with colorize paint / regions)
+  POST /api/pick        {session, params, point, normal, mode, angle} -> {part, face, faces, ...}
   POST /api/slice       {session, params, x10}                     -> {job}
   GET  /api/job         ?id                                        -> {state, result|error}
   POST /api/export      {session, params}                          -> {files: [{name, url}], ...}
@@ -31,7 +33,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
                        input_checks,
-                       open_session, preview_glb, safe_stem, slice_variants, washer_table)
+                       open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .slicer import find_exe, reference_settings
 from .washer import CATALOGUE, DEFAULT_WASHER
 
@@ -255,6 +257,30 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             glb = preview_glb(s, params)
         self._send(200, glb, "model/gltf-binary")
+
+    def post_preview(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        reg = body.get("regions")
+        regions = (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
+        with lock:
+            glb = preview_glb(s, params, regions)
+        self._send(200, glb, "model/gltf-binary")
+
+    def post_pick(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        try:
+            point = [float(v) for v in body["point"]][:3]
+            normal = [float(v) for v in body["normal"]][:3] if body.get("normal") else None
+            mode, angle = str(body.get("mode", "part")), float(body.get("angle", 15.0))
+            with lock:
+                res = pick(s, params, point, normal, mode, angle, float(body.get("radius", 0.0)))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ApiError(400, f"bad pick: {exc}") from exc
+        self._json(res)
 
     def post_slice(self, q: dict[str, str]) -> None:
         body = self._json_body()

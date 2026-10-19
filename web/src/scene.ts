@@ -13,6 +13,12 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { allowedProfile, innerWallProfile, type RZ } from "./geometry";
 import type { Check, Report } from "./types";
 
+/** A tap on the figure: surface point and outward normal in the figure frame at scale 1. */
+export interface FigureHit {
+  point: number[];
+  normal: number[];
+}
+
 const STATUS_COLOUR: Record<string, number> = { fail: 0xff4d5e, warn: 0xffb347, pass: 0x4cd38a, info: 0x7aa2ff };
 
 /** Lathe around the z axis (three's LatheGeometry spins around y). */
@@ -42,6 +48,9 @@ export class Viewer {
   private frameRequested = false;
   /** Outer radius of the ball (final mm), for framing the camera. */
   private ballRadius = 25;
+  /** Colorize: called with a tap on the figure (figure frame, scale 1); null = taps orbit only. */
+  private pickHandler: ((hit: FigureHit) => void) | null = null;
+  private raycaster = new THREE.Raycaster();
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
@@ -69,6 +78,44 @@ export class Viewer {
     this.scene.add(this.ballGroup, this.figureFrame);
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
+
+    // A tap (press and release within a few pixels) picks; a drag still orbits.
+    let down: { x: number; y: number; id: number } | null = null;
+    const canvas = this.renderer.domElement;
+    canvas.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
+    canvas.addEventListener("pointerup", (e) => {
+      const d = down;
+      down = null;
+      if (!d || d.id !== e.pointerId || !this.pickHandler) return;
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) return;
+      const hit = this.hitFigure(e.clientX, e.clientY);
+      if (hit) this.pickHandler(hit);
+    });
+  }
+
+  /** Turn tap-to-pick on (with a handler) or off. */
+  setPickHandler(fn: ((hit: FigureHit) => void) | null): void {
+    this.pickHandler = fn;
+    this.renderer.domElement.classList.toggle("picking", fn !== null);
+  }
+
+  /** The figure surface under a screen point, in the figure GLB's own frame (figure frame, scale 1). */
+  private hitFigure(clientX: number, clientY: number): FigureHit | null {
+    if (!this.figure || !this.figureFrame.visible) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObject(this.figure, true);
+    // The cut view hides the front half of the ball only; the figure is whole, so the first hit is the one seen.
+    const h0 = hits.find((h) => (h.object as THREE.Mesh).isMesh && h.face);
+    if (!h0 || !h0.face) return null;
+    const inv = new THREE.Matrix4().copy(this.figure.matrixWorld).invert();
+    const point = h0.point.clone().applyMatrix4(inv);
+    // Face normal: mesh local → world → figure frame; facing the camera (the GLB is drawn double-sided).
+    const n = h0.face.normal.clone().transformDirection(h0.object.matrixWorld);
+    if (n.dot(this.raycaster.ray.direction) > 0) n.negate();
+    n.transformDirection(inv);
+    return { point: [point.x, point.y, point.z], normal: [n.x, n.y, n.z] };
   }
 
   private resize(): void {

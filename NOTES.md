@@ -69,6 +69,14 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   (Downloads/eevee+v3 (1).3mf): washer → 2 pockets between belly and front legs, 0.8 mm walled
   (paws are ~4 mm wide, too narrow for a walled Ø4.18 pocket); raised → one in the tail at 1.2 mm.
 - Islands/overhangs are "info" details; "Supports needed" is the single amber warning.
+- Colorize (`pokefit/colorize.py`, UI `web/src/colorize.ts`): `Params.colours` (palette) + `Params.paint`
+  (PaintOp list: part, face, filament, mode part|region|piece|brush|face, angle, radius in file mm), applied
+  by `Session.figure_parts` on top of `unit_parts`, written as whole-triangle `paint_color`. "part" = spread
+  except across concave edges sharper than angle (default 15°); on the plain Eevee STL
+  (Downloads/eevee+v3_stls.zip) it isolates ears, eyes (67 tris each), nose, bib (631), body. Taps: three.js
+  raycast -> `/api/pick` (KD-tree + exact point-triangle, normal-facing filter). Verified: exported 3MF sliced by
+  Bambu CLI with 3 filaments (9.1 / 1.35 / 2.8 g). Settings: `adapt_settings` (reference) or `resize_filaments`
+  (file's own settings) grow to the palette length.
 - Export also writes `<name>_pokefit_<pct>_import.3mf` for dragging into an open Bambu project
   ("Import geometry only" keeps part filaments + paint, which then mean that project's slots):
   filaments renumbered to the closest-colour slot of the reference project (CIELAB ΔE ≤ 25, else

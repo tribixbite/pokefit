@@ -1,0 +1,167 @@
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+import trimesh
+
+from conftest import BALL_3MF, two_footed, write_inline_3mf
+from pokefit.colorize import PaintOp, TopologyCache, apply_paint, paint_code, pick_face, region_faces, topology
+from pokefit.model3mf import Part, read_project
+from pokefit.paint import decode_majority
+from pokefit.pipeline import Params, analyse, export, open_session, pick, preview_glb
+from pokefit.slicer import resize_filaments
+
+
+def _part(m: trimesh.Trimesh, extra: dict[int, str] | None = None) -> Part:
+    return Part("body", 1, np.asarray(m.vertices, float), np.asarray(m.faces, np.int64), dict(extra or {}))
+
+
+def _two_boxes() -> trimesh.Trimesh:
+    """Two separate cubes (two pieces, as an STL with loose eyes would have)."""
+    a = trimesh.creation.box([10, 10, 10]).apply_translation([0, 0, 5])
+    b = trimesh.creation.box([4, 4, 4]).apply_translation([20, 0, 2])
+    m = trimesh.util.concatenate([a, b])
+    assert isinstance(m, trimesh.Trimesh)
+    return m
+
+
+def _face_at(part: Part, point: list[float], normal: list[float]) -> int:
+    pi, fi, d = pick_face([part], np.array(point, float), np.array(normal, float))
+    assert pi == 0 and d < 1e-6
+    return fi
+
+
+def test_paint_code_round_trips() -> None:
+    """Whole-triangle codes decode to the same filament, including 0xF continuation (18+)."""
+    assert [paint_code(k) for k in (1, 2, 3, 4)] == ["4", "8", "0C", "1C"]
+    for k in range(1, 40):
+        assert decode_majority(paint_code(k)) == k
+
+
+def test_region_piece_and_face() -> None:
+    part = _part(_two_boxes())
+    topo = TopologyCache([part])
+    f = _face_at(part, [-5, 0, 5], [-1, 0, 0])               # big cube, -x side
+    assert len(region_faces(topo, 0, f, "region", 30)) == 2    # stops at the 90° edges
+    assert len(region_faces(topo, 0, f, "region", 95)) == 12   # nothing bends more than 90°
+    assert len(region_faces(topo, 0, f, "piece", 30)) == 12    # the big cube, not the small one
+    assert region_faces(topo, 0, f, "face", 30).tolist() == [f]
+
+
+def test_part_mode_stops_at_valleys_not_ridges() -> None:
+    """A block with a smaller block on top (a "tail" joined on): the joint is a concave valley, so a part
+    tap on the top block paints just its 5 visible sides; every convex 90° box edge is crossed."""
+    body = trimesh.creation.box([20, 20, 10]).apply_translation([0, 0, 5])
+    tail = trimesh.creation.box([6, 6, 6]).apply_translation([0, 0, 12.9])
+    m = trimesh.boolean.union([body, tail], engine="manifold")
+    part = _part(m)
+    topo = TopologyCache([part])
+    f_tail = _face_at(part, [0, 0, 15.9], [0, 0, 1])
+    tail_faces = region_faces(topo, 0, f_tail, "part", 15)
+    cz = m.triangles_center[tail_faces][:, 2]
+    assert cz.min() > 10 - 1e-6 and len(tail_faces) == len(np.nonzero(m.triangles_center[:, 2] > 10 + 1e-6)[0])
+    f_body = _face_at(part, [-10, 0, 5], [-1, 0, 0])
+    body_faces = region_faces(topo, 0, f_body, "part", 15)
+    assert len(body_faces) + len(tail_faces) == len(m.faces)
+    assert len(region_faces(topo, 0, f_body, "region", 15)) == 2   # crease rule stops at every box edge
+
+
+def test_brush_paints_a_disc_of_connected_surface() -> None:
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    f = _face_at(part, [0, 0, 10], [0, 0, 1])
+    faces = region_faces(topo, 0, f, "brush", 15, radius=3)
+    c = ball.triangles_center
+    d = np.linalg.norm(c[faces] - c[f], axis=1)
+    assert d.max() <= 3 + 1e-9 and len(faces) == int(np.sum(np.linalg.norm(c - c[f], axis=1) <= 3))
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "brush"})
+
+
+def test_topology_merges_stl_soup() -> None:
+    """An STL soup (no shared vertices) still has edge neighbours."""
+    m = trimesh.creation.box([10, 10, 10])
+    soup = Part("soup", 1, np.asarray(m.vertices[m.faces].reshape(-1, 3), float),
+                np.arange(len(m.faces) * 3).reshape(-1, 3))
+    assert len(topology(soup).pairs) == 18                     # 12 triangles × 3 edges / 2
+
+
+def test_pick_skips_the_far_side_of_a_thin_plate() -> None:
+    plate = trimesh.creation.box([20, 20, 0.4]).apply_translation([0, 0, 0.2])
+    part = _part(plate)
+    _, f, _ = pick_face([part], np.array([0.0, 0.0, 0.4]), np.array([0.0, 0.0, 1.0]))
+    assert plate.face_normals[f][2] > 0.99
+    _, f, _ = pick_face([part], np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, -1.0]))
+    assert plate.face_normals[f][2] < -0.99
+
+
+def test_apply_paint_order_erase_and_other_attributes() -> None:
+    part = _part(_two_boxes(), {0: 'paint_supports="4"'})
+    topo = TopologyCache([part])
+    f_big = 0
+    f_small = _face_at(part, [22, 0, 2], [1, 0, 0])
+    ops = [PaintOp(0, f_big, 2, "piece"), PaintOp(0, f_small, 3, "piece"), PaintOp(0, f_small, 0, "face")]
+    (out,) = apply_paint([part], ops, topo)
+    states = {i: decode_majority(a.split('paint_color="')[1].split('"')[0])
+              for i, a in out.tri_extra.items() if "paint_color" in a}
+    assert sum(1 for s in states.values() if s == 2) == 12
+    assert sum(1 for s in states.values() if s == 3) == 11      # 12 painted, then one erased
+    assert f_small not in states
+    assert 'paint_supports="4"' in out.tri_extra[0]             # other per-triangle data kept
+    assert part.tri_extra == {0: 'paint_supports="4"'}          # the source is not modified
+
+
+def test_paint_op_validation() -> None:
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "blob"})
+    with pytest.raises(ValueError):
+        Params(colours=["red"])
+    with pytest.raises(ValueError):
+        Params(paint=[{"part": 0, "face": 0, "filament": 99}])
+
+
+def test_resize_filaments_extends_per_filament_arrays() -> None:
+    st = {"filament_settings_id": ["PLA a", "PETG b"], "filament_type": ["PLA", "PETG"],
+          "nozzle_temperature": ["220", "220", "250", "250"], "filament_colour": ["#FF0000", "#00FF00"],
+          "different_settings_to_system": ["p", "fa", "fb", "pr"], "layer_height": "0.2"}
+    out = resize_filaments(st, ["#FF0000", "#00FF00", "#0000FF"])
+    assert out["filament_type"] == ["PLA", "PETG", "PETG"]
+    assert out["nozzle_temperature"] == ["220", "220", "250", "250", "250", "250"]
+    assert out["different_settings_to_system"] == ["p", "fa", "fb", "fb", "pr"]
+    assert out["filament_colour"] == ["#FF0000", "#00FF00", "#0000FF"]
+    assert out["layer_height"] == "0.2"
+
+
+@pytest.fixture(scope="module")
+def critter(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return write_inline_3mf(tmp_path_factory.mktemp("in") / "critter.3mf", two_footed(), np.eye(4))
+
+
+def test_pipeline_paint_survives_the_pocket_cut(critter: Path, tmp_path: Path) -> None:
+    """Pick the body's top in the preview frame, paint its region, export: the pocketed 3MF carries it."""
+    s = open_session(critter, BALL_3MF, None, tmp_path / "w")
+    base = Params(washer="US1/4x1")
+    top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
+    hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
+    assert hit["faces"] >= 2 and hit["distance"] < 1e-6
+    params = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+                    paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
+    rep, _ = analyse(s, params)
+    assert rep.object["colours"] == ["#E05028", "#161616"]
+    assert rep.object["parts"][0]["painted"] == hit["faces"]
+    assert any(c["id"].startswith("cut:") for c in rep.to_dict()["checks"])
+    out = export(s, params, tmp_path / "out")
+    proj = read_project(out["figure_3mf"])
+    (part,) = proj.objects[0].parts
+    painted = [decode_majority(a.split('paint_color="')[1].split('"')[0])
+               for a in part.tri_extra.values() if "paint_color" in a]
+    assert painted and set(painted) == {2}
+    # The painted area is the top: every painted triangle faces up.
+    up = [i for i, a in part.tri_extra.items() if "paint_color" in a]
+    n = trimesh.Trimesh(part.vertices, part.faces, process=False).face_normals[up]
+    assert np.all(n[:, 2] > 0.99)
+    glb = preview_glb(s, params, ("region", 30.0))
+    assert glb[:4] == b"glTF"
+    json.dumps(rep.to_dict())

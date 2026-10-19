@@ -9,7 +9,10 @@ pokefit takes a figure (3MF, STL or OBJ) and:
 - scales it to the **largest size that fits** the ball's inner sphere, connector rings and ring opening
   (60 % or 100 % ball, or any inner diameter);
 - cuts **1–3 magnet pockets** (4 × 2 mm discs) into its underside — flat feet or not — so it snaps onto a
-  **steel washer** glued inside the ball, and compares washers;
+  **steel washer** glued inside the ball (magnets rest on the washer; optionally raised into floating parts),
+  and compares washers;
+- **colours single-colour models**: tap the 3D view and each tap fills a part found from the shape (ears, tail,
+  eyes, bib…), a separate piece or a brush patch, exported as Bambu paint;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
   filament slots for *Import geometry only*.

@@ -1,5 +1,6 @@
 /** pokefit web UI: wires the panel controls, the 3D view and the underside editor to the API. */
 import * as api from "./api";
+import { ColorizePanel } from "./colorize";
 import { formatDuration, pct } from "./geometry";
 import { Viewer } from "./scene";
 import type { Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
@@ -28,7 +29,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    filament_map: null,
+    filament_map: null, colours: null, paint: null,
   },
   report: null,
   focus: null,
@@ -39,6 +40,23 @@ const viewer = new Viewer($("viewport"));
 const underside = new UndersideEditor($("underside"), (pockets) => {
   state.params.pockets = pockets;
   void runAnalyse();
+});
+/** Paint/colours changed since the last analysis (its import-file colour map is stale). */
+let paintDirty = false;
+const colorize = new ColorizePanel({
+  params: () => state.params,
+  report: () => state.report,
+  // Paint changes colours only: the figure keeps its place, so show it again at once.
+  refresh: async (regions) => {
+    await refreshFigure(regions);
+    if (state.report) viewer.update(state.report, state.focus);
+  },
+  pick: (hit, mode, angle, radius) =>
+    api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius }),
+  setPicking: (fn) => viewer.setPickHandler(fn),
+  changed: () => { paintDirty = true; },
+  settled: () => { if (paintDirty) void runAnalyse(); },
+  toast: (msg) => toast(msg),
 });
 
 // ------------------------------------------------------------------ helpers
@@ -151,8 +169,9 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
   try {
     const res = await fn();
     state.session = res.session;
+    colorize.reset();
     state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-      object_id: null, filament_map: null };
+      object_id: null, filament_map: null, colours: null, paint: null };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
@@ -176,12 +195,15 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
 
 // ------------------------------------------------------------------ analysis
 
-/** Reload the 3D preview for the current object/orientation (seconds in the browser engine). */
-async function refreshFigure(): Promise<void> {
+/**
+ * Reload the 3D preview for the current object/orientation/paint (seconds in the browser engine).
+ * `regions` colours it by colorize region instead of by filament.
+ */
+async function refreshFigure(regions: import("./types").RegionView | null = null): Promise<void> {
   if (!state.session) return;
   busy(true, "Preparing the preview…");
   try {
-    await viewer.setFigure(await api.previewSource(state.session, state.params));
+    await viewer.setFigure(await api.previewSource(state.session, state.params, regions));
   } catch (e) {
     toast((e as Error).message);
   } finally {
@@ -192,6 +214,7 @@ async function refreshFigure(): Promise<void> {
 async function runAnalyse(): Promise<void> {
   if (!state.session) return;
   const seq = ++state.seq;
+  paintDirty = false;
   busy(true);
   try {
     const rep = await api.analyse(state.session, state.params);
@@ -249,6 +272,7 @@ function show(rep: Report): void {
   renderChecks(rep);
   renderMagnets(rep);
   renderImportMap(rep);
+  colorize.render();
   $("timing").textContent = `analysed in ${rep.timings.total?.toFixed(1)} s`;
   viewer.update(rep);
 }
@@ -622,6 +646,7 @@ function bind(): void {
   });
   $<HTMLSelectElement>("objectSelect").addEventListener("change", async (e) => {
     state.params.object_id = (e.target as HTMLSelectElement).value;
+    colorize.reset();                       // paint refers to triangles of the previous figure
     state.params.figure_scale = null;
     state.params.pockets = null;
     state.params.filament_map = null;
@@ -729,4 +754,5 @@ function bind(): void {
 }
 
 bind();
+colorize.render();
 void init();

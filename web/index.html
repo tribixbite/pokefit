@@ -187,6 +187,38 @@
         <div id="partsList" class="parts"></div>
       </section>
 
+      <section class="card" id="colorCard">
+        <div class="h-row">
+          <h2>Colours</h2>
+          <button id="paintToggle" class="btn" aria-pressed="false">Paint</button>
+        </div>
+        <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
+        <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
+        <div class="row" id="paintColourRow">
+          <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
+        </div>
+        <div class="row seat-row">
+          <span class="muted">Tap fills</span>
+          <div class="seg" id="paintMode" role="radiogroup" aria-label="What a tap paints">
+            <button role="radio" data-mode="part" title="Spread until a valley where parts meet (tail, ears, legs, eye sockets)">Part</button><button role="radio" data-mode="region" title="Spread until any crease sharper than the angle (like Bambu's smart fill)">Crease</button><button role="radio" data-mode="piece" title="Everything connected to the tapped spot (a separate shell, e.g. loose eyes)">Piece</button><button role="radio" data-mode="brush" title="A round patch around the tap (spots, stripes)">Brush</button>
+          </div>
+        </div>
+        <label class="range-row" id="brushRow" hidden>Brush radius
+          <input id="brushSize" type="range" min="0.3" max="8" step="0.1" value="1.5" />
+          <span id="brushVal" class="muted">1.5 mm</span>
+        </label>
+        <label class="range-row" id="paintAngleRow">Angle
+          <input id="paintAngle" type="range" min="3" max="90" step="1" value="30" />
+          <span id="paintAngleVal" class="muted">30°</span>
+        </label>
+        <div class="row wrap">
+          <button id="regionsBtn" class="btn" aria-pressed="false" title="Colour the figure by the regions a tap would fill">Show regions</button>
+          <button id="paintUndo" class="btn">Undo</button>
+          <button id="paintClear" class="btn">Clear</button>
+          <span id="paintInfo" class="muted" aria-live="polite"></span>
+        </div>
+      </section>
+
       <section class="card">
         <div class="h-row">
           <h2>Magnets</h2>
@@ -281,7 +313,11 @@
         <li><b>Pick the ball</b> — the 60 % or 100 % ball, or type the inner diameter of yours. Set the clearance to the walls.</li>
         <li><b>Pick the washer</b> — plain or zinc-plated steel (stainless is not magnetic). <i>Compare washers</i> shows which allows the largest figure.</li>
         <li><b>Magnets</b> — 1, 2 or 3 pockets for 4 × 2 mm disc magnets are placed automatically; drag them in the underside view.
-          The underside does not have to be flat: a pocket may go into a sloped or raised spot, but never below the plane the figure stands on.</li>
+          By default every magnet rests on the washer; under a part that floats above the bed (a tail) the magnet shows below it.
+          Choose <i>Raised into the figure</i> to hide it in the part instead (it then holds less). Nothing goes below the plane the figure stands on.</li>
+        <li><b>Colour it</b> — for single-colour models: pick a colour, press <i>Paint</i> and tap the figure. Each tap fills a part found
+          from the shape (up to the valley where an ear, tail, leg or eye meets the body), a separate piece, or a brush patch.
+          <i>Show regions</i> previews the parts. Exported as Bambu paint.</li>
         <li><b>Turn it</b> — rotate about X, Y and Z by any angle (45° works) if the model is not standing upright.</li>
         <li><b>Export</b> — the figure 3MF (opens as a Bambu Studio project), an <i>import</i> variant whose colours are renumbered to
           your own project's filament slots (for <i>Import geometry only</i>), and a JSON report.</li>

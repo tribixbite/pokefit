@@ -13,8 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, export, open_session, preview_glb, safe_stem,
-                       washer_table)
+from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, preview_glb,
+                       safe_stem, washer_table)
 from .slicer import reference_settings
 
 WORK = Path("/tmp/pokefit")
@@ -101,8 +101,18 @@ def washers(sid: str, params_json: str) -> str:
     return _dump(washer_table(_session(sid), Params.from_dict(json.loads(params_json))))
 
 
-def preview(sid: str, params_json: str) -> bytes:
-    return preview_glb(_session(sid), Params.from_dict(json.loads(params_json)))
+def preview(sid: str, params_json: str, regions_json: str = "null") -> bytes:
+    """GLB of the figure; `regions_json` {mode, angle} colours it by colorize region instead."""
+    reg = json.loads(regions_json)
+    regions = (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
+    return preview_glb(_session(sid), Params.from_dict(json.loads(params_json)), regions)
+
+
+def pick_face(sid: str, params_json: str, req_json: str) -> str:
+    """The triangle under a tap: req = {point, normal, mode, angle} (figure frame, scale 1)."""
+    req = json.loads(req_json)
+    return _dump(pick(_session(sid), Params.from_dict(json.loads(params_json)), req["point"], req.get("normal"),
+                      str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0))))
 
 
 def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:

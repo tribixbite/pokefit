@@ -91,29 +91,47 @@ def _hex_rgb(c: str) -> np.ndarray:
 def adapt_settings(ref: dict, colours: list[str], slot: int, supports: bool) -> dict:
     """Reference settings reduced to len(colours) filaments, all using material `slot`.
 
-    Per-filament arrays are filament-major blocks: length n_ref·k → n·k.
-    `different_settings_to_system` / `inherits_group` are [print, filaments..., printer].
     The flush matrix (extruders × n_ref × n_ref) keeps the reference's purge
     volume between the slots whose colours are closest to each figure colour.
     """
+    out = _filaments_from(ref, [slot] * max(1, len(colours)), colours)
+    out["enable_support"] = "1" if supports else "0"
+    if supports and not str(out.get("support_type", "")).endswith("(auto)"):
+        out["support_type"] = "tree(auto)"
+    return out
+
+
+def resize_filaments(settings: dict, colours: list[str]) -> dict:
+    """A project's own settings with len(colours) filaments: filament i keeps its material, filaments
+    added beyond the project's copy its last one (colorize added colours to a file)."""
+    n_ref = len(settings.get("filament_settings_id", [])) or 1
+    return _filaments_from(settings, [min(i, n_ref - 1) for i in range(max(1, len(colours)))], colours)
+
+
+def _filaments_from(ref: dict, src: list[int], colours: list[str]) -> dict:
+    """Settings whose filament i is a copy of `ref`'s filament src[i], coloured colours[i].
+
+    Per-filament arrays are filament-major blocks: length n_ref·k → n·k.
+    `different_settings_to_system` / `inherits_group` are [print, filaments..., printer].
+    """
     n_ref = len(ref["filament_settings_id"])
-    n = max(1, len(colours))
+    n = len(src)
     out: dict = {}
     for key, val in ref.items():
         if not isinstance(val, list):
             out[key] = val
         elif key in ("different_settings_to_system", "inherits_group") and len(val) == n_ref + 2:
-            out[key] = [val[0]] + [val[1 + slot]] * n + [val[-1]]
+            out[key] = [val[0]] + [val[1 + i] for i in src] + [val[-1]]
         elif key == "flush_volumes_matrix":
             out[key] = val            # rebuilt below
         elif len(val) >= n_ref and len(val) % n_ref == 0:
             k = len(val) // n_ref
-            out[key] = [x for _ in range(n) for x in val[slot * k:(slot + 1) * k]]
+            out[key] = [x for i in src for x in val[i * k:(i + 1) * k]]
         else:
             out[key] = val
 
     ref_cols = np.array([_hex_rgb(c) for c in ref.get("filament_colour", ["#808080"] * n_ref)])
-    near = [int(np.argmin(np.linalg.norm(ref_cols - _hex_rgb(c), axis=1))) for c in colours] or [slot]
+    near = [int(np.argmin(np.linalg.norm(ref_cols - _hex_rgb(c), axis=1))) for c in colours] or src[:1]
     mat = ref.get("flush_volumes_matrix", [])
     n_ext = max(1, len(mat) // (n_ref * n_ref)) if mat else 0
     if n_ext:
@@ -129,9 +147,6 @@ def adapt_settings(ref: dict, colours: list[str], slot: int, supports: bool) -> 
                         new[e, a, b] = v if near[a] != near[b] else typical
         out["flush_volumes_matrix"] = [f"{v:g}" for v in new.ravel()]
     out["filament_colour"] = list(colours) if colours else out.get("filament_colour", [])[:n]
-    out["enable_support"] = "1" if supports else "0"
-    if supports and not str(out.get("support_type", "")).endswith("(auto)"):
-        out["support_type"] = "tree(auto)"
     return out
 
 

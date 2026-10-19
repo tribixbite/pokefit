@@ -5,7 +5,9 @@
  * The local server is used whenever the page is served by it (/api/config answers JSON).
  * Every call rejects with the engine's error text.
  */
-import type { Config, ExportResponse, Job, LoadResponse, Params, Report, SliceVariants, WasherRow } from "./types";
+import type {
+  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, RegionView, Report, SliceVariants, WasherRow,
+} from "./types";
 
 export type Mode = "local" | "browser";
 let mode: Mode = "browser";
@@ -157,19 +159,30 @@ export async function washers(session: string, params: Params): Promise<WasherRo
 
 let lastPreview = "";
 
-/** A URL of the figure preview (GLB) for three.js: a server URL, or a blob URL from the worker. */
-export async function previewSource(session: string, params: Params): Promise<string> {
+/**
+ * A blob URL of the figure preview (GLB) for three.js, with the colorize paint applied.
+ * With `regions`, the figure is coloured by the regions a colorize tap would paint.
+ */
+export async function previewSource(session: string, params: Params, regions: RegionView | null = null): Promise<string> {
+  let bytes: Uint8Array;
   if (mode === "local") {
-    const q = new URLSearchParams({
-      session, object: params.object_id ?? "",
-      rx: String(params.rotate_x), ry: String(params.rotate_y), rz: String(params.rotate_z),
-    });
-    return `/api/preview.glb?${q}`;
+    const r = await check(await fetch("/api/preview", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session, params, regions }),
+    }));
+    bytes = new Uint8Array(await r.arrayBuffer());
+  } else {
+    bytes = await call<Uint8Array>("preview", [session, JSON.stringify(params), JSON.stringify(regions)]);
   }
-  const bytes = await call<Uint8Array>("preview", [session, JSON.stringify(params)]);
   if (lastPreview) URL.revokeObjectURL(lastPreview);
   lastPreview = URL.createObjectURL(new Blob([bytes], { type: "model/gltf-binary" }));
   return lastPreview;
+}
+
+/** The triangle under a tap on the preview (figure frame, scale 1) and how big its region is. */
+export async function pick(session: string, params: Params, req: PickRequest): Promise<PickResult> {
+  if (mode === "local") return postJson<PickResult>("/api/pick", { session, params, ...req });
+  return json<PickResult>(await call("pick", [session, JSON.stringify(params), JSON.stringify(req)]));
 }
 
 export async function exportFiles(session: string, params: Params): Promise<ExportResponse> {

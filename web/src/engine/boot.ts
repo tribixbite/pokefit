@@ -31,7 +31,8 @@ export interface WebApi {
   set_ball_model(name: string, data: Uint8Array): string;
   run_analyse(sid: string, params: string): string;
   washers(sid: string, params: string): string;
-  preview(sid: string, params: string): { toJs(): Uint8Array; destroy(): void };
+  preview(sid: string, params: string, regions: string): { toJs(): Uint8Array; destroy(): void };
+  pick_face(sid: string, params: string, req: string): string;
   run_export(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
 }
 

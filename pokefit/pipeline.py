@@ -10,6 +10,7 @@ Frames:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 import uuid
@@ -25,6 +26,7 @@ from shapely.ops import unary_union
 from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
+from .colorize import PaintOp, TopologyCache, apply_paint, pick_face, region_colours, region_faces
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
@@ -34,7 +36,8 @@ from .paint import decode_majority
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
 from .shell import flat_spot, from_manifold, to_manifold
-from .slicer import SliceResult, adapt_settings, default_slot, grid_positions, reference_settings, slice_3mf
+from .slicer import (SliceResult, adapt_settings, default_slot, grid_positions, reference_settings,
+                     resize_filaments, slice_3mf)
 from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +53,7 @@ BUNDLED_REFERENCE = Path(__file__).resolve().parent / "profiles" / "x2d_petg_pri
 DEFAULT_REFERENCE = ROOT / "pokeball60goodPrinted.3mf" if (ROOT / "pokeball60goodPrinted.3mf").exists() else BUNDLED_REFERENCE
 CACHE_DIR = ROOT / ".pokefit_cache"
 SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
+_HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 
 
@@ -77,6 +81,10 @@ class Params:
     settings_source: str = "reference"           # "reference" (user's printer) or "original"
     # Import file: figure filament -> slot of the user's project (1-based; JSON keys are strings).
     filament_map: dict[str, int] | None = None
+    # Colorize: the filament colours (index 0 = filament 1; None = the file's) and paint operations
+    # (colorize.PaintOp dicts, applied in order).
+    colours: list[str] | None = None
+    paint: list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -85,6 +93,17 @@ class Params:
         self.magnets = max(0, min(3, int(self.magnets)))
         if self.pocket_seat not in ("washer", "raised"):
             raise ValueError(f"pocket_seat must be 'washer' or 'raised', not {self.pocket_seat!r}")
+        if self.colours is not None:
+            if not self.colours or not all(isinstance(c, str) and _HEX.fullmatch(c) for c in self.colours):
+                raise ValueError("colours must be a non-empty list of #RRGGBB strings")
+            if len(self.colours) > 32:
+                raise ValueError("at most 32 colours")
+        for d in self.paint or []:
+            PaintOp.from_dict(d)          # raises ValueError on a malformed operation
+
+    @property
+    def paint_ops(self) -> list[PaintOp]:
+        return [PaintOp.from_dict(d) for d in self.paint or []]
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Params":
@@ -110,6 +129,8 @@ class Session:
     _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
     # Auto-placement results per configuration (the figure-scale-independent search).
     _auto: dict[tuple, Any] = field(default_factory=dict)
+    _topo: dict[str, TopologyCache] = field(default_factory=dict)       # object id -> colorize topology
+    _painted: dict[tuple, list[Part]] = field(default_factory=dict)     # (orientation, paint) -> parts
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
 
     def obj(self, params: Params) -> FigureObject:
@@ -143,6 +164,29 @@ class Session:
             self._points[key] = prepare_points(np.vstack([p.vertices for p in self._frames[key]]))
         return self._frames[key]
 
+    def colours(self, params: Params) -> list[str]:
+        """Filament colours (index 0 = filament 1): the user's palette, else the file's."""
+        return list(params.colours) if params.colours else list(self.project.colours)
+
+    def topology(self, params: Params) -> TopologyCache:
+        obj = self.obj(params)
+        if obj.id not in self._topo:
+            # Plate frame (build transform applied, not rotated): brush radii are in the units the fit scales.
+            self._topo[obj.id] = TopologyCache(world_parts(obj))
+        return self._topo[obj.id]
+
+    def figure_parts(self, params: Params) -> list[Part]:
+        """`unit_parts` with the colorize paint applied (geometry identical)."""
+        parts = self.unit_parts(params)
+        if not params.paint:
+            return parts
+        key = (self._key(params), json.dumps(params.paint, sort_keys=True))
+        if key not in self._painted:
+            if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
+                self._painted.clear()
+            self._painted[key] = apply_paint(parts, params.paint_ops, self.topology(params))
+        return self._painted[key]
+
     def points(self, params: Params) -> HullPoints:
         self.unit_parts(params)
         obj = self.obj(params)
@@ -161,10 +205,12 @@ class Session:
         if not self.reference:
             return []
         obj = self.obj(params)
-        if obj.id not in self._used:
-            self._used[obj.id] = used_filaments(obj.parts, obj.extruder)
+        ukey = f"{obj.id}:{json.dumps(params.paint, sort_keys=True)}" if params.paint else obj.id
+        if ukey not in self._used:
+            parts = self.figure_parts(params) if params.paint else obj.parts
+            self._used[ukey] = used_filaments(parts, obj.extruder)
         manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
-        return match_slots(self._used[obj.id], self.project.colours,
+        return match_slots(self._used[ukey], self.colours(params),
                            list(self.reference.get("filament_colour", [])), manual)
 
     def slot(self, params: Params) -> int:
@@ -436,7 +482,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     washer = get_washer(params.washer)
     cavity = Cavity(session.ball, session.ball_scale(params), washer, params.clearance)
     hp = session.points(params)
-    unit = session.unit_parts(params)
+    unit = session.figure_parts(params)
     obj = session.obj(params)
     checks: list[Check] = list(input_checks(session, params))
     t["input_checks"] = time.time() - t0
@@ -450,7 +496,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     if scale <= 0:
         checks.append(Check("fit", "Fits in the ball", "fail",
                             "Does not fit even at 5 % — check the orientation (z up) and the file's units."))
-        rep = Report(asdict(params), _obj_info(session, obj), _ball_info(cavity, washer), fit_dict, [],
+        rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict, [],
                      [c.to_dict() for c in checks], "fail", [], t)
         return rep, unit
 
@@ -518,7 +564,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
 
     washers = washer_table(session, params) if recommend else []
     t["total"] = time.time() - t0
-    rep = Report(asdict(params), _obj_info(session, obj), _ball_info(cavity, washer), fit_dict,
+    rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict,
                  [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
                  {k: round(v, 2) for k, v in t.items()}, underside,
                  [m.to_dict() for m in session.slot_matches(params)])
@@ -633,11 +679,11 @@ def _extents(parts: list[Part]) -> list[float]:
     return np.ptp(v, axis=0).round(3).tolist()
 
 
-def _obj_info(session: Session, obj: FigureObject) -> dict[str, Any]:
+def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, Any]:
     return {"id": obj.id, "name": obj.name, "faces": obj.face_count,
             "parts": [{"name": p.name, "extruder": p.extruder or obj.extruder, "faces": len(p.faces),
-                       "painted": len(p.tri_extra)} for p in obj.parts],
-            "colours": session.project.colours,
+                       "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
+            "colours": session.colours(params), "file_colours": session.project.colours,
             "objects": [{"id": o.id, "name": o.name, "faces": o.face_count} for o in session.project.objects]}
 
 
@@ -699,18 +745,35 @@ def clip_overlaps(parts: list[Part]) -> list[Part]:
     return out
 
 
-def preview_glb(session: Session, params: Params) -> bytes:
-    """Figure at scale 1 in the figure frame, one mesh per (part, filament) for compact colours."""
+def preview_glb(session: Session, params: Params, regions: tuple[str, float] | None = None) -> bytes:
+    """Figure at scale 1 in the figure frame, one mesh per (part, filament) for compact colours.
+
+    With `regions` (colorize mode, angle), each part is coloured by the regions a
+    tap would paint instead, so the user sees what the geometry detection found.
+    """
     obj = session.obj(params)
-    cols = session.project.colours or ["#cccccc"]
+    cols = session.colours(params) or ["#cccccc"]
     scene = trimesh.Scene()
-    for pi, part in enumerate(clip_overlaps(session.unit_parts(params))):
-        ext = face_colours(part, cols, obj.extruder)
+    unit = session.unit_parts(params) if regions else session.figure_parts(params)
+    # Overlap clipping re-meshes parts and loses the face order the region labels need: skip it there.
+    shown = unit if regions else clip_overlaps(unit)
+    for pi, part in enumerate(shown):
+        if regions:
+            # A brush has no fixed regions: show the parts it would paint within.
+            mode = "part" if regions[0] == "brush" else regions[0]
+            lab = session.topology(params).labels(pi, mode, regions[1])
+            ext = lab + 1
+            palette = region_colours(int(lab.max()) + 1 if len(lab) else 0)
+        else:
+            ext = face_colours(part, cols, obj.extruder)
         for e in np.unique(ext):
             sub = trimesh.Trimesh(part.vertices, part.faces[ext == e], process=False)
             sub.remove_unreferenced_vertices()
-            hexc = cols[(int(e) - 1) % len(cols)].lstrip("#")[:6]
-            rgba = [int(hexc[i:i + 2], 16) for i in (0, 2, 4)] + [255]
+            if regions:
+                rgba = [int(c) for c in palette[int(e) - 1]] + [255]
+            else:
+                hexc = cols[(int(e) - 1) % len(cols)].lstrip("#")[:6]
+                rgba = [int(hexc[i:i + 2], 16) for i in (0, 2, 4)] + [255]
             sub.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
                 baseColorFactor=rgba, metallicFactor=0.0, roughnessFactor=0.75))
             scene.add_geometry(sub, geom_name=f"p{pi}_e{int(e)}")
@@ -719,9 +782,29 @@ def preview_glb(session: Session, params: Params) -> bytes:
     return out
 
 
+def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
+         mode: str = "part", angle: float = 15.0, radius: float = 0.0) -> dict[str, Any]:
+    """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
+
+    The answer's part/face go into a colorize paint operation, which then
+    paints the same region on every later analysis and export.
+    """
+    PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius})
+    parts = session.unit_parts(params)
+    pi, fi, dist = pick_face(parts, np.asarray(point, float), None if normal is None else np.asarray(normal, float))
+    if pi < 0:
+        raise ValueError("no triangle near that point")
+    faces = region_faces(session.topology(params), pi, fi, mode, angle, radius)
+    area = float(trimesh.Trimesh(parts[pi].vertices, parts[pi].faces[faces], process=False).area)
+    return {"part": pi, "face": fi, "distance": dist, "faces": int(len(faces)),
+            "share": round(len(faces) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2)}
+
+
 def export_settings(session: Session, params: Params, supports: bool = False) -> dict | None:
     if params.settings_source == "reference" and session.reference:
-        return adapt_settings(session.reference, session.project.colours, session.slot(params), supports)
+        return adapt_settings(session.reference, session.colours(params), session.slot(params), supports)
+    if params.colours and session.project.settings:
+        return resize_filaments(session.project.settings, session.colours(params))
     return session.project.settings
 
 
@@ -813,8 +896,8 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
 
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:
     if session.reference:
-        return adapt_settings(session.reference, session.project.colours, session.slot(params), supports)
-    st = dict(session.project.settings or {})
+        return adapt_settings(session.reference, session.colours(params), session.slot(params), supports)
+    st = dict(export_settings(session, params) or {})
     if st:
         st["enable_support"] = "1" if supports else "0"
     return st or None

@@ -14,9 +14,14 @@
 - Ball size: the 60 % or 100 % print of the MakerWorld model "functional Pokéball – no glue" (#2045372), or any
   inner diameter in millimetres (the ring profile scales with it).
 - Magnets: 1, 2 or 3 pockets (default Ø4.18 × 2.2 mm, for 4 × 2 mm disc magnets) placed automatically to spread
-  out over the washer's steel ring; draggable by hand. The underside need not be flat: each pocket opens as low as
-  possible without going below the plane the figure stands on, with at least 1.2 mm of the pocket walled; pockets
-  more than 2 mm above the washer are avoided because the magnet would hold weakly.
+  out over the washer's steel ring; draggable by hand. By default every pocket opens on the washer, so the magnet
+  touches the steel; under a part that floats above the bed the magnet shows below it (at least 0.5 mm of the
+  pocket must be in the figure). A "raised" option moves pockets up into such parts instead (hidden magnet, weaker
+  hold), up to 2 mm above the washer. Nothing goes below the plane the figure stands on.
+- Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
+  until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
+  crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result
+  is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour.
 - Washers: catalogue of steel washers (DIN 9021 M5/M6/M8, US #10 × 3/4", US 1/4" × 1" fender) or a custom size;
   a comparison table shows the largest figure each allows with the magnets on steel. Stainless steel is not magnetic.
 - Orientation: rotate about X, Y and Z by any angle; the lowest point lands on the bed.
