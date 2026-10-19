@@ -6,6 +6,7 @@
  */
 import Module from "manifold-3d";
 import { bootPokefit, PYODIDE_CDN, type WebApi } from "./engine/boot";
+import { versioned } from "./version";
 
 /** The worker's global scope (typed here: the project compiles against the DOM lib, not WebWorker). */
 const scope = globalThis as unknown as {
@@ -23,11 +24,11 @@ async function start(): Promise<WebApi> {
   const { loadPyodide } = (await import(/* @vite-ignore */ pyodideUrl)) as typeof import("pyodide");
   const [pyodide, manifold, zip] = await Promise.all([
     loadPyodide({ indexURL: PYODIDE_CDN }),
-    Module({ locateFile: () => new URL("manifold.wasm", scope.location.href).href }).then((m) => {
+    Module({ locateFile: () => versioned(new URL("manifold.wasm", scope.location.href)) }).then((m) => {
       m.setup();
       return m;
     }),
-    fetch(new URL("pokefit.zip", scope.location.href)).then((r) => {
+    fetch(versioned(new URL("pokefit.zip", scope.location.href))).then((r) => {
       if (!r.ok) throw new Error(`pokefit.zip: HTTP ${r.status}`);
       return r.arrayBuffer();
     }),

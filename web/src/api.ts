@@ -8,6 +8,7 @@
 import type {
   Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
+import { versioned } from "./version";
 
 export type Mode = "local" | "browser";
 let mode: Mode = "browser";
@@ -51,7 +52,7 @@ export function onEngineStatus(cb: (text: string) => void): void {
 
 function startWorker(): Worker {
   if (worker) return worker;
-  worker = new Worker(new URL("worker.js", location.href), { type: "module" });
+  worker = new Worker(versioned(new URL("worker.js", location.href)), { type: "module" });
   worker.onmessage = (ev: MessageEvent): void => {
     const d = ev.data as { id?: number; ok?: boolean; result?: unknown; error?: string; status?: string };
     if (d.status !== undefined) {
@@ -107,7 +108,7 @@ export async function getConfig(): Promise<Config> {
   startWorker();                     // warm the engine up while the user picks a file
   // The same config the engine would return, generated at build time (build.ts), so the
   // page is usable at once instead of after the ~30 MB engine download.
-  return (await (await check(await fetch("config.json"))).json()) as Config;
+  return (await (await check(await fetch(versioned("config.json")))).json()) as Config;
 }
 
 /** Open a .3mf/.stl/.obj; the engine analyses it with default parameters. */
