@@ -5,13 +5,26 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **GLB palette quality** (`pokefit/gltf.py`): "auto" favours fidelity over purge (Squirtle: 7 colours =
-   233 changes / 129 g vs 4 = 127 / 74 g for a ~3 g figure). Ideas: show an estimated colour-change cost
-   per count in the UI; weigh small clusters by how many layers they span; hue-aware merging (closest-first
-   merges Squirtle's cream belly into blue at 3 colours).
-2. **Big GLB scenes are slow** (600k-triangle LEGO GLB: 82 s locally): profile `read_gltf` + mesh checks.
-3. GitHub Actions: checkout/setup-python/deploy-pages@v4 run on deprecated Node 20 — bump majors.
-4. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
+1. **GLB palette quality / purge** (`pokefit/gltf.py`): "auto" favours fidelity over purge. Manex Squirtle:
+   7 colours = 233 changes / 129 g vs 4 = 127 / 74 g for a ~3 g figure; photo-made Squirtle at 5 colours:
+   158 changes, 90.8 g (6.9 h) for a 4.7 g figure. Ideas: estimated colour-change cost per count in the UI;
+   weigh small clusters by how many layers they span; hue-aware merging (closest-first merges the cream belly
+   into blue at 3).
+2. **Photos -> 3D quality** (`pokefit/imageto3d.py`): eyes come out as black blobs (highlights / red iris
+   lost at vertex-colour resolution); colours are darker than the photos (PBR albedo, no lighting) — e.g.
+   blue #6DAAB2 vs photo ~#8ECAD8; idea: rescale each palette colour toward the photos' colour of the same
+   cluster. Try `RemeshMesh` resolution / `DecimateMesh` faces for finer colour; try the textured output
+   (UnwrapMesh + BakeTextureFromVoxel, as the template) vs `PaintMesh`.
+3. **Profile photos from ordinary photos** (user's stretch goal): only front/left/back[/right] at eye height
+   work now (front only also works: single view). Options to evaluate: Pixal3D's single-image node on the
+   best photo; a multi-view diffusion model to synthesise the orbit views (check what ComfyUI ships natively
+   first); the template's "turnaround sheet" route uses a paid Google API — avoid.
+4. **Flat base fill** (`conform.base_fill`): its outline is 0.4 mm steps with vertical walls, visible as a
+   pedestal between the legs in the preview; smooth the outline / slope the walls. Conform is designed for the
+   largest-fit scale and the default washer's floor (a smaller chosen size keeps the same shape).
+5. **Big meshes are slow** (600k-triangle LEGO GLB: 82 s locally; 200k-face photo Squirtle analyse 18.5 s,
+   of which conform ~5 s): profile `read_gltf`, mesh checks and conform's fit rounds.
+6. User's call, ask before doing: LICENSE file (public repo is all-rights-reserved by default);
    Cloudflare "Always Use HTTPS" (off; the page redirects itself).
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
@@ -139,6 +152,19 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
   at 390 px. The browser's palette differs slightly from the local one (8,715 vs 8,481 painted triangles at
   auto 7; colour 6 grey-green vs dark brown): Pyodide's scipy k-means lands differently with the same seed.
   Each engine is self-consistent (export uses the same engine); make it deterministic only if users compare.
+- Bambu presets (`pokefit/presets.py`): user's `printer_config/Filament presets.zip` (17 X2D presets, git-ignored)
+  resolves exactly against `C:\Program Files\Bambu Studio\resources\profiles\BBL`; in the browser it is
+  "approximate" (keys not in the preset come from the project's closest slot). 10 of the 17 set 0 °C for the
+  Supertack plate the user's project uses, and Bambu refuses them (code -61, verified with eSUN PETG Basic);
+  `redpetg` slices (box: 0.40 h, 1.7 g). Limits: a printer preset for another printer is skipped (no
+  project is built from presets alone); with several printer presets none is applied.
+- Conform defaults on (Params `bend` auto, `flat_base` washer OD, `flat_depth` 1.2, `flat_fill` 2.5). Results:
+  Manex Squirtle +7.8 % (29.6 mm), 2 pockets on the steel (were 0–1 in the tail); photo Squirtle +7.1 %
+  (31.6 mm), 2 pockets; dragon and Eevee: bend skipped (< 1 % gain); Eevee gets a 1.2 mm press only.
+- Photos -> 3D: ComfyUI v0.42.1 at `C:\git\comfyui-3d` (own venv, torch 2.14.1+cu130); the older
+  `C:\git\ComfyUI` (Mar 2025) is the user's, left untouched. First run 203 s for 3 views while the user's
+  llama-server (Qwen 27B, port 8080) held 12 GB of the 16 GB VRAM. Squirtle photos -> 200k faces, watertight
+  (solid remesh), 8 auto colours, slices in Bambu. Photos are in `imageto3d/` (git-ignored).
 - glTF not supported: Draco/meshopt compression, .gltf with external .bin/textures. `planar._xor`
   repairs/snaps loops GEOS rejects (DamagedHelmet.glb crashed islands_check).
 - (SketchUp, original machine) **CleanUp³ needs TT_Lib² ≥ 2.11** — CleanUp³ 3.4.3 files are in
