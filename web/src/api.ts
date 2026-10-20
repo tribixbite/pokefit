@@ -227,10 +227,20 @@ export interface GenOptions {
   texture: number;
   /** One photo: "pixal3d" or "trellis2". */
   model: string;
+  /** CFG of the shape samplers (1-15) and of the colour sampler (1-10). */
+  guidance: number;
+  tex_guidance: number;
+  /** Structure sampler shift (1-10). */
+  shift: number;
+  /** KSampler sampler of every stage (imageto3d.SAMPLERS). */
+  sampler: string;
+  /** Loose pieces under this share of the largest are dropped (0-0.2). */
+  min_piece: number;
 }
 
 export const GEN_DEFAULTS: GenOptions = {
   seed: 0, faces: 200_000, detail: 1536, remesh: 768, smooth: 20, steps: 1, texture: 0, model: "pixal3d",
+  guidance: 7.5, tex_guidance: 1, shift: 5, sampler: "euler", min_piece: 0.01,
 };
 
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
@@ -239,6 +249,10 @@ export async function photosToFigure(
   mirrorRight: boolean,
   onTick?: (seconds: number, progress: string) => void,
   options: GenOptions = GEN_DEFAULTS,
+  photoColour = true,
+  /** Ordinary photos (1-3) to redraw as clean views first (pokefit/photoclean.py), and whether to re-pose. */
+  clean: File[] = [],
+  pose = false,
 ): Promise<LoadResponse> {
   if (mode !== "local") throw new Error("Photos to 3D runs on your computer: install pokefit and ComfyUI (see About).");
   const dataUrl = (f: File): Promise<string> => new Promise((ok, fail) => {
@@ -249,8 +263,11 @@ export async function photosToFigure(
   });
   const views: Record<string, string> = {};
   for (const [v, f] of Object.entries(photos)) if (f) views[v] = await dataUrl(f);
-  const name = (photos.front?.name ?? "figure").replace(/\.[^.]+$/, "").replace(/[-_ ]?front$/i, "") || "figure";
-  const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name, options });
+  const noisy = await Promise.all(clean.slice(0, 3).map(dataUrl));
+  const name = (photos.front?.name ?? clean[0]?.name ?? "figure").replace(/\.[^.]+$/, "").replace(/[-_ ]?front$/i, "") || "figure";
+  const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name, options,
+    // Redrawn views keep the model's own colours (the server's default for them; see post_photos).
+    ...(noisy.length ? {} : { photo_colour: photoColour }), clean: noisy, pose });
   return waitJob<LoadResponse>(job, 2000, onTick, "photos to 3D failed");
 }
 

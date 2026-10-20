@@ -20,19 +20,15 @@ exist only on the original Windows machine (ask the user for the files).
    themselves cost only ~23-42 changes (few layers); they come late because Ward merging is area-weighted.
    Idea, not built: a "keep small details" palette mode (contrast-protected clusters) — ask before changing
    the auto default again.
-3. **Photo models: shape and model choice** (user 2026-10-19: head "not smooth", parts "squished"; "revisit
-   our model choice"). Done: the boxy, flat-topped 3-photo head came from the missing right view; the
-   mirrored left view is now the default (round head, multicoloured eyes with photo colours; 174 s vs 192 s).
-   Compared on the Squirtle (renders: scratchpad `render_compare.py`): seed 1 / detail 2048 / baked texture /
-   structure 64 did not help; TRELLIS.2 (now `--model trellis2`, one photo only) has a round head but a
-   wrong-coloured back and a stub tail from the front photo; Pixal3D one-photo an oversized shell. Pixal3D
-   multi-view + mirror stays the default. Applied from research (upstream repos + ComfyUI source): shape
-   12 steps, detail capped at 1536 (ComfyUI lacks the 49,152-token cap), `/free` after every job.
-   **Open: clean timings.** Every timing after ~22:00 was slowed by another Claude Code session's GPU jobs
-   (`recon_gpu.corpus`, `recon_gpu.diag.notext_survey`); rerun Pixal3D 1-photo vs TRELLIS.2 vs 3+mirror when
-   the GPU is idle (`nvidia-smi` near 0 %, scratchpad `fair_timing.sh` restarts ComfyUI per run). Also to try:
-   700k faces before PaintMesh (upstream bakes 2048-4096 px at 500k-1M faces), `--cache-ram`/
-   `--disable-dynamic-vram` only if slowdowns recur, trellis.cpp GGUF (standalone, has a Pixal3D mode).
+3. **Photo models: shape and model choice** (user 2026-10-19/20). Pixal3D multi-view + mirrored right view stays
+   the default (round head, multicoloured eyes; renders: scratchpad `render_compare.py`); TRELLIS.2 is `--model
+   trellis2` for one photo (wrong-coloured back, stub tail). Clean timings 2026-10-20, idle GPU, fresh ComfyUI per
+   run (scratchpad `fair_timing.sh`, ComfyUI "Prompt executed in"): Pixal3D 1 photo 164 s, TRELLIS.2 1 photo 472 s
+   (its upsample + colour stages 275 s + 145 s vs 81 + 43), 3 photos 160 s, 3 + mirror 166 s, 700k faces 162 s
+   (looks the same as 200k: the voxel colours, not the faces, limit the eyes). Every stage setting is now in
+   `GenOptions` / the dialog (guidance, colour guidance, shift, sampler, loose pieces, photo colours on/off);
+   only the defaults are measured. Research notes: scratchpad `research2.md` (no fp8/NVFP4 Pixal3D; GGUFs are
+   single-view or for standalone ports; HF Pixal3D discussion #11: leftover background -> a slab).
    llama-server (the user's) is stopped for these tests: restart command in memory `local-installs`.
 4. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
@@ -41,9 +37,17 @@ exist only on the original Windows machine (ask the user for the files).
    (`facing_front`: mirror plane for the axis, head-forward + tail-behind for the sign; real side photo
    -> +86°, multi-view models 0°). The sign cue is tuned on Squirtles only: the Manex Squirtle already
    reads "unsure" with a different point sample, so other shapes may need the Figure card's turn.
-5. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
-   FOV). Not done: combining several arbitrary-angle photos (would need their camera poses — e.g. estimate
-   azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).
+5. **Ordinary photos -> clean views** (`pokefit/photoclean.py`, CLI `photos --clean P1 P2 P3 [--pose]`, dialog
+   "Or ordinary photos"): Qwen-Image-Edit-2511 int8 (Apache-2.0) + Lightning 8-step + fal Multiple-Angles LoRA
+   redraws 1-3 noisy photos as a clean front, then left/back from it plus the original photos; then the usual
+   Pixal3D run. Charmander stock photos (`imageto3d/charmander/`: in a ball, flames, off-angle), scratchpad
+   `char_clean3/`: ball, base and flames gone, tail flame kept; 52 s front + ~48 s per view (views from the clean
+   front alone: ~10 s but the tail flame vanished), Pixal3D 153 s; fits at 32.8 mm (limited by the raised arms
+   against the shell wall). Measured choices: fal's "left side view" faces the image's right, so the rig's left
+   asks for "right side view"; cleaned runs keep the MODEL's colours (projected redrawn views doubled the eyes and
+   added specks; `--photo-colours` to override). Open: `--pose` did not move the arms (raised arms set the size);
+   the "matte" wording did not remove the gloss; try a pose reference image (OpenPose) or lowering arms by prompt
+   wording; a second figure to confirm the side-view naming.
 6. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
    size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
 7. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table

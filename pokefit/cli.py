@@ -49,14 +49,30 @@ def cmd_photos(a: argparse.Namespace) -> int:
             print(text, flush=True)
             last_stage[0], last_t[0] = stage, time.time()
 
-    if a.photo and photos:
-        raise SystemExit("give either --photo (one photo, any angle) or --front/--left/--back/--right")
+    if sum(map(bool, (a.photo, photos, a.clean))) > 1:
+        raise SystemExit("give one of: --photo (one photo, any angle), --front/--left/--back/--right, --clean")
     try:
         opts = GenOptions.from_dict({k: getattr(a, k) for k in ("seed", "faces", "detail", "remesh",
-                                                                 "smooth", "steps", "texture", "model")})
+                                                                 "smooth", "steps", "texture", "model",
+                                                                 "guidance", "tex_guidance", "shift", "sampler",
+                                                                 "min_piece")})
     except ValueError as exc:
         raise SystemExit(f"photos: {exc}") from exc
-    if a.photo:
+    if a.clean:
+        # Noisy photos -> clean front / left / back views (Qwen-Image-Edit, photoclean.py), then as usual.
+        from .photoclean import CleanOptions, clean_photos, report
+        try:
+            copts = CleanOptions(seed=a.seed or 0, pose=a.pose,
+                                 views=("left", "back", "right") if a.no_mirror_right else ("left", "back"))
+        except ValueError as exc:
+            raise SystemExit(f"photos: {exc}") from exc
+        photos = clean_photos(a.clean, a.out.with_suffix(""), url=a.comfy, opts=copts, log=log)
+        # The model's own colours unless --photo-colours: redrawn views do not register pixel-exactly with the
+        # mesh (projected, they doubled the Charmander's eyes and added highlight specks).
+        rep = photos_to_glb(photos, a.out, url=a.comfy, opts=opts,
+                            mirror_right=not a.no_mirror_right, log=log, photo_colour=a.photo_colours)
+        rep["clean"] = report(copts, photos)
+    elif a.photo:
         rep = photo_to_glb(a.photo, a.out, url=a.comfy, opts=opts, log=log, photo_colour=not a.model_colours)
     else:
         rep = photos_to_glb(photos, a.out, url=a.comfy, opts=opts,
@@ -184,6 +200,13 @@ def main(argv: list[str] | None = None) -> int:
                         + (" (required; the pose the figure gets)" if view == "front" else ""))
     ph.add_argument("--photo", type=Path, help="instead of the views: ONE photo from any angle (single-view model; "
                                                 "turn the result upright with --rotate-* when fitting)")
+    ph.add_argument("--clean", type=Path, nargs="+", metavar="PHOTO",
+                    help="instead: 1-3 ordinary photos (stock, off-angle, in a ball or on a stand); Qwen-Image-Edit "
+                         "redraws them as clean front / left / back views first (pokefit/photoclean.py)")
+    ph.add_argument("--photo-colours", action="store_true",
+                    help="with --clean: project the redrawn views' colours onto the model (default: the model's own)")
+    ph.add_argument("--pose", action="store_true",
+                    help="with --clean: also re-pose it sitting flat, limbs and tail tucked in (fits a ball better)")
     ph.add_argument("--no-mirror-right", action="store_true",
                     help="without a right photo, do NOT use the left one mirrored as the right view (default: mirror; "
                          "turn it off for clearly asymmetric figures)")
@@ -191,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="keep the model's own colours (default: the photos' colours projected onto it)")
     ph.add_argument("--out", type=Path, required=True, help="the .glb to write")
     ph.add_argument("--comfy", default="http://127.0.0.1:8188", help="ComfyUI server URL")
+    from .imageto3d import SAMPLERS
     g = ph.add_argument_group("generation options (Pixal3D; defaults = the template's, see imageto3d.GenOptions)")
     g.add_argument("--seed", type=int, help="another seed gives another plausible shape (default 0)")
     g.add_argument("--faces", type=int, help="triangles kept; more keep finer colour detail (default 200000)")
@@ -202,6 +226,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="one photo: Pixal3D (default; takes the photo's colours) or TRELLIS.2")
     g.add_argument("--texture", type=int, help="bake colour into a texture of this size (e.g. 2048; finer detail "
                                                 "such as eyes) instead of per-vertex colour (default 0 = vertex)")
+    g.add_argument("--guidance", type=float, help="shape guidance (CFG) 1-15 (default 7.5): higher follows the photos "
+                                                  "more literally")
+    g.add_argument("--tex-guidance", type=float, help="colour guidance (CFG) 1-10 (default 1 = off)")
+    g.add_argument("--shift", type=float, help="structure sampler shift 1-10 (default 5)")
+    g.add_argument("--sampler", choices=SAMPLERS, help="sampler of every stage (default euler)")
+    g.add_argument("--min-piece", type=float, help="drop loose pieces under this share of the largest, 0-0.2 "
+                                                   "(default 0.01; 0 keeps every piece)")
     ph.set_defaults(fn=cmd_photos)
 
     s = sub.add_parser("serve", help="web UI")

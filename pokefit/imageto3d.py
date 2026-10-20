@@ -43,6 +43,9 @@ PAD = 1.1                                       # the unit cube spans FRAME / PA
 MASK_THRESHOLD = 0.5
 DEFAULT_URL = "http://127.0.0.1:8188"
 DEFAULT_FACES = 200_000                         # plenty for a ~25 mm figure; pokefit stays fast
+# KSampler samplers offered for the flow-matching stages: first-order euler (the template's) and three that
+# ComfyUI applies to flow models unchanged. Others (DDIM, UniPC variants) are left out, untested here.
+SAMPLERS = ("euler", "euler_ancestral", "heun", "dpmpp_2m")
 # Weights, by ComfyUI/models/<folder>: Hugging Face Comfy-Org/Pixal3D and Comfy-Org/BiRefNet.
 MODEL = "pixal3d_multiview_int8_convrot.safetensors"     # diffusion_models/ (int8: fits 16 GB)
 MODEL_SINGLE = "pixal3d_int8_convrot.safetensors"        # diffusion_models/ (one photo, any angle)
@@ -69,19 +72,39 @@ class GenOptions:
                                # the non-cascade 1024 pipeline, which upstream never feeds into the upsample stage.
     remesh: int = 768          # watertight remesh grid, 256-2048 (RemeshMesh: finer keeps more detail)
     smooth: int = 20           # Taubin smoothing passes after the remesh, 0-20 (staircase -> smooth)
-    steps: float = 1.0         # sampler steps x this (the template's 12 / 20 / 12 / 12), 0.5-3
+    steps: float = 1.0         # sampler steps x this (12 per stage, upstream's), 0.5-3
     model: str = "pixal3d"     # one photo only: "pixal3d" (pixel-aligned, takes the photo's colours) or "trellis2"
                                # (Microsoft TRELLIS.2: same decoders, its own colours); several views: Pixal3D
     texture: int = 0           # 0: colour per vertex (PaintMesh); 512-8192: UV-unwrap and bake a texture of this
                                # size from the voxel colours onto the full-detail shape (finer colour: eyes)
+    guidance: float = 7.5      # CFG of the structure / shape / upsample samplers (upstream guidance_strength 7.5):
+                               # higher follows the photos more literally, lower is smoother and more generic
+    tex_guidance: float = 1.0  # CFG of the colour sampler (the template's 1.0 = no guidance, one model pass per step)
+    shift: float = 5.0         # ModelSamplingSD3 shift of the structure sampler (upstream rescale_t 5.0): higher
+                               # spends more steps on the coarse layout
+    sampler: str = "euler"     # KSampler sampler of every stage (the template's euler; see SAMPLERS)
+    min_piece: float = 0.01    # RemeshMesh drop_small_components: loose pieces under this share of the largest are
+                               # removed (0 keeps every speck, e.g. a separate flame tip)
 
     def __post_init__(self) -> None:
         self.seed, self.faces = int(self.seed), int(self.faces)
         self.detail = int(self.detail)
         self.remesh, self.smooth, self.steps = int(self.remesh), int(self.smooth), float(self.steps)
         self.texture = int(self.texture)
+        self.guidance, self.tex_guidance = float(self.guidance), float(self.tex_guidance)
+        self.shift, self.min_piece, self.sampler = float(self.shift), float(self.min_piece), str(self.sampler)
         if self.model not in ("pixal3d", "trellis2"):
             raise ValueError("model must be pixal3d or trellis2")
+        if self.sampler not in SAMPLERS:
+            raise ValueError(f"sampler must be one of {', '.join(SAMPLERS)}")
+        if not 1.0 <= self.guidance <= 15.0:
+            raise ValueError("guidance must be 1..15")
+        if not 1.0 <= self.tex_guidance <= 10.0:
+            raise ValueError("tex_guidance must be 1..10")
+        if not 1.0 <= self.shift <= 10.0:
+            raise ValueError("shift must be 1..10")
+        if not 0.0 <= self.min_piece <= 0.2:
+            raise ValueError("min_piece must be 0..0.2")
         if self.texture and not 512 <= self.texture <= 8192:
             raise ValueError("texture must be 0 (vertex colours) or 512..8192")
         if not 1024 <= self.detail <= 1536 or self.detail % 128:
@@ -514,7 +537,7 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str,
     """Add the Pixal3D sampling chain after a conditioning node `cond` (positive 0, negative 1): the
     templates' sampler settings (seeds offset by `opts.seed`, steps scaled by `opts.steps`), then
     RemeshMesh (solid, `opts.remesh`) -> DecimateMesh(`opts.faces`) -> PaintMesh -> GLB (node `save`)."""
-    seed = opts.seed
+    seed, g = opts.seed, opts.guidance
 
     def n(steps: int) -> int:
         return max(4, round(steps * opts.steps))
@@ -522,7 +545,7 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str,
     def ks(model_node: str, pos: tuple[str, int], neg: tuple[str, int], latent: tuple[str, int], s: int,
            steps: int, cfg: float, scheduler: str) -> dict[str, Any]:
         return {"class_type": "KSampler", "inputs": {
-            "model": [model_node, 0], "seed": s, "steps": steps, "cfg": cfg, "sampler_name": "euler",
+            "model": [model_node, 0], "seed": s, "steps": steps, "cfg": cfg, "sampler_name": opts.sampler,
             "scheduler": scheduler, "positive": list(pos), "negative": list(neg), "latent_image": list(latent),
             "denoise": 1.0}}
 
@@ -538,27 +561,27 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str,
                                                               "start_percent": 0.769, "end_percent": 1.0}},
         "rescale_struct": {"class_type": "RescaleCFG", "inputs": {"model": ["cfg_struct", 0], "multiplier": 0.7}},
         "rescale_shape": {"class_type": "RescaleCFG", "inputs": {"model": ["cfg_shape", 0], "multiplier": 0.5}},
-        "sampling": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["rescale_struct", 0], "shift": 5.0}},
+        "sampling": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["rescale_struct", 0], "shift": opts.shift}},
         "empty": {"class_type": "EmptyTrellis2LatentStructure", "inputs": {"batch_size": 1}},
     })
-    p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, n(12), 7.5, "normal")
+    p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, n(12), g, "normal")
     p["structure"] = {"class_type": "VaeDecodeStructureTrellis2",
                       "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0], "resolution": "32"}}
     p["shape_stage"] = {"class_type": "Trellis2ShapeStage",
                         "inputs": {"positive": ["cond", 0], "negative": ["cond", 1], "voxel": ["structure", 0]}}
     # 12 steps: TRELLIS.2-4B pipeline.json and Pixal3D inference_mv.py (the ComfyUI template has 20).
     p["s_shape"] = ks("rescale_shape", ("shape_stage", 0), ("shape_stage", 1), ("shape_stage", 2), 42 + seed, n(12),
-                      7.5, "normal")
+                      g, "normal")
     p["upsample"] = {"class_type": "Trellis2UpsampleStage",
                      "inputs": {"positive": ["shape_stage", 0], "negative": ["shape_stage", 1],
                                 "shape_latent": ["s_shape", 0], "vae": ["vae_shape", 0],
                                 "target_resolution": opts.detail}}
-    p["s_up"] = ks("rescale_shape", ("upsample", 0), ("upsample", 1), ("upsample", 2), 42 + seed, n(12), 7.5,
+    p["s_up"] = ks("rescale_shape", ("upsample", 0), ("upsample", 1), ("upsample", 2), 42 + seed, n(12), g,
                    "simple")
     p["shape"] = {"class_type": "VaeDecodeShapeTrellis", "inputs": {"samples": ["s_up", 0], "vae": ["vae_shape", 0]}}
     p["tex_stage"] = {"class_type": "Trellis2TextureStage",
                       "inputs": {"positive": ["upsample", 0], "negative": ["upsample", 1], "shape_latent": ["s_up", 0]}}
-    p["s_tex"] = ks("unet", ("tex_stage", 0), ("tex_stage", 1), ("tex_stage", 2), 43 + seed, n(12), 1.0, "normal")
+    p["s_tex"] = ks("unet", ("tex_stage", 0), ("tex_stage", 1), ("tex_stage", 2), 43 + seed, n(12), opts.tex_guidance, "normal")
     p["texture"] = {"class_type": "VaeDecodeTextureTrellis",
                     "inputs": {"samples": ["s_tex", 0], "vae": ["vae_tex", 0], "shape_subdivides": ["shape", 1]}}
     # "solid" (not the template's "udf"): a global inside/outside cut gives ONE watertight solid. UDF
@@ -566,7 +589,7 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str,
     p["remesh"] = {"class_type": "RemeshMesh", "inputs": {
         "mesh": ["shape", 0], "resolution": opts.remesh, "sign_mode": "solid", "sign_mode.fill": 20.0,
         "sign_mode.qef": False, "band": 1.0, "project_back": 0.0, "fix_poles": False, "smooth_iters": opts.smooth,
-        "drop_small_components": 0.01, "precluster_max_verts": 20_000_000}}
+        "drop_small_components": opts.min_piece, "precluster_max_verts": 20_000_000}}
     p["decimate"] = {"class_type": "DecimateMesh",
                      "inputs": {"mesh": ["remesh", 0], "target_face_count": opts.faces, "placement_mode": "midpoint"}}
     if opts.texture:
@@ -668,12 +691,12 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, opts: GenOption
     comfy = Comfy(url)
     if not comfy.alive():
         raise ComfyError(f"ComfyUI is not running at {url} (see AGENTS.md: Photos to 3D)")
+    opts = opts or GenOptions()
     tag = uuid.uuid4().hex[:8]
     name = comfy.upload(f"pokefit_{tag}_photo.png", _png(Image.open(photo).convert("RGB")))
-    stage = "generating with Pixal3D (one photo, a few minutes)"
+    stage = f"generating with {'TRELLIS.2' if opts.model == 'trellis2' else 'Pixal3D'} (one photo, a few minutes)"
     log(stage)
     t0 = time.time()
-    opts = opts or GenOptions()
     try:
         outs = comfy.run(single_prompt(name, opts, prefix=f"pokefit/{out.stem}_{tag}"),
                          progress=lambda s: log(f"{stage}: {s:.0f} s"))

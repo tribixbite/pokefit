@@ -975,6 +975,8 @@ function bind(): void {
   const genIds: Record<keyof api.GenOptions, string> = {
     seed: "genSeed", faces: "genFaces", detail: "genDetail", remesh: "genRemesh",
     smooth: "genSmooth", steps: "genSteps", texture: "genTexture", model: "genModel",
+    guidance: "genGuidance", tex_guidance: "genTexGuidance", shift: "genShift", sampler: "genSampler",
+    min_piece: "genMinPiece",
   };
   const genOptions = (): api.GenOptions => {
     const o: Record<string, number | string> = { ...api.GEN_DEFAULTS };
@@ -987,30 +989,39 @@ function bind(): void {
     o.seed = Math.max(0, Math.round(Number(o.seed)));
     return o as unknown as api.GenOptions;
   };
-  $("genSmooth").addEventListener("input", () => { $("genSmoothVal").textContent = $<HTMLInputElement>("genSmooth").value; });
+  // Range inputs show their value beside the label (<span id="<input id>Val">).
+  const rangeIds = ["genSmooth", "genGuidance", "genTexGuidance", "genShift"];
+  const showRange = (id: string): void => { $(`${id}Val`).textContent = $<HTMLInputElement>(id).value; };
+  for (const id of rangeIds) $(id).addEventListener("input", () => showRange(id));
   $("genReset").addEventListener("click", () => {
     for (const [k, id] of Object.entries(genIds) as [keyof api.GenOptions, string][]) {
       $<HTMLInputElement>(id).value = String(api.GEN_DEFAULTS[k]);
     }
-    $("genSmoothVal").textContent = String(api.GEN_DEFAULTS.smooth);
+    for (const id of rangeIds) showRange(id);
+    $<HTMLInputElement>("genPhotoColour").checked = true;
   });
   $("photosGo").addEventListener("click", () => {
     const pick = (id: string): File | undefined => $<HTMLInputElement>(id).files?.[0];
     const any = pick("photoAny");
     const photos = { front: pick("photoFront"), left: pick("photoLeft"), back: pick("photoBack"), right: pick("photoRight"),
       photo: any };
-    if (!photos.front && !any) { toast("Add a front photo (the pose the figure gets), or one photo from any angle."); return; }
+    const noisy = [...($<HTMLInputElement>("photoNoisy").files ?? [])];
+    if (!photos.front && !any && !noisy.length) {
+      toast("Add a front photo (the pose the figure gets), one photo from any angle, or ordinary photos to clean up.");
+      return;
+    }
+    if (noisy.length > 3) toast("Only the first 3 ordinary photos are used.");
     const mirror = $<HTMLInputElement>("photoMirror").checked;
     showPhotos(false);
     void load(async () => {
       const res = await api.photosToFigure(photos, mirror, (s, what) => {
         $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
-      }, genOptions());
+      }, genOptions(), $<HTMLInputElement>("genPhotoColour").checked, noisy, $<HTMLInputElement>("photoPose").checked);
       // A one-photo model is turned to face front (imageto3d.facing_front): say so, and when it is unsure.
       const facing = res.photos?.facing;
       if (facing && facing.turn_deg) toast(`The figure was ${facing.note}.`);
       return res;
-    }, `${(photos.front ?? any)?.name ?? "photo"} (from photos)`);
+    }, `${(photos.front ?? any ?? noisy[0])?.name ?? "photo"} (from photos)`);
   });
 
   // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.

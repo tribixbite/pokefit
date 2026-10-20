@@ -365,6 +365,13 @@
       <div class="photo-grid">
         <label>Or one photo, any angle<input id="photoAny" type="file" accept="image/*" /></label>
       </div>
+      <div class="photo-grid">
+        <label>Or ordinary photos (1–3: stock, off-angle, in a ball)<input id="photoNoisy" type="file" accept="image/*" multiple /></label>
+      </div>
+      <label class="check"><input id="photoPose" type="checkbox" /> with ordinary photos: re-pose it sitting flat, legs and tail tucked in (fits the ball better; check the result)</label>
+      <p class="hint">Ordinary photos are first redrawn as clean front, side and back views by
+        <a href="https://huggingface.co/Qwen/Qwen-Image-Edit-2511" target="_blank" rel="noopener">Qwen-Image-Edit</a>
+        (about 20 GB more weights; see AGENTS.md), then made into a model as above.</p>
       <p class="hint">One photo works too (a single-view model, turned to face front when its shape makes that clear; the Figure card turns it by hand). Three straight views
         give a better back and sides, and the photos' own colours.</p>
       <details class="gen-opts" id="genOpts">
@@ -390,7 +397,20 @@
           <label>Colour<select id="genTexture" title="Per-vertex colour (follows the photos' own colours) or a baked texture image (finer detail such as eyes; keeps the model's colours)">
             <option value="0" selected>per vertex (default)</option><option value="2048">texture 2048 px</option>
             <option value="4096">texture 4096 px</option></select></label>
+          <label>Shape guidance <span id="genGuidanceVal">7.5</span><input id="genGuidance" type="range" min="1" max="15" step="0.5" value="7.5"
+            title="How literally the shape follows the photos (CFG). Higher: closer to the photos, can turn lumpy; lower: smoother, more generic" /></label>
+          <label>Colour guidance <span id="genTexGuidanceVal">1</span><input id="genTexGuidance" type="range" min="1" max="10" step="0.5" value="1"
+            title="CFG of the colour stage. 1 (default) = off, one model pass per step; higher pushes the model's own colours toward the photos and costs twice the time of that stage" /></label>
+          <label>Structure shift <span id="genShiftVal">5</span><input id="genShift" type="range" min="1" max="10" step="0.5" value="5"
+            title="Spends more of the first stage's steps on the coarse layout (higher) or on detail (lower)" /></label>
+          <label>Sampler<select id="genSampler" title="Diffusion sampler of every stage. heun costs about twice the time">
+            <option value="euler" selected>euler (default)</option><option value="euler_ancestral">euler ancestral</option>
+            <option value="heun">heun (2× time)</option><option value="dpmpp_2m">dpmpp 2m</option></select></label>
+          <label>Loose pieces<select id="genMinPiece" title="Pieces not joined to the body that are smaller than this share of the largest piece are removed">
+            <option value="0">keep all</option><option value="0.001">drop under 0.1 %</option>
+            <option value="0.01" selected>drop under 1 % (default)</option><option value="0.05">drop under 5 %</option></select></label>
         </div>
+        <label class="check"><input id="genPhotoColour" type="checkbox" checked /> paint the photos' own colours onto the model (per-vertex colour only; untick to keep the model's colours; ordinary photos always keep the model's)</label>
         <button id="genReset" class="btn" type="button">Defaults</button>
       </details>
       <div class="row"><button id="photosGo" class="btn primary">Make the figure</button><span id="photosStatus" class="muted"></span></div>

@@ -89,6 +89,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`), `best_value_count` = a glTF's "auto" palette size (`Session.auto_texture_count`). Calibrated on Bambu slices. |
 | `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
+| `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`. Weights listed in its module doc. |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
 | `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), `apply_paint`. |
@@ -154,6 +155,8 @@ cd ../comfyui-3d && py -3.11 -m venv .venv
 #   models/background_removal/birefnet.safetensors
 .venv/Scripts/python main.py --listen 127.0.0.1 --port 8188 --disable-auto-launch
 ```
+For ordinary photos (`--clean`), add the Qwen-Image-Edit-2511 files listed at the top of `pokefit/photoclean.py`
+(~30 GB: int8 model, Qwen2.5-VL fp8 text encoder, VAE, Lightning and Multiple-Angles LoRAs).
 Then `python -m pokefit photos --front f.png --left l.png --back b.png --out fig.glb` (or the UI button, which
 appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http://127.0.0.1:8188).
 - Views: the figure's own left (camera at +X when it faces -Y = it faces the image's left). Photos are framed
@@ -172,8 +175,10 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   front view with MoGe's FOV and no padding (`Camera(fov, pad=1)`), so the photographed side gets the
   photo's colours too (the graph returns the crop, its mask and the FOV via `PreviewAny`).
 - Settings: `GenOptions` (seed, faces, detail 1024-1536, remesh grid, smoothing 0-20, steps x, texture, model
-  pixal3d/trellis2 for one photo); CLI `photos --detail/--remesh/--smooth/--steps/--seed/--faces/--texture/--model`,
-  dialog "Generation options". Detail stops at 1536 and the structure grid stays 32: ComfyUI lacks upstream's
+  pixal3d/trellis2 for one photo, guidance 7.5 / tex_guidance 1 / shift 5 (upstream's), sampler, min_piece =
+  RemeshMesh drop_small_components); CLI `photos --detail/--remesh/--smooth/--steps/--seed/--faces/--texture/--model/
+  --guidance/--tex-guidance/--shift/--sampler/--min-piece`, dialog "Generation options" (+ "paint the photos' own
+  colours" = `photo_colour` in `POST /api/photos`, CLI `--model-colours`). Detail stops at 1536 and the structure grid stays 32: ComfyUI lacks upstream's
   49,152-token cap on the upsample stage, and "64" is the non-cascade pipeline. Shape stage 12 steps (upstream;
   the template has 20). `Comfy.free()` after every job (multi-view keeps ~3 GiB RAM per view, ComfyUI #16620).
   Structure 64 needs most of the 16 GB free (its texture stage stalled with another app holding 12 GB).

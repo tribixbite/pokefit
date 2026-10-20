@@ -296,6 +296,20 @@ def test_generation_options_reach_their_nodes() -> None:
     assert g["s_struct"]["inputs"]["seed"] == 58
     assert GenOptions.from_dict({"detail": "1280", "unknown": 1, "smooth": None}) == GenOptions(detail=1280)
     for bad in ({"detail": 2048}, {"detail": 1100}, {"remesh": 100}, {"smooth": 30}, {"faces": 10},
-                {"steps": 5}, {"texture": 100}):
+                {"steps": 5}, {"texture": 100}, {"guidance": 20}, {"tex_guidance": 0.5}, {"shift": 0},
+                {"min_piece": 0.5}, {"sampler": "ddim"}):
         with pytest.raises(ValueError):
             GenOptions(**bad)
+
+
+def test_sampler_options_reach_every_stage() -> None:
+    o = GenOptions(guidance=4.0, tex_guidance=3.0, shift=3.0, sampler="dpmpp_2m", min_piece=0.0)
+    for g in (single_prompt("p.png", o), generate_prompt({"front": "f.png"}, o)):
+        _links_ok(g)
+        assert [g[k]["inputs"]["cfg"] for k in ("s_struct", "s_shape", "s_up", "s_tex")] == [4.0, 4.0, 4.0, 3.0]
+        assert {g[k]["inputs"]["sampler_name"] for k in ("s_struct", "s_shape", "s_up", "s_tex")} == {"dpmpp_2m"}
+        assert g["sampling"]["inputs"]["shift"] == 3.0
+        assert g["remesh"]["inputs"]["drop_small_components"] == 0.0
+    d = generate_prompt({"front": "f.png"})        # defaults = the template's / upstream's values
+    assert [d[k]["inputs"]["cfg"] for k in ("s_struct", "s_shape", "s_up", "s_tex")] == [7.5, 7.5, 7.5, 1.0]
+    assert d["sampling"]["inputs"]["shift"] == 5.0 and d["s_tex"]["inputs"]["sampler_name"] == "euler"

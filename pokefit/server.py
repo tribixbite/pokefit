@@ -257,19 +257,25 @@ class Handler(BaseHTTPRequestHandler):
         from .imageto3d import VIEWS, GenOptions, photo_to_glb, photos_to_glb
         body = self._json_body()
         views = body.get("views") or {}
-        if not isinstance(views, dict) or not (views.get("front") or views.get("photo")):
-            raise ApiError(400, "a front photo (or one photo from any angle) is required")
+        # "clean": 1-3 ordinary photos (stock, off-angle, in a ball) to redraw as views first (photoclean.py).
+        noisy = body.get("clean") or []
+        if not isinstance(views, dict) or not isinstance(noisy, list) or len(noisy) > 3:
+            raise ApiError(400, "views must be an object and clean a list of up to 3 photos")
+        if not (views.get("front") or views.get("photo") or noisy):
+            raise ApiError(400, "a front photo (or one photo from any angle, or ordinary photos to clean) is required")
         d = UPLOAD_DIR / f"photos_{uuid.uuid4().hex[:8]}"
         d.mkdir(parents=True, exist_ok=True)
-        photos: dict[str, Path] = {}
-        for v in (*VIEWS, "photo"):
-            if views.get(v):
-                raw = str(views[v]).split(",", 1)[-1]          # a data: URL or bare base64
-                try:
-                    (d / f"{v}.png").write_bytes(base64.b64decode(raw))
-                except ValueError as exc:
-                    raise ApiError(400, f"{v} photo is not base64 image data") from exc
-                photos[v] = d / f"{v}.png"
+
+        def save(key: str, data: Any) -> Path:
+            raw = str(data).split(",", 1)[-1]          # a data: URL or bare base64
+            try:
+                (d / f"{key}.png").write_bytes(base64.b64decode(raw))
+            except ValueError as exc:
+                raise ApiError(400, f"{key} photo is not base64 image data") from exc
+            return d / f"{key}.png"
+
+        photos = {v: save(v, views[v]) for v in (*VIEWS, "photo") if views.get(v)}
+        noisy_files = [save(f"noisy{i}", x) for i, x in enumerate(noisy)]
         name = safe_stem(str(body.get("name") or "figure")) or "figure"
         jid = uuid.uuid4().hex[:10]
         _jobs[jid] = {"state": "running", "progress": "starting"}
@@ -282,12 +288,29 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError) as exc:
             raise ApiError(400, f"bad generation options: {exc}") from exc
 
+        # False keeps the model's own colours instead of projecting the photos' (CLI --model-colours). Redrawn
+        # views (clean) default to the model's: they do not register pixel-exactly with the mesh, and projecting
+        # them gave the Charmander doubled eyes and highlight specks the model's own colours do not have.
+        photo_colour = bool(body.get("photo_colour", not noisy))
+
+        mirror = bool(body.get("mirror_right", True))
+
         def run() -> dict[str, Any]:
-            if "photo" in photos and "front" not in photos:
-                rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, opts=opts, log=log)
+            if noisy_files:
+                from .photoclean import CleanOptions, clean_photos, report
+                copts = CleanOptions(seed=opts.seed, pose=bool(body.get("pose")),
+                                     views=("left", "back") if mirror else ("left", "back", "right"))
+                clean = clean_photos(noisy_files, d / "clean", url=COMFY_URL, opts=copts, log=log)
+                rep = photos_to_glb(clean, d / f"{name}.glb", url=COMFY_URL, opts=opts, mirror_right=mirror,
+                                    log=log, photo_colour=photo_colour)
+                rep["clean"] = report(copts, clean)
+            elif "photo" in photos and "front" not in photos:
+                rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, opts=opts, log=log,
+                                   photo_colour=photo_colour)
             else:
                 rep = photos_to_glb({v: f for v, f in photos.items() if v != "photo"}, d / f"{name}.glb",
-                                    url=COMFY_URL, opts=opts, mirror_right=bool(body.get("mirror_right", True)), log=log)
+                                    url=COMFY_URL, opts=opts, mirror_right=mirror, log=log,
+                                    photo_colour=photo_colour)
             log("fitting the figure")
             return {**_load(d / f"{name}.glb"), "photos": rep}
         self._json({"job": _start_job(run, jid)})
