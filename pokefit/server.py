@@ -287,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                 rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, opts=opts, log=log)
             else:
                 rep = photos_to_glb({v: f for v, f in photos.items() if v != "photo"}, d / f"{name}.glb",
-                                    url=COMFY_URL, opts=opts, mirror_right=bool(body.get("mirror_right")), log=log)
+                                    url=COMFY_URL, opts=opts, mirror_right=bool(body.get("mirror_right", True)), log=log)
             log("fitting the figure")
             return {**_load(d / f"{name}.glb"), "photos": rep}
         self._json({"job": _start_job(run, jid)})

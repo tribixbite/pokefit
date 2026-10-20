@@ -224,9 +224,15 @@ export interface GenOptions {
   remesh: number;
   smooth: number;
   steps: number;
+  /** 0 = per-vertex colour; else the size of a baked colour texture. */
+  texture: number;
+  /** One photo: "pixal3d" or "trellis2". */
+  model: string;
 }
 
-export const GEN_DEFAULTS: GenOptions = { seed: 0, faces: 200_000, structure: 32, detail: 1536, remesh: 768, smooth: 20, steps: 1 };
+export const GEN_DEFAULTS: GenOptions = {
+  seed: 0, faces: 200_000, structure: 32, detail: 1536, remesh: 768, smooth: 20, steps: 1, texture: 0, model: "pixal3d",
+};
 
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
 export async function photosToFigure(

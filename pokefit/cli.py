@@ -3,7 +3,7 @@
   python -m pokefit fit figure.3mf [--ball 0.6 | --diameter 44] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
   python -m pokefit serve [--port 8765] [--open]
   python -m pokefit ball [--ball 0.6] [--washer M6]
-  python -m pokefit photos --front F.png [--left L.png] [--back B.png] [--right R.png | --mirror-right] --out fig.glb
+  python -m pokefit photos --front F.png [--left L.png] [--back B.png] [--right R.png | --no-mirror-right] --out fig.glb
 """
 from __future__ import annotations
 
@@ -53,14 +53,14 @@ def cmd_photos(a: argparse.Namespace) -> int:
         raise SystemExit("give either --photo (one photo, any angle) or --front/--left/--back/--right")
     try:
         opts = GenOptions.from_dict({k: getattr(a, k) for k in ("seed", "faces", "structure", "detail", "remesh",
-                                                                 "smooth", "steps")})
+                                                                 "smooth", "steps", "texture", "model")})
     except ValueError as exc:
         raise SystemExit(f"photos: {exc}") from exc
     if a.photo:
         rep = photo_to_glb(a.photo, a.out, url=a.comfy, opts=opts, log=log, photo_colour=not a.model_colours)
     else:
         rep = photos_to_glb(photos, a.out, url=a.comfy, opts=opts,
-                            mirror_right=a.mirror_right, log=log, photo_colour=not a.model_colours)
+                            mirror_right=not a.no_mirror_right, log=log, photo_colour=not a.model_colours)
     print(json.dumps(rep, indent=1))
     print(f"next: python -m pokefit fit {a.out} --out <folder>")
     return 0
@@ -184,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
                         + (" (required; the pose the figure gets)" if view == "front" else ""))
     ph.add_argument("--photo", type=Path, help="instead of the views: ONE photo from any angle (single-view model; "
                                                 "turn the result upright with --rotate-* when fitting)")
-    ph.add_argument("--mirror-right", action="store_true", help="use the left photo mirrored as the right view")
+    ph.add_argument("--no-mirror-right", action="store_true",
+                    help="without a right photo, do NOT use the left one mirrored as the right view (default: mirror; "
+                         "turn it off for clearly asymmetric figures)")
     ph.add_argument("--model-colours", action="store_true",
                     help="keep the model's own colours (default: the photos' colours projected onto it)")
     ph.add_argument("--out", type=Path, required=True, help="the .glb to write")
@@ -197,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--remesh", type=int, help="watertight remesh grid 256-2048 (default 768)")
     g.add_argument("--smooth", type=int, help="smoothing passes after the remesh 0-20 (default 20)")
     g.add_argument("--steps", type=float, help="sampler steps x this, 0.5-3 (default 1)")
+    g.add_argument("--model", choices=("pixal3d", "trellis2"),
+                   help="one photo: Pixal3D (default; takes the photo's colours) or TRELLIS.2")
+    g.add_argument("--texture", type=int, help="bake colour into a texture of this size (e.g. 2048; finer detail "
+                                                "such as eyes) instead of per-vertex colour (default 0 = vertex)")
     ph.set_defaults(fn=cmd_photos)
 
     s = sub.add_parser("serve", help="web UI")

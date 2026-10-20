@@ -47,6 +47,8 @@ DEFAULT_FACES = 200_000                         # plenty for a ~25 mm figure; po
 MODEL = "pixal3d_multiview_int8_convrot.safetensors"     # diffusion_models/ (int8: fits 16 GB)
 MODEL_SINGLE = "pixal3d_int8_convrot.safetensors"        # diffusion_models/ (one photo, any angle)
 MOGE_MODEL = "moge_2_vitl_normal_fp16.safetensors"       # geometry_estimation/ (Comfy-Org/MoGe): photo FOV
+MODEL_TRELLIS2 = "trellis_2_int8_convrot.safetensors"    # diffusion_models/ (Comfy-Org/TRELLIS.2): one photo
+CLIP_TRELLIS2 = "dino_v3_vit_l.safetensors"              # clip_vision/ (Comfy-Org/TRELLIS.2)
 CLIP = "dino_v3_L_naf_fp32.safetensors"                  # clip_vision/
 VAE_SHAPE = "trellis_2_shape_vae_bf16.safetensors"       # vae/
 VAE_TEXTURE = "trellis_2_texture_vae_bf16.safetensors"   # vae/
@@ -65,11 +67,20 @@ class GenOptions:
     remesh: int = 768          # watertight remesh grid, 256-2048 (RemeshMesh: finer keeps more detail)
     smooth: int = 20           # Taubin smoothing passes after the remesh, 0-20 (staircase -> smooth)
     steps: float = 1.0         # sampler steps x this (the template's 12 / 20 / 12 / 12), 0.5-3
+    model: str = "pixal3d"     # one photo only: "pixal3d" (pixel-aligned, takes the photo's colours) or "trellis2"
+                               # (Microsoft TRELLIS.2: same decoders, its own colours); several views: Pixal3D
+    texture: int = 0           # 0: colour per vertex (PaintMesh); 512-8192: UV-unwrap and bake a texture of this
+                               # size from the voxel colours onto the full-detail shape (finer colour: eyes)
 
     def __post_init__(self) -> None:
         self.seed, self.faces = int(self.seed), int(self.faces)
         self.structure, self.detail = int(self.structure), int(self.detail)
         self.remesh, self.smooth, self.steps = int(self.remesh), int(self.smooth), float(self.steps)
+        self.texture = int(self.texture)
+        if self.model not in ("pixal3d", "trellis2"):
+            raise ValueError("model must be pixal3d or trellis2")
+        if self.texture and not 512 <= self.texture <= 8192:
+            raise ValueError("texture must be 0 (vertex colours) or 512..8192")
         if self.structure not in (32, 64):
             raise ValueError("structure must be 32 or 64")
         if not 1024 <= self.detail <= 2048 or self.detail % 128:
@@ -368,12 +379,33 @@ def facing_front(vertices: np.ndarray, faces: np.ndarray) -> Facing:
 
 
 def turn_glb(data: bytes, turn_deg: float) -> bytes:
-    """The GLB turned by `turn_deg` about the up axis (rig frame: counter-clockwise seen from above)."""
-    vertices, faces, colours = _glb_vertex_colours(data)
-    a = np.radians(turn_deg)
-    rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]], np.float64)
-    v_rig = vertices @ TO_RIG.T @ rz.T
-    return vertex_colour_glb(v_rig @ TO_RIG, faces, colours)
+    """The GLB turned by `turn_deg` about the up axis (rig frame: counter-clockwise seen from above).
+    A vertex-coloured GLB is rewritten (`vertex_colour_glb`); a textured one keeps its texture: the turn is
+    applied to the scene (about glTF's up axis, +y, which is the rig's +z)."""
+    if not _has_texture(data):
+        vertices, faces, colours = _glb_vertex_colours(data)
+        a = np.radians(turn_deg)
+        rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]], np.float64)
+        v_rig = vertices @ TO_RIG.T @ rz.T
+        return vertex_colour_glb(v_rig @ TO_RIG, faces, colours)
+    sc = trimesh.load(trimesh.util.wrap_as_stream(data), file_type="glb", force="scene", process=False)
+    assert isinstance(sc, trimesh.Scene)
+    # Rig rotation about +z by a == glTF rotation about +y by a (TO_RIG maps glTF y to rig z, z to -y).
+    sc.apply_transform(trimesh.transformations.rotation_matrix(np.radians(turn_deg), [0, 1, 0]))
+    out: bytes = sc.export(file_type="glb")
+    return out
+
+
+def _has_texture(data: bytes) -> bool:
+    """Whether a GLB's colour is a texture image (UV-baked) rather than per-vertex colour."""
+    sc = trimesh.load(trimesh.util.wrap_as_stream(data), file_type="glb", force="scene", process=False)
+    for g in getattr(sc, "geometry", {}).values():
+        mat = getattr(getattr(g, "visual", None), "material", None)
+        # Any texture slot: base colour, emissive (some AI generators put the colour there) or a simple image.
+        if mat is not None and any(getattr(mat, k, None) is not None
+                                   for k in ("baseColorTexture", "emissiveTexture", "image")):
+            return True
+    return False
 
 
 class Comfy:
@@ -464,7 +496,7 @@ def mask_prompt(images: dict[str, str]) -> dict[str, Any]:
     return p
 
 
-def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str) -> dict[str, Any]:
+def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str, clip: str = CLIP) -> dict[str, Any]:
     """Add the Pixal3D sampling chain after a conditioning node `cond` (positive 0, negative 1): the
     templates' sampler settings (seeds offset by `opts.seed`, steps scaled by `opts.steps`), then
     RemeshMesh (solid, `opts.remesh`) -> DecimateMesh(`opts.faces`) -> PaintMesh -> GLB (node `save`)."""
@@ -481,7 +513,7 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str)
             "denoise": 1.0}}
 
     p.update({
-        "clip": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": CLIP}},
+        "clip": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": clip}},
         "vae_shape": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_SHAPE}},
         "vae_tex": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_TEXTURE}},
         "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
@@ -523,7 +555,18 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str)
         "drop_small_components": 0.01, "precluster_max_verts": 20_000_000}}
     p["decimate"] = {"class_type": "DecimateMesh",
                      "inputs": {"mesh": ["remesh", 0], "target_face_count": opts.faces, "placement_mode": "midpoint"}}
-    p["paint"] = {"class_type": "PaintMesh", "inputs": {"mesh": ["decimate", 0], "voxel_colors": ["texture", 0]}}
+    if opts.texture:
+        # UV atlas on the final mesh, colour baked from the voxels at each texel's nearest point of the
+        # full-detail decoded shape (not the smoothed, decimated one).
+        p["unwrap"] = {"class_type": "UnwrapMesh", "inputs": {"mesh": ["decimate", 0], "segmenter": "pec",
+                                                               "resolution": opts.texture, "padding": 2,
+                                                               "weld_distance": 0.0}}
+        p["bake"] = {"class_type": "BakeTextureFromVoxel", "inputs": {"mesh": ["unwrap", 0], "voxel_colors": ["texture", 0],
+                                                                    "texture_size": opts.texture,
+                                                                    "reference_mesh": ["shape", 0]}}
+        p["paint"] = {"class_type": "ApplyTextureToMesh", "inputs": {"mesh": ["unwrap", 0], "base_color": ["bake", 0]}}
+    else:
+        p["paint"] = {"class_type": "PaintMesh", "inputs": {"mesh": ["decimate", 0], "voxel_colors": ["texture", 0]}}
     p["glb"] = {"class_type": "MeshToFile3D", "inputs": {"mesh": ["paint", 0]}}
     p["save"] = {"class_type": "Save3DAdvanced", "inputs": {"model_3d": ["glb", 0], "filename_prefix": prefix,
                                                             "viewport_state": "", "width": 1024, "height": 1024}}
@@ -570,7 +613,18 @@ def single_prompt(photo: str, opts: GenOptions | None = None, prefix: str = "pok
                                                             "filename_prefix": f"{prefix}_mask"}},
         "show_fov": {"class_type": "PreviewAny", "inputs": {"source": ["fov", 0]}},
     }
-    return _pixal3d_chain(p, MODEL_SINGLE, opts or GenOptions(), prefix)
+    opts = opts or GenOptions()
+    if opts.model == "trellis2":
+        # TRELLIS.2 (the template's switch): its own conditioning, the crop unpadded (the node's note), no camera
+        # (so no MoGe FOV: it is not pixel-aligned, and the photo's colours are not projected onto it).
+        for k in ("moge", "geometry", "fov", "show_fov"):
+            p.pop(k)
+        p["crop"]["inputs"]["pad_factor"] = 1.0
+        p["mask_crop"]["inputs"]["pad_factor"] = 1.0
+        p["cond"] = {"class_type": "Trellis2Conditioning", "inputs": {"clip_vision_model": ["clip", 0],
+                                                                     "image": ["crop", 0]}}
+        return _pixal3d_chain(p, MODEL_TRELLIS2, opts, prefix, CLIP_TRELLIS2)
+    return _pixal3d_chain(p, MODEL_SINGLE, opts, prefix)
 
 
 def _png(img: Image.Image) -> bytes:
@@ -612,7 +666,11 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, opts: GenOption
     out.parent.mkdir(parents=True, exist_ok=True)
     seen = None
     fov = None
-    if photo_colour:
+    if photo_colour and opts.texture:
+        log("texture mode: the model's own (baked) colours are kept; photo colours apply to vertex colours only")
+    elif photo_colour and opts.model == "trellis2":
+        log("TRELLIS.2: the model's own colours are kept (it is not pixel-aligned to the photo)")
+    elif photo_colour:
         fov = float(outs.get("show_fov", {}).get("text", ["nan"])[0])
         crop = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, "save_crop")))).convert("RGB")
         mimg = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, "save_mask")))).convert("L")
@@ -640,7 +698,7 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, opts: GenOption
 
 
 def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, opts: GenOptions | None = None,
-                  mirror_right: bool = False, work: Path | None = None,
+                  mirror_right: bool = True, work: Path | None = None,
                   log: Any = print, photo_colour: bool = True) -> dict[str, Any]:
     """Run the whole pipeline; writes `out` (.glb) and the framed views next to it. Returns a report."""
     names = [v for v in VIEWS if v in photos]
@@ -661,6 +719,9 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, op
     for v in names:
         m = Image.open(io.BytesIO(comfy.fetch(_first_file(outs, f"save_{v}")))).convert("L")
         masks[v] = np.asarray(m.resize(images[v].size), np.float32) / 255.0
+    # No right photo: the left one mirrored (default). Measured on the user's Squirtle photos (front, left,
+    # back): with only 3 views the head came out boxy and flat-topped (the right side is invented); with the
+    # mirrored 4th view it is round and matches the photos, at the same GPU time (174 s vs 192 s).
     if mirror_right and "left" in names and "right" not in names:
         images["right"] = images["left"].transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         masks["right"] = masks["left"][:, ::-1].copy()
@@ -678,7 +739,11 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, op
                      progress=lambda s: log(f"{stage}: {s:.0f} s"))
     data = comfy.fetch(_first_file(outs, "save"))
     seen = None
-    if photo_colour:
+    if photo_colour and opts.texture:
+        # TODO: project the photos onto the baked texture (texel positions from the UV atlas) as recolour_glb
+        # does for vertex colours.
+        log("texture mode: the model's own (baked) colours are kept; photo colours apply to vertex colours only")
+    elif photo_colour:
         (work / f"{out.stem}_model_colours.glb").write_bytes(data)     # the model's own colours, kept
         log("putting the photos' colours on the model")
         data, seen = recolour_glb(data, framed)

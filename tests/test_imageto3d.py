@@ -260,6 +260,26 @@ def test_turn_glb_turns_about_the_up_axis() -> None:
     assert np.allclose(c, 200.0, atol=1.0) and len(f) == len(m.faces)
 
 
+def test_trellis2_for_one_photo() -> None:
+    g = single_prompt("p.png", GenOptions(model="trellis2"))
+    _links_ok(g)
+    assert g["cond"]["class_type"] == "Trellis2Conditioning" and "camera_angle_x" not in g["cond"]["inputs"]
+    assert g["unet"]["inputs"]["unet_name"].startswith("trellis_2") and g["clip"]["inputs"]["clip_name"] == "dino_v3_vit_l.safetensors"
+    assert g["crop"]["inputs"]["pad_factor"] == 1.0 and "moge" not in g and "show_fov" not in g
+    with pytest.raises(ValueError):
+        GenOptions(model="hunyuan")
+
+
+def test_texture_option_bakes_a_texture() -> None:
+    g = single_prompt("p.png", GenOptions(texture=2048))
+    _links_ok(g)
+    assert g["unwrap"]["inputs"]["mesh"] == ["decimate", 0] and g["unwrap"]["inputs"]["resolution"] == 2048
+    bake = g["bake"]["inputs"]
+    assert bake["texture_size"] == 2048 and bake["reference_mesh"] == ["shape", 0]   # full-detail shape
+    assert g["paint"]["class_type"] == "ApplyTextureToMesh" and g["glb"]["inputs"]["mesh"] == ["paint", 0]
+    assert single_prompt("p.png")["paint"]["class_type"] == "PaintMesh"                # default: vertex colour
+
+
 def test_generation_options_reach_their_nodes() -> None:
     o = GenOptions(seed=2, faces=400_000, structure=64, detail=2048, remesh=1024, smooth=5, steps=1.5)
     g = single_prompt("p.png", o)
@@ -271,6 +291,6 @@ def test_generation_options_reach_their_nodes() -> None:
     assert g["s_struct"]["inputs"]["seed"] == 58
     assert GenOptions.from_dict({"detail": "1280", "unknown": 1, "smooth": None}) == GenOptions(detail=1280)
     for bad in ({"structure": 48}, {"detail": 1100}, {"remesh": 100}, {"smooth": 30}, {"faces": 10},
-                {"steps": 5}):
+                {"steps": 5}, {"texture": 100}):
         with pytest.raises(ValueError):
             GenOptions(**bad)

@@ -361,7 +361,7 @@
         <label>Back<input id="photoBack" type="file" accept="image/*" /></label>
         <label>Right side<input id="photoRight" type="file" accept="image/*" /></label>
       </div>
-      <label class="check"><input id="photoMirror" type="checkbox" /> no right photo: use the left one mirrored (symmetric figures)</label>
+      <label class="check"><input id="photoMirror" type="checkbox" checked /> no right photo: use the left one mirrored (rounder, truer shape for near-symmetric figures; untick for lopsided ones)</label>
       <div class="photo-grid">
         <label>Or one photo, any angle<input id="photoAny" type="file" accept="image/*" /></label>
       </div>
@@ -387,6 +387,11 @@
             <option value="400000">400k</option><option value="800000">800k</option></select></label>
           <label>Sampler steps<select id="genSteps" title="Diffusion steps per stage, times this">
             <option value="1" selected>1× (default)</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+          <label>Model (one photo)<select id="genModel" title="With one photo: Pixal3D (pixel-aligned to the photo, takes its colours) or Microsoft TRELLIS.2 (its own colours). Several photos always use Pixal3D">
+            <option value="pixal3d" selected>Pixal3D (default)</option><option value="trellis2">TRELLIS.2</option></select></label>
+          <label>Colour<select id="genTexture" title="Per-vertex colour (follows the photos' own colours) or a baked texture image (finer detail such as eyes; keeps the model's colours)">
+            <option value="0" selected>per vertex (default)</option><option value="2048">texture 2048 px</option>
+            <option value="4096">texture 4096 px</option></select></label>
         </div>
         <button id="genReset" class="btn" type="button">Defaults</button>
       </details>

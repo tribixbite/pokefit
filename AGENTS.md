@@ -158,7 +158,9 @@ Then `python -m pokefit photos --front f.png --left l.png --back b.png --out fig
 appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http://127.0.0.1:8188).
 - Views: the figure's own left (camera at +X when it faces -Y = it faces the image's left). Photos are framed
   by pokefit, not ComfyUI: one scale for all views (same height), largest extent at 1024/1.1 px, centred, on
-  black (`frame_views`). `--mirror-right` adds the mirrored left photo as the right view.
+  black (`frame_views`). Without a right photo the left one mirrored is the right view (default since
+  2026-10-19: 3 views gave the Squirtle a boxy, flat-topped head, 4 a round one, same GPU time;
+  `--no-mirror-right` / untick in the dialog for lopsided figures).
 - Colours: by default the photos' own colours are projected back onto the mesh (`photo_colours`: the mesh
   sits in the rig frame, silhouette IoU 0.94–0.98; z-buffered, masks eroded 4 px, cos² weights); vertices no
   view sees keep the model colour, gain-corrected. Fixes the model's dark albedo and blurred eyes.

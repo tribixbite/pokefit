@@ -974,16 +974,18 @@ function bind(): void {
   // Generation options: one control per GenOptions field; "Defaults" puts the engine's back.
   const genIds: Record<keyof api.GenOptions, string> = {
     seed: "genSeed", faces: "genFaces", structure: "genStructure", detail: "genDetail", remesh: "genRemesh",
-    smooth: "genSmooth", steps: "genSteps",
+    smooth: "genSmooth", steps: "genSteps", texture: "genTexture", model: "genModel",
   };
   const genOptions = (): api.GenOptions => {
-    const o = { ...api.GEN_DEFAULTS };
+    const o: Record<string, number | string> = { ...api.GEN_DEFAULTS };
     for (const [k, id] of Object.entries(genIds) as [keyof api.GenOptions, string][]) {
-      const v = Number($<HTMLInputElement>(id).value);
-      if (Number.isFinite(v)) o[k] = v;
+      const raw = $<HTMLInputElement>(id).value;
+      // Text options (the model) stay text; the rest are numbers.
+      if (typeof api.GEN_DEFAULTS[k] === "string") o[k] = raw;
+      else if (Number.isFinite(Number(raw))) o[k] = Number(raw);
     }
-    o.seed = Math.max(0, Math.round(o.seed));
-    return o;
+    o.seed = Math.max(0, Math.round(Number(o.seed)));
+    return o as unknown as api.GenOptions;
   };
   $("genSmooth").addEventListener("input", () => { $("genSmoothVal").textContent = $<HTMLInputElement>("genSmooth").value; });
   $("genReset").addEventListener("click", () => {
