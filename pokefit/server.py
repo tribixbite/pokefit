@@ -16,6 +16,9 @@ API (all JSON unless noted):
   GET  /api/job         ?id                                        -> {state, result|error}
   POST /api/export      {session, params}                          -> {files: [{name, url}], ...}
   GET  /api/download    ?file                                      -> file bytes
+  POST /api/printer     {clear?}                                   -> config (AMS read through beambam)
+  POST /api/printer/status {}                                      -> {progress} (read-only)
+  POST /api/printer/camera {on}                                    -> {url | null} (beambam camera child)
 """
 from __future__ import annotations
 
@@ -38,7 +41,8 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
-from .printer import AmsSlot, PrinterError, ams_slots, beambam_command, read_state, track_switch
+from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_progress, read_state,
+                      track_switch)
 from .slicer import find_exe
 from .washer import CATALOGUE, DEFAULT_WASHER
 
@@ -102,6 +106,7 @@ _reference_name = ""
 _presets = PresetLibrary(system=default_system_profiles())
 _ams: list[AmsSlot] | None = None        # the printer's loaded filaments, once read (POST /api/printer)
 _track_switch = False                     # ... and whether a Filament Track Switch routes them to either nozzle
+_camera = CameraProxy()                   # live view, started on demand (POST /api/printer/camera)
 
 
 def _config() -> dict[str, Any]:
@@ -301,6 +306,24 @@ class Handler(BaseHTTPRequestHandler):
                 s.ams = _ams
         self._json(_config())
 
+    def post_printer_status(self, q: dict[str, str]) -> None:
+        """What the printer is doing (state, progress, temperatures); read-only."""
+        try:
+            self._json({"progress": print_progress(read_state()).to_dict()})
+        except PrinterError as exc:
+            raise ApiError(502, str(exc)) from exc
+
+    def post_printer_camera(self, q: dict[str, str]) -> None:
+        """{"on": true} starts the live view (beambam camera) and returns its MJPEG URL; false stops it."""
+        if not self._json_body().get("on"):
+            _camera.stop()
+            self._json({"url": None})
+            return
+        try:
+            self._json({"url": _camera.start()})
+        except PrinterError as exc:
+            raise ApiError(502, str(exc)) from exc
+
     def post_load_path(self, q: dict[str, str]) -> None:
         p = Path(str(self._json_body().get("path", ""))).expanduser()
         if not p.is_file():
@@ -443,6 +466,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False)
     except KeyboardInterrupt:
         pass
     finally:
+        _camera.stop()                    # never leave ffmpeg streaming from the printer
         httpd.server_close()
 
 

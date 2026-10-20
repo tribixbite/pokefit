@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 import trimesh
 
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, open_session
-from pokefit.printer import PrinterError, ams_slots, beambam_command, read_state, track_switch
+from pokefit.printer import (CameraProxy, PrinterError, ams_slots, beambam_command, print_progress, read_state,
+                             track_switch)
 
 STATE = {"print": {
     "ams": {"ams": [
@@ -77,3 +82,72 @@ def test_figure_colours_match_the_loaded_filaments(tmp_path: Path) -> None:
     by_colour = {m["colour"].upper(): m for m in rep.import_map}
     # Red goes to A1 (target 1), blue to A2 (target 2): the AMS order, not the project's slots.
     assert by_colour["#C81414"]["target"] == 1 and by_colour["#1414C8"]["target"] == 2
+
+
+def test_print_progress_unpacks_both_nozzles() -> None:
+    report = {"print": {
+        "gcode_state": "RUNNING", "subtask_name": "squirtle", "mc_percent": 42, "layer_num": 80,
+        "total_layer_num": 190, "mc_remaining_time": 72, "bed_temper": 69.5, "bed_target_temper": 70.0,
+        "print_error": 0,
+        # X2D: current temperature in bits 0-15, target in 16-31.
+        "device": {"extruder": {"info": [{"id": 1, "temp": 27}, {"id": 0, "temp": (250 << 16) | 248}]}},
+    }}
+    p = print_progress(report)
+    assert (p.state, p.job, p.percent, p.layer, p.layers, p.remaining_min) == ("RUNNING", "squirtle", 42, 80, 190, 72)
+    assert [(n.id, n.temp, n.target) for n in p.nozzles] == [(0, 248.0, 250.0), (1, 27.0, 0.0)]
+    assert (p.bed, p.bed_target, p.error) == (69.5, 70.0, 0)
+    # A single-nozzle report (no device.extruder): the top-level nozzle fields.
+    one = print_progress({"print": {"gcode_state": "IDLE", "nozzle_temper": 30, "nozzle_target_temper": 0}})
+    assert [(n.temp, n.target) for n in one.nozzles] == [(30.0, 0.0)] and one.layers == 0
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform == "win32":     # (os.kill on Windows would TERMINATE the process)
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def test_camera_proxy_starts_and_kills_its_whole_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fake `beambam camera --bind HOST:PORT` that, like the real one, has a child (ffmpeg) and listens.
+    pidfile = tmp_path / "child.pid"
+    script = tmp_path / "fake_camera.py"
+    script.write_text(
+        "import socket, subprocess, sys, time\n"
+        "host, port = sys.argv[sys.argv.index('--bind') + 1].split(':')\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+        "s = socket.socket(); s.bind((host, int(port))); s.listen()\n"
+        "time.sleep(120)\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{script}"')
+    cam = CameraProxy(_free_port())
+    url = cam.start(timeout=20)
+    assert url == f"http://127.0.0.1:{cam.port}/cam.mjpeg"
+    assert cam.start() == url                       # already running: reused
+    child = int(pidfile.read_text())
+    assert _alive(child)
+    cam.stop()
+    t = time.time()
+    while _alive(child) and time.time() - t < 10:
+        time.sleep(0.2)
+    assert not _alive(child)                        # the grandchild (ffmpeg) went too
+    assert not cam._listening()
+
+
+def test_camera_proxy_reports_a_failed_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # beambam exits through sys.exit(message): the message goes to stderr.
+    script = tmp_path / "fake_fail.py"
+    script.write_text("import sys\nsys.exit('credentials missing - provide --ip --code --serial')\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{script}"')
+    with pytest.raises(PrinterError, match="credentials missing"):
+        CameraProxy(_free_port()).start(timeout=20)

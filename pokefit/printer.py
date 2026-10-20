@@ -24,6 +24,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -126,3 +127,126 @@ def ams_slots(state: dict[str, Any]) -> list[AmsSlot]:
         if colour and tray.get("tray_type"):
             out.append(AmsSlot(254, "Ext", colour, str(tray.get("tray_type")), str(tray.get("tray_sub_brands") or "")))
     return out
+
+
+@dataclass
+class Nozzle:
+    id: int            # firmware extruder id: 0 right, 1 left (single-nozzle printers: 0)
+    temp: float        # °C now
+    target: float      # °C set (0 = off)
+
+
+@dataclass
+class PrintProgress:
+    """What the printer is doing, from its state report (read-only; for the local "Printer" card)."""
+    state: str         # gcode_state: IDLE, PREPARE, RUNNING, PAUSE, FINISH, FAILED, ...
+    job: str           # the plate / project being (or last) printed
+    percent: int
+    layer: int
+    layers: int
+    remaining_min: int
+    nozzles: list[Nozzle]
+    bed: float
+    bed_target: float
+    error: int         # print_error (0 = none)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _num(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def print_progress(state: dict[str, Any]) -> PrintProgress:
+    """Progress, temperatures and errors from a state report (`beambam status`)."""
+    pr = state.get("print") or state
+    nozzles: list[Nozzle] = []
+    # Dual-nozzle printers: device.extruder.info[].temp packs current (bits 0-15) and target (16-31) °C
+    # (Bambu Fleet Hub HTTP API v1.0.0, "device.extruder.info.temp").
+    for e in ((pr.get("device") or {}).get("extruder") or {}).get("info") or []:
+        packed = int(_num(e.get("temp")))
+        nozzles.append(Nozzle(int(_num(e.get("id"))), float(packed & 0xFFFF), float((packed >> 16) & 0xFFFF)))
+    if not nozzles and "nozzle_temper" in pr:
+        nozzles.append(Nozzle(0, _num(pr.get("nozzle_temper")), _num(pr.get("nozzle_target_temper"))))
+    return PrintProgress(
+        state=str(pr.get("gcode_state") or "UNKNOWN"), job=str(pr.get("subtask_name") or ""),
+        percent=int(_num(pr.get("mc_percent"))), layer=int(_num(pr.get("layer_num"))),
+        layers=int(_num(pr.get("total_layer_num"))), remaining_min=int(_num(pr.get("mc_remaining_time"))),
+        nozzles=sorted(nozzles, key=lambda n: n.id), bed=_num(pr.get("bed_temper")),
+        bed_target=_num(pr.get("bed_target_temper")), error=int(_num(pr.get("print_error"))))
+
+
+CAMERA_PORT = int(os.environ.get("POKEFIT_CAMERA_PORT", "8766"))   # beambam camera's default
+
+
+class CameraProxy:
+    """`beambam camera` as a child process: the printer's RTSPS feed re-served as MJPEG on
+    http://127.0.0.1:<port>/cam.mjpeg (ffmpeg runs only while someone watches). Read-only.
+
+    If something already answers on the port (a `beambam camera` the user started), it is used as is
+    and left running. Stopping kills the whole process tree: on Windows the `beambam.exe` launcher runs
+    Python, which runs ffmpeg, and terminating the launcher alone would orphan both.
+    """
+
+    def __init__(self, port: int = CAMERA_PORT) -> None:
+        self.port = port
+        self._proc: subprocess.Popen[bytes] | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/cam.mjpeg"
+
+    def _listening(self) -> bool:
+        import socket
+        with socket.socket() as s:
+            s.settimeout(0.3)
+            return s.connect_ex(("127.0.0.1", self.port)) == 0
+
+    def start(self, timeout: float = 20.0) -> str:
+        """Start (or reuse) the proxy; returns the MJPEG URL. Raises PrinterError if it does not come up."""
+        if self._proc is not None and self._proc.poll() is None or self._listening():
+            return self.url
+        cmd = beambam_command()
+        if cmd is None:
+            raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
+        kwargs: dict[str, Any] = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt"
+                                  else {"start_new_session": True})
+        self._proc = subprocess.Popen([*cmd, "camera", "--bind", f"127.0.0.1:{self.port}"],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **kwargs)
+        import time
+        t = time.time()
+        while time.time() - t < timeout:
+            if self._listening():
+                return self.url
+            if self._proc.poll() is not None:
+                assert self._proc.stderr is not None
+                err = self._proc.stderr.read().decode("utf-8", "replace").strip()[-400:]
+                self._proc = None
+                raise PrinterError(f"beambam camera stopped: {err or 'no output'}")
+            time.sleep(0.2)
+        self.stop()
+        raise PrinterError(f"beambam camera did not start within {timeout:.0f} s")
+
+    def stop(self) -> None:
+        """Stop the proxy this object started (with its children). A proxy it did not start is left alone."""
+        proc, self._proc = self._proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        if sys.platform == "win32":      # (sys.platform, not os.name: mypy narrows on it for os.killpg)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)

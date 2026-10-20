@@ -333,6 +333,16 @@
         <button id="exportBtn" class="btn primary">Export files</button>
         <div id="exportOut" class="export-out"></div>
       </section>
+
+      <section class="card" id="printerCard" hidden>
+        <h2>Printer</h2>
+        <p class="hint">Live camera and progress from your printer, through beambam. Watching only reads: nothing is sent to the printer.</p>
+        <div class="row">
+          <button id="watchBtn" class="btn">Watch the printer</button>
+        </div>
+        <p id="printerStatus" class="muted printer-status" aria-live="polite"></p>
+        <img id="camView" class="cam-view" alt="Live view inside the printer" hidden />
+      </section>
       <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
     </aside>
   </main>

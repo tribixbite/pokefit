@@ -239,6 +239,21 @@ export interface AmsSlot {
   extruder?: number | null;
 }
 
+/** What the printer is doing (pokefit/printer.py PrintProgress). */
+export interface PrintProgress {
+  state: string;
+  job: string;
+  percent: number;
+  layer: number;
+  layers: number;
+  remaining_min: number;
+  /** Firmware extruder ids: 0 right, 1 left. */
+  nozzles: { id: number; temp: number; target: number }[];
+  bed: number;
+  bed_target: number;
+  error: number;
+}
+
 /** What became of one imported Bambu preset. */
 export interface PresetNote {
   kind: "filament" | "process" | "printer";

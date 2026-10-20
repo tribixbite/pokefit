@@ -290,3 +290,8 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
   .engine-chip .short { display: inline; }
   .top .btn { white-space: nowrap; padding-left: 10px; padding-right: 10px; }
 }
+
+/* Printer card: the live camera (16:9 MJPEG from beambam camera) and its status line. */
+.cam-view { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; margin-top: 8px;
+  border-radius: 8px; background: #000; }
+.printer-status { min-height: 1.2em; overflow-wrap: anywhere; }

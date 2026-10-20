@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, RegionView, Report, SliceVariants, WasherRow,
+  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -201,6 +201,18 @@ export async function exportFiles(session: string, params: Params): Promise<Expo
 export async function readPrinter(clear = false): Promise<Config> {
   if (mode !== "local") throw new Error("Reading the printer needs the local version with beambam.");
   return postJson<Config>("/api/printer", { clear });
+}
+
+/** What the printer is doing (read-only, local only). */
+export async function printerStatus(): Promise<PrintProgress> {
+  if (mode !== "local") throw new Error("Watching the printer needs the local version with beambam.");
+  return (await postJson<{ progress: PrintProgress }>("/api/printer/status", {})).progress;
+}
+
+/** Start (`on`) or stop the printer's live view; returns its MJPEG URL when on. */
+export async function printerCamera(on: boolean): Promise<string | null> {
+  if (mode !== "local") throw new Error("Watching the printer needs the local version with beambam.");
+  return (await postJson<{ url: string | null }>("/api/printer/camera", { on })).url;
 }
 
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */

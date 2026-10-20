@@ -3,6 +3,7 @@ import * as api from "./api";
 import { ColorizePanel } from "./colorize";
 import { formatDuration, pct } from "./geometry";
 import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
+import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
 import type { AmsSlot, Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
 import { UndersideEditor } from "./underside";
@@ -208,6 +209,7 @@ function renderPrinter(cfg: Config): void {
   $("ballModelRow").hidden = cfg.engine !== "browser";
   $("photosRow").hidden = !cfg.photos;
   $("amsRow").hidden = !cfg.printer_link;
+  $("printerCard").hidden = !cfg.printer_link;
   $("amsClear").hidden = !cfg.ams.length;
   // Without a track switch each AMS unit is wired to one nozzle: show which (R / L) beside each spool.
   const side = (a: AmsSlot): string => (cfg.track_switch || a.extruder == null ? "" : a.extruder === 1 ? " (L)" : " (R)");
@@ -893,6 +895,7 @@ function bind(): void {
     }
   };
   $("amsBtn").addEventListener("click", () => void printer(false));
+  new PrinterCard($<HTMLButtonElement>("watchBtn"), $("printerStatus"), $<HTMLImageElement>("camView"));
   $("amsClear").addEventListener("click", () => void printer(true));
   // Recolour the figure with the matched filaments' colours (what will actually print).
   $("snapColours").addEventListener("click", () => {
