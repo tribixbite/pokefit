@@ -19,6 +19,7 @@ API (all JSON unless noted):
   POST /api/printer     {clear?}                                   -> config (AMS read through beambam)
   POST /api/printer/status {}                                      -> {progress} (read-only)
   POST /api/printer/camera {on}                                    -> {url | null} (beambam camera child)
+  POST /api/printer/print {file, slots, confirm?}                  -> preview, or with confirm {job} (starts a print)
 """
 from __future__ import annotations
 
@@ -41,8 +42,8 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
-from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_progress, read_state,
-                      track_switch)
+from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_summary,
+                      print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe
 from .washer import CATALOGUE, DEFAULT_WASHER
 
@@ -328,6 +329,35 @@ class Handler(BaseHTTPRequestHandler):
         except PrinterError as exc:
             raise ApiError(502, str(exc)) from exc
 
+    def post_printer_print(self, q: dict[str, str]) -> None:
+        """Send a sliced print file to the printer. Without `confirm`: what would print (each filament ->
+        its AMS spool, the plate). With `confirm: true` (the user pressed "Start print"): upload and start it
+        through beambam as a job. `file` is a Slice print file (under the output folder); `slots` the AMS
+        slot per filament that Slice returned (`ams_slots`)."""
+        body = self._json_body()
+        f = (OUT_DIR / str(body.get("file") or "")).resolve()
+        if not str(f).startswith(str(OUT_DIR.resolve())) or not f.is_file() or not f.name.endswith(".gcode.3mf"):
+            raise ApiError(404, "no such print file: slice the figure first")
+        try:
+            slots = [int(x) for x in body.get("slots") or []]
+        except (TypeError, ValueError) as exc:
+            raise ApiError(400, "slots must be AMS slot numbers") from exc
+        summary = print_file_summary(f)
+        if len(slots) != len(summary["filaments"]):
+            raise ApiError(400, f"the file has {len(summary['filaments'])} filaments but {len(slots)} AMS slots were "
+                                "given: read the printer's AMS, then slice again")
+        by_slot = {a.slot: a for a in _ams or []}
+        for fil, slot in zip(summary["filaments"], slots):
+            a = by_slot.get(slot)
+            fil["slot"] = slot
+            fil["spool"] = a.to_dict() if a else None
+        if not body.get("confirm"):
+            self._json({**summary, "file": body.get("file"), "name": f.name})
+            return
+        jid = uuid.uuid4().hex[:10]
+        _jobs[jid] = {"state": "running", "progress": "uploading to the printer and starting"}
+        self._json({"job": _start_job(lambda: {"output": send_print(f, slots), **summary}, jid)})
+
     def post_load_path(self, q: dict[str, str]) -> None:
         p = Path(str(self._json_body().get("path", ""))).expanduser()
         if not p.is_file():
@@ -404,8 +434,9 @@ class Handler(BaseHTTPRequestHandler):
                 dest = OUT_DIR / safe_stem(s.project.path.name) / src.name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(src.read_bytes())
-                res["print_file"] = {"name": dest.name, "path": str(dest),
-                                     "url": "/api/download?file=" + quote(str(dest.relative_to(OUT_DIR)).replace("\\", "/"))}
+                rel = str(dest.relative_to(OUT_DIR)).replace("\\", "/")
+                res["print_file"] = {"name": dest.name, "path": str(dest), "file": rel,
+                                     "url": "/api/download?file=" + quote(rel)}
             return res
         self._json({"job": _start_job(run)})
 

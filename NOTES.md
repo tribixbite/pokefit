@@ -5,35 +5,43 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **Printer link next steps** (`docs/integration.md` "Next steps"). Credentials are set up
-   (`~/.x2d/credentials`, never in the repo); `beambam status` and "Use my printer's AMS" work on the X2D
-   (4 AMS, 16 spools, track switch installed). The Printer card (camera + progress, read-only) works on the
-   X2D; it needs beambam `ebd1a6b` (Windows camera fix; committed in beambam, not pushed — push when the
-   user says). Next: send-to-printer (`beambam print … --ams-mapping` with the Slice step's `.gcode.3mf`)
-   needs the signing key on this PC (`beambam key`, from Bambu Handy over adb: the user's call) and one
-   user-approved test print (beambam's docs disagree on whether the dual-nozzle start still fails with
-   err 84033544); then AMS load/unload. **Ask the user before any action that changes the printer**, every
-   time.
-2. **Pushes waiting for the user**: craftmatic "Fit in a Pokéball" (`343cd48a`, `d4182af6`, `VIEW-19`;
-   another agent session works in that repo) and beambam's Windows camera fix (`ebd1a6b`). Push only when
-   the user says so.
-3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
+1. **Send to printer** (`docs/integration.md` "Next steps"). Ready: credentials + signing key/certs in
+   `~/.x2d` (copied from the user's phone backup at `C:\.x2d`, which the user made; never in a repo);
+   "Use my printer's AMS" + the Printer card work on the X2D (4 AMS, 16 spools, track switch); with the AMS
+   read, Slice slices each filament as its spool's preset (`Session.print_settings`, `presets.ams_filaments`)
+   and returns `ams_slots`; beambam `print --slot 4,0,12` takes one slot per filament (beambam `5e380d8`,
+   pushed). To build: a "Send to printer" button on the sliced print file -> confirm dialog (filament ->
+   spool, plate, temps) -> `beambam print <file> --slot …` as a job. **The first real print needs the user's
+   OK in chat, and every later one their click.** beambam's notes disagree on whether a dual-nozzle start
+   still fails (err 84033544): the first approved print settles it. Then AMS load/unload.
+2. **Eyes vs. auto palette** (user, 2026-10-19: "the squirtle lost its multicolored eyes"): auto = best value
+   picks 2 colours for both Squirtles, which drops the eyes. Black pupils need 4 (Manex, +325 min) / 5
+   (photo model); red iris 6-7 (+10-11 h); the white highlight merges into cream up to 8. The eye colours
+   themselves cost only ~23-42 changes (few layers); they come late because Ward merging is area-weighted.
+   Idea, not built: a "keep small details" palette mode (contrast-protected clusters) — ask before changing
+   the auto default again.
+3. **Photo models' shape** (same report: head "not smooth", parts "squished" vs the Manex model): the
+   3-photo Pixal3D head is boxy / flat-topped with faceted patches; the 1-photo head is rounder; framing is
+   consistent (head widths front/back/left within 3 %), so it is the generation. Options now exposed
+   (`GenOptions`, dialog "Generation options"); experiments on the user's 3 photos: structure 64 never
+   finished the texture stage (15 min, GPU shared with the user's llama-server). See "Open" for B/C results.
+4. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
    (21 % of the Squirtle's vertices from its side photo). One-photo results turn to face front
    (`facing_front`: mirror plane for the axis, head-forward + tail-behind for the sign; real side photo
    -> +86°, multi-view models 0°). The sign cue is tuned on Squirtles only: the Manex Squirtle already
    reads "unsure" with a different point sample, so other shapes may need the Figure card's turn.
-4. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
+5. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
    FOV). Not done: combining several arbitrary-angle photos (would need their camera poses — e.g. estimate
    azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).
-5. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
+6. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
    size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
-6. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
+7. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
    4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 65-69 s, was 289 s
    under shapely 2.2 — islands now section each body when loops cross). Next: conform's height fields
    (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's islands sections (~35-49 s, per body).
-7. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
+8. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
    Off now: an `http://` visit gets the page over plain HTTP and only then redirects itself with a script;
    on, Cloudflare answers every `http://` request with a redirect before any content. Explained to the user
    2026-10-19; it is their account, so they flip it.

@@ -400,9 +400,7 @@ function renderObjects(rep: Report): void {
   sel.value = o.id;
   $("partsList").replaceChildren(...o.parts.map((p) => {
     const col = o.colours[(p.extruder - 1 + o.colours.length) % o.colours.length] ?? "#888";
-    const sw = h("span", { cls: "sw" });
-    sw.style.background = col;
-    return h("div", {}, sw, `${p.name} — ${p.faces.toLocaleString()} faces${p.painted ? `, ${p.painted} painted` : ""}`);
+    return h("div", {}, swatch(col), `${p.name} — ${p.faces.toLocaleString()} faces${p.painted ? `, ${p.painted} painted` : ""}`);
   }));
 }
 
@@ -475,11 +473,6 @@ function renderImportMap(rep: Report): void {
     : state.config?.slots ?? [];
   $("snapColours").hidden = !rep.import_map.some((m) => !m.new && m.target_colour && m.target_colour !== m.colour);
   $("importMapBox").hidden = rep.import_map.length === 0;
-  const swatch = (c: string): HTMLElement => {
-    const sw = h("span", { cls: "sw" });
-    sw.style.background = c || "transparent";
-    return sw;
-  };
   $("importMap").replaceChildren(
     h("thead", {}, h("tr", {}, ...["figure", "→ your slot", ""].map((t) => h("th", { textContent: t })))),
     h("tbody", {}, ...rep.import_map.map((m) => {
@@ -569,11 +562,76 @@ async function doSlice(): Promise<void> {
       h("a", { href: pf.url, download: pf.name, textContent: `⬇ ${pf.name}`,
         title: "Sliced and ready to print: send it from Bambu Studio or Handy, copy it to the SD card, or beambam print" }),
       h("span", { cls: "muted", textContent: ` — ready to print (${needs ? "with" : "no"} supports)` })) : "";
-    out.replaceChildren(verdict, tbl, per, print, ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
+    // Send to printer: only when the slice was made for the printer's AMS spools (ams_slots).
+    const send = pf && res.ams_slots && state.config?.printer_link
+      ? h("div", { cls: "row" }, h("button", { cls: "btn", textContent: "Send to printer…",
+        onclick: () => void showPrintPlan(pf.file, res.ams_slots ?? []) }))
+      : pf && state.config?.printer_link
+        ? h("div", { cls: "muted", textContent: unmappedText() })
+        : "";
+    out.replaceChildren(verdict, tbl, per, print, send, h("div", { id: "printPlan" }),
+      ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
     out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {
     btn.disabled = !state.config?.slicer;
+  }
+}
+
+/** Why a sliced file cannot be sent: the AMS was not read, or some colour has no loaded spool near it. */
+function unmappedText(): string {
+  if (!state.config?.ams.length) return "To send it to the printer, use my printer's AMS (Export card), then slice again.";
+  const missing = (state.report?.import_map ?? []).filter((m) => m.new).map((m) => m.source);
+  return missing.length
+    ? `No loaded spool is close to colour ${missing.join(", ")}: pick a spool for it in the Export card's table ` +
+      "(or load one and read the AMS again), then slice again to send it to the printer."
+    : "Slice again to send it to the printer with the spools just read.";
+}
+
+/** A small colour square (`.sw`). */
+function swatch(colour: string): HTMLSpanElement {
+  const e = h("span", { cls: "sw" });
+  e.style.background = colour || "transparent";
+  return e;
+}
+
+/** What the print file will print, each filament from its AMS spool, with "Start print" (the only control
+ * in pokefit that starts the printer; beambam re-checks every spool before it starts). */
+async function showPrintPlan(file: string, slots: number[]): Promise<void> {
+  const box = $("printPlan");
+  box.replaceChildren(h("div", { cls: "muted", textContent: "Reading the print file…" }));
+  try {
+    const plan = await api.printPlan(file, slots);
+    const rows = plan.filaments.map((f) => h("tr", {},
+      h("td", {}, swatch(f.colour), ` ${f.filament} · ${f.type}`),
+      h("td", { textContent: "→" }),
+      h("td", {}, f.spool ? swatch(f.spool.colour) : "",
+        f.spool ? ` ${f.spool.label} · ${f.spool.type}` : ` slot ${f.slot} (not read)`),
+      h("td", { cls: "muted", textContent: f.preset.replace(/ @BBL.*$/, "") })));
+    const status = h("div", { cls: "muted" });
+    const start = h("button", { cls: "btn primary", textContent: "Start print" }) as HTMLButtonElement;
+    const cancel = h("button", { cls: "btn", textContent: "Cancel", onclick: () => box.replaceChildren() });
+    start.addEventListener("click", async () => {
+      start.disabled = true;
+      status.textContent = "Uploading to the printer and starting…";
+      try {
+        const output = await api.startPrint(file, slots, (s, what) => {
+          status.textContent = `${what || "Sending"}… ${Math.round(s)} s`;
+        });
+        status.textContent = `Started. ${output.split("\n").filter(Boolean).slice(-1)[0] ?? ""}`;
+      } catch (e) {
+        status.textContent = (e as Error).message;
+        start.disabled = false;
+      }
+    });
+    box.replaceChildren(
+      h("div", { cls: "print-plan" },
+        h("div", { textContent: `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C):` }),
+        h("table", { cls: "tbl" }, h("tbody", {}, ...rows)),
+        h("div", { cls: "muted", textContent: "Check the plate is clean and the spools are right: this starts the printer." }),
+        h("div", { cls: "row" }, start, cancel), status));
+  } catch (e) {
+    box.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   }
 }
 

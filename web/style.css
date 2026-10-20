@@ -302,3 +302,8 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .gen-opts select, .gen-opts input[type="number"] { background: var(--bg2); color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 8px; font-size: 14px; min-height: 36px; }
 .gen-opts input[type="range"] { width: 100%; min-height: 32px; }
+
+/* Send to printer: the confirm panel under the print file. */
+.print-plan { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 8px; }
+.print-plan .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px;
+  border: 1px solid rgba(255, 255, 255, 0.25); }

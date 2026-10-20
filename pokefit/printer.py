@@ -25,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -253,3 +254,46 @@ class CameraProxy:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+# Bambu plate name -> its settings-key prefix (`<prefix>_plate_temp_initial_layer`), as beambam maps them.
+PLATE_KEYS = {"Cool Plate": "cool", "Engineering Plate": "eng", "High Temp Plate": "hot",
+              "Textured PEI Plate": "textured", "Supertack Plate": "supertack"}
+PRINT_TIMEOUT_S = 600.0    # upload (FTPS) + live AMS check + start; a 20 MB file uploads in well under this
+
+
+def print_file_summary(path: Path) -> dict[str, Any]:
+    """What a sliced print file (.gcode.3mf) will print: per filament its preset, material and colour, and
+    the plate with its first-layer bed temperature per filament (what beambam derives and checks too)."""
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        ps = json.loads(z.read("Metadata/project_settings.config"))
+    bed = str(ps.get("curr_bed_type", ""))
+    temps = ps.get(f"{PLATE_KEYS.get(bed, '')}_plate_temp_initial_layer") or []
+    names, types, cols = (list(ps.get(k) or []) for k in ("filament_settings_id", "filament_type", "filament_colour"))
+    return {"plate": bed, "filaments": [
+        {"filament": i + 1, "preset": names[i] if i < len(names) else "", "type": types[i] if i < len(types) else "",
+         "colour": cols[i] if i < len(cols) else "", "bed_temp": temps[i] if i < len(temps) else ""}
+        for i in range(len(types))]}
+
+
+def send_print(path: Path, slots: list[int], timeout: float = PRINT_TIMEOUT_S) -> str:
+    """Upload `path` (a sliced .gcode.3mf) to the printer and start it, filament i from AMS slot slots[i]:
+    `beambam print <file> --slot a,b,...`. CHANGES THE PRINTER: call only on the user's explicit action.
+    beambam re-checks each slot's spool against the file (empty slot / wrong material refuse to start)."""
+    cmd = beambam_command()
+    if cmd is None:
+        raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
+    if not slots or any(not 0 <= s <= 15 for s in slots):
+        raise PrinterError(f"AMS slots must be 0..15, one per filament: {slots}")
+    try:
+        out = subprocess.run([*cmd, "print", str(path), "--slot", ",".join(map(str, slots))], capture_output=True,
+                             text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PrinterError(f"beambam print failed: {exc}") from exc
+    text = (out.stdout + "\n" + out.stderr).strip()
+    if out.returncode != 0:
+        raise PrinterError(f"beambam print refused or failed ({out.returncode}): {text[-600:]}")
+    return text[-1500:]

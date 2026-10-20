@@ -13,8 +13,8 @@ import pytest
 import trimesh
 
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, open_session
-from pokefit.printer import (CameraProxy, PrinterError, ams_slots, beambam_command, print_progress, read_state,
-                             track_switch)
+from pokefit.printer import (CameraProxy, PrinterError, ams_slots, beambam_command, print_file_summary,
+                             print_progress, read_state, send_print, track_switch)
 
 STATE = {"print": {
     "ams": {"ams": [
@@ -151,3 +151,41 @@ def test_camera_proxy_reports_a_failed_start(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{script}"')
     with pytest.raises(PrinterError, match="credentials missing"):
         CameraProxy(_free_port()).start(timeout=20)
+
+
+def _print_file(path: Path) -> Path:
+    import zipfile
+    ps = {"curr_bed_type": "Supertack Plate", "supertack_plate_temp_initial_layer": ["45", "70"],
+          "filament_type": ["PLA", "PETG"], "filament_colour": ["#8ECAD8", "#B49478"],
+          "filament_settings_id": ["Generic PLA @BBL X2D 0.4 nozzle", "Generic PETG @BBL X2D 0.4 nozzle"]}
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("Metadata/project_settings.config", json.dumps(ps))
+    return path
+
+
+def test_print_file_summary(tmp_path: Path) -> None:
+    got = print_file_summary(_print_file(tmp_path / "f.gcode.3mf"))
+    assert got["plate"] == "Supertack Plate"
+    assert [(f["filament"], f["type"], f["colour"], f["bed_temp"]) for f in got["filaments"]] == [
+        (1, "PLA", "#8ECAD8", "45"), (2, "PETG", "#B49478", "70")]
+
+
+def test_send_print_passes_one_slot_per_filament(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fake beambam that records its arguments (no printer is touched).
+    log = tmp_path / "args.json"
+    script = tmp_path / "fake_print.py"
+    script.write_text("import json, sys\n"
+                      f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                      "print('start_print queued: f.gcode.3mf (slot=8,10)')\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{script}"')
+    f = _print_file(tmp_path / "f.gcode.3mf")
+    out = send_print(f, [8, 10])
+    assert json.loads(log.read_text()) == ["print", str(f), "--slot", "8,10"]
+    assert "queued" in out
+    with pytest.raises(PrinterError, match="0..15"):
+        send_print(f, [8, 99])
+    fail = tmp_path / "fake_refuse.py"
+    fail.write_text("import sys\nsys.exit('AMS slot 10 is empty')\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{fail}"')
+    with pytest.raises(PrinterError, match="slot 10 is empty"):
+        send_print(f, [8, 10])

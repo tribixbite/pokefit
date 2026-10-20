@@ -256,6 +256,15 @@ export interface PrintProgress {
   error: number;
 }
 
+/** What a print file will print (POST /api/printer/print preview). */
+export interface PrintPlan {
+  plate: string;
+  name: string;
+  file: string;
+  filaments: { filament: number; preset: string; type: string; colour: string; bed_temp: string; slot: number;
+    spool: AmsSlot | null }[];
+}
+
 /** What became of one imported Bambu preset. */
 export interface PresetNote {
   kind: "filament" | "process" | "printer";
@@ -311,7 +320,9 @@ export interface SliceVariants {
   x10?: SliceResult;
   supports_needed: boolean | null;
   /** The sliced print file (.gcode.3mf) of the recommended variant, ready for the printer. */
-  print_file?: { name: string; path: string; url: string } | null;
+  print_file?: { name: string; path: string; url: string; file: string } | null;
+  /** AMS slot each filament of the print file is sliced for (once the printer's AMS was read). */
+  ams_slots?: number[] | null;
 }
 
 export interface Job<T> {

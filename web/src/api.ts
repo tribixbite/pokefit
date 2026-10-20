@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
+  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -246,14 +246,7 @@ export async function photosToFigure(
   for (const [v, f] of Object.entries(photos)) if (f) views[v] = await dataUrl(f);
   const name = (photos.front?.name ?? "figure").replace(/\.[^.]+$/, "").replace(/[-_ ]?front$/i, "") || "figure";
   const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name, options });
-  const t0 = performance.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const j = (await (await check(await fetch(`/api/job?id=${job}`))).json()) as Job<LoadResponse>;
-    onTick?.((performance.now() - t0) / 1000, j.progress ?? "");
-    if (j.state === "done" && j.result) return j.result;
-    if (j.state === "error") throw new Error(j.error ?? "photos to 3D failed");
-  }
+  return waitJob<LoadResponse>(job, 2000, onTick, "photos to 3D failed");
 }
 
 /** Start the Bambu slices and poll until they finish (local engine only). */
@@ -265,12 +258,33 @@ export async function slice(
 ): Promise<SliceVariants> {
   if (mode !== "local") throw new Error("Slicing needs Bambu Studio: run pokefit locally.");
   const { job } = await postJson<{ job: string }>("/api/slice", { session, params, x10 });
+  return waitJob<SliceVariants>(job, 1000, onTick, "slicing failed");
+}
+
+/** Poll a local-server job (GET /api/job) every `everyMs` until it is done; `onTick` gets the seconds so
+ * far and the job's progress text. */
+async function waitJob<T>(job: string, everyMs: number, onTick: ((seconds: number, progress: string) => void) | undefined,
+  failed: string): Promise<T> {
   const t0 = performance.now();
   for (;;) {
-    await new Promise((r) => setTimeout(r, 1000));
-    onTick?.((performance.now() - t0) / 1000);
-    const j = (await (await check(await fetch(`/api/job?id=${job}`))).json()) as Job<SliceVariants>;
+    await new Promise((r) => setTimeout(r, everyMs));
+    const j = (await (await check(await fetch(`/api/job?id=${job}`))).json()) as Job<T>;
+    onTick?.((performance.now() - t0) / 1000, j.progress ?? "");
     if (j.state === "done" && j.result) return j.result;
-    if (j.state === "error") throw new Error(j.error ?? "slicing failed");
+    if (j.state === "error") throw new Error(j.error ?? failed);
   }
+}
+
+/** What a sliced print file would print, each filament from its AMS slot (no printer action). */
+export async function printPlan(file: string, slots: number[]): Promise<PrintPlan> {
+  if (mode !== "local") throw new Error("Printing needs the local version with beambam.");
+  return postJson<PrintPlan>("/api/printer/print", { file, slots });
+}
+
+/** Upload the print file and START THE PRINT (the user's explicit "Start print"). Returns beambam's output. */
+export async function startPrint(file: string, slots: number[], onTick?: (seconds: number, progress: string) => void,
+): Promise<string> {
+  if (mode !== "local") throw new Error("Printing needs the local version with beambam.");
+  const { job } = await postJson<{ job: string }>("/api/printer/print", { file, slots, confirm: true });
+  return (await waitJob<{ output: string }>(job, 1500, onTick, "the print did not start")).output;
 }

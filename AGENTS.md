@@ -169,6 +169,9 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   plane = left-right axis; head forward / tail behind = front; unsure -> only off its side). Its camera is the rig's
   front view with MoGe's FOV and no padding (`Camera(fov, pad=1)`), so the photographed side gets the
   photo's colours too (the graph returns the crop, its mask and the FOV via `PreviewAny`).
+- Settings: `GenOptions` (seed, faces, structure 32/64, detail 1024-2048, remesh grid, smoothing 0-20, steps x);
+  CLI `photos --structure/--detail/--remesh/--smooth/--steps/--seed/--faces`, dialog "Generation options".
+  Structure 64 needs most of the 16 GB free (its texture stage stalled with another app holding 12 GB).
 - RemeshMesh must use `sign_mode: "solid"`: the template's `udf` gives a double-walled skin (92 % of the surface
   "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.
 - Measured: ~3.4 min for 3 views (int8 weights, 200k faces) while another app held 12 GB of the VRAM
