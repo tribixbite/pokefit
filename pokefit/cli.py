@@ -36,7 +36,7 @@ def _bend(s: str) -> float | None:
 
 def cmd_photos(a: argparse.Namespace) -> int:
     """Photos -> coloured GLB with Pixal3D in a local ComfyUI (pokefit/imageto3d.py)."""
-    from .imageto3d import DEFAULT_FACES, photo_to_glb, photos_to_glb
+    from .imageto3d import GenOptions, photo_to_glb, photos_to_glb
 
     import time
     photos = {v: getattr(a, v) for v in ("front", "left", "back", "right") if getattr(a, v)}
@@ -51,10 +51,15 @@ def cmd_photos(a: argparse.Namespace) -> int:
 
     if a.photo and photos:
         raise SystemExit("give either --photo (one photo, any angle) or --front/--left/--back/--right")
+    try:
+        opts = GenOptions.from_dict({k: getattr(a, k) for k in ("seed", "faces", "structure", "detail", "remesh",
+                                                                 "smooth", "steps")})
+    except ValueError as exc:
+        raise SystemExit(f"photos: {exc}") from exc
     if a.photo:
-        rep = photo_to_glb(a.photo, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES, log=log)
+        rep = photo_to_glb(a.photo, a.out, url=a.comfy, opts=opts, log=log, photo_colour=not a.model_colours)
     else:
-        rep = photos_to_glb(photos, a.out, url=a.comfy, seed=a.seed, faces=a.faces or DEFAULT_FACES,
+        rep = photos_to_glb(photos, a.out, url=a.comfy, opts=opts,
                             mirror_right=a.mirror_right, log=log, photo_colour=not a.model_colours)
     print(json.dumps(rep, indent=1))
     print(f"next: python -m pokefit fit {a.out} --out <folder>")
@@ -184,8 +189,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="keep the model's own colours (default: the photos' colours projected onto it)")
     ph.add_argument("--out", type=Path, required=True, help="the .glb to write")
     ph.add_argument("--comfy", default="http://127.0.0.1:8188", help="ComfyUI server URL")
-    ph.add_argument("--seed", type=int, default=0)
-    ph.add_argument("--faces", type=int, help="triangles in the result (default 200000)")
+    g = ph.add_argument_group("generation options (Pixal3D; defaults = the template's, see imageto3d.GenOptions)")
+    g.add_argument("--seed", type=int, help="another seed gives another plausible shape (default 0)")
+    g.add_argument("--faces", type=int, help="triangles kept; more keep finer colour detail (default 200000)")
+    g.add_argument("--structure", type=int, choices=(32, 64), help="coarse shape grid (default 32)")
+    g.add_argument("--detail", type=int, help="shape resolution 1024-2048, step 128 (default 1536)")
+    g.add_argument("--remesh", type=int, help="watertight remesh grid 256-2048 (default 768)")
+    g.add_argument("--smooth", type=int, help="smoothing passes after the remesh 0-20 (default 20)")
+    g.add_argument("--steps", type=float, help="sampler steps x this, 0.5-3 (default 1)")
     ph.set_defaults(fn=cmd_photos)
 
     s = sub.add_parser("serve", help="web UI")

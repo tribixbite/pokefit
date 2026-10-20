@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
         """Photos of a figure (base64, by view) -> a coloured GLB via ComfyUI, then loaded like a file.
 
         Runs as a job (minutes); its `progress` says what it is doing."""
-        from .imageto3d import VIEWS, photo_to_glb, photos_to_glb
+        from .imageto3d import VIEWS, GenOptions, photo_to_glb, photos_to_glb
         body = self._json_body()
         views = body.get("views") or {}
         if not isinstance(views, dict) or not (views.get("front") or views.get("photo")):
@@ -276,13 +276,17 @@ class Handler(BaseHTTPRequestHandler):
         def log(text: str) -> None:
             _jobs[jid]["progress"] = text.strip()
 
+        try:      # generation options (imageto3d.GenOptions), checked before the job starts
+            opts = GenOptions.from_dict({"seed": body.get("seed"), **(body.get("options") or {})})
+        except (TypeError, ValueError) as exc:
+            raise ApiError(400, f"bad generation options: {exc}") from exc
+
         def run() -> dict[str, Any]:
-            seed = int(body.get("seed") or 0)
             if "photo" in photos and "front" not in photos:
-                rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, seed=seed, log=log)
+                rep = photo_to_glb(photos["photo"], d / f"{name}.glb", url=COMFY_URL, opts=opts, log=log)
             else:
                 rep = photos_to_glb({v: f for v, f in photos.items() if v != "photo"}, d / f"{name}.glb",
-                                    url=COMFY_URL, seed=seed, mirror_right=bool(body.get("mirror_right")), log=log)
+                                    url=COMFY_URL, opts=opts, mirror_right=bool(body.get("mirror_right")), log=log)
             log("fitting the figure")
             return {**_load(d / f"{name}.glb"), "photos": rep}
         self._json({"job": _start_job(run, jid)})

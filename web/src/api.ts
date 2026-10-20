@@ -215,11 +215,25 @@ export async function printerCamera(on: boolean): Promise<string | null> {
   return (await postJson<{ url: string | null }>("/api/printer/camera", { on })).url;
 }
 
+/** Pixal3D generation settings (pokefit/imageto3d.py GenOptions; the same defaults). */
+export interface GenOptions {
+  seed: number;
+  faces: number;
+  structure: number;
+  detail: number;
+  remesh: number;
+  smooth: number;
+  steps: number;
+}
+
+export const GEN_DEFAULTS: GenOptions = { seed: 0, faces: 200_000, structure: 32, detail: 1536, remesh: 768, smooth: 20, steps: 1 };
+
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */
 export async function photosToFigure(
   photos: Partial<Record<"front" | "left" | "back" | "right" | "photo", File>>,
   mirrorRight: boolean,
   onTick?: (seconds: number, progress: string) => void,
+  options: GenOptions = GEN_DEFAULTS,
 ): Promise<LoadResponse> {
   if (mode !== "local") throw new Error("Photos to 3D runs on your computer: install pokefit and ComfyUI (see About).");
   const dataUrl = (f: File): Promise<string> => new Promise((ok, fail) => {
@@ -231,7 +245,7 @@ export async function photosToFigure(
   const views: Record<string, string> = {};
   for (const [v, f] of Object.entries(photos)) if (f) views[v] = await dataUrl(f);
   const name = (photos.front?.name ?? "figure").replace(/\.[^.]+$/, "").replace(/[-_ ]?front$/i, "") || "figure";
-  const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name });
+  const { job } = await postJson<{ job: string }>("/api/photos", { views, mirror_right: mirrorRight, name, options });
   const t0 = performance.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, 2000));

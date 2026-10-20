@@ -29,7 +29,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,42 @@ CLIP = "dino_v3_L_naf_fp32.safetensors"                  # clip_vision/
 VAE_SHAPE = "trellis_2_shape_vae_bf16.safetensors"       # vae/
 VAE_TEXTURE = "trellis_2_texture_vae_bf16.safetensors"   # vae/
 BG_MODEL = "birefnet.safetensors"                        # background_removal/
+
+
+@dataclass
+class GenOptions:
+    """Pixal3D generation settings (the ComfyUI nodes' inputs). Defaults are the template's sampler
+    settings with pokefit's remesh; each costs time or VRAM when raised."""
+    seed: int = 0              # another seed = another plausible shape from the same photos
+    faces: int = DEFAULT_FACES  # triangles kept (DecimateMesh); vertex colours live on vertices, so more
+                               # faces keep finer colour detail (eyes)
+    structure: int = 32        # coarse occupancy grid, 32 or 64 (VaeDecodeStructureTrellis2)
+    detail: int = 1536         # shape upsampling resolution, 1024-2048 step 128 (Trellis2UpsampleStage)
+    remesh: int = 768          # watertight remesh grid, 256-2048 (RemeshMesh: finer keeps more detail)
+    smooth: int = 20           # Taubin smoothing passes after the remesh, 0-20 (staircase -> smooth)
+    steps: float = 1.0         # sampler steps x this (the template's 12 / 20 / 12 / 12), 0.5-3
+
+    def __post_init__(self) -> None:
+        self.seed, self.faces = int(self.seed), int(self.faces)
+        self.structure, self.detail = int(self.structure), int(self.detail)
+        self.remesh, self.smooth, self.steps = int(self.remesh), int(self.smooth), float(self.steps)
+        if self.structure not in (32, 64):
+            raise ValueError("structure must be 32 or 64")
+        if not 1024 <= self.detail <= 2048 or self.detail % 128:
+            raise ValueError("detail must be 1024..2048 in steps of 128")
+        if not 256 <= self.remesh <= 2048:
+            raise ValueError("remesh must be 256..2048")
+        if not 0 <= self.smooth <= 20:
+            raise ValueError("smooth must be 0..20")
+        if not 10_000 <= self.faces <= 2_000_000:
+            raise ValueError("faces must be 10000..2000000")
+        if not 0.5 <= self.steps <= 3.0:
+            raise ValueError("steps must be 0.5..3")
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> "GenOptions":
+        known = {k: v for k, v in (d or {}).items() if k in cls.__dataclass_fields__ and v is not None}
+        return cls(**known)
 
 
 class ComfyError(RuntimeError):
@@ -428,10 +464,15 @@ def mask_prompt(images: dict[str, str]) -> dict[str, Any]:
     return p
 
 
-def _pixal3d_chain(p: dict[str, Any], model: str, seed: int, faces: int, prefix: str) -> dict[str, Any]:
+def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str) -> dict[str, Any]:
     """Add the Pixal3D sampling chain after a conditioning node `cond` (positive 0, negative 1): the
-    templates' sampler settings (seeds offset by `seed`), then RemeshMesh (solid, 768) ->
-    DecimateMesh(`faces`) -> PaintMesh -> GLB (node `save`)."""
+    templates' sampler settings (seeds offset by `opts.seed`, steps scaled by `opts.steps`), then
+    RemeshMesh (solid, `opts.remesh`) -> DecimateMesh(`opts.faces`) -> PaintMesh -> GLB (node `save`)."""
+    seed = opts.seed
+
+    def n(steps: int) -> int:
+        return max(4, round(steps * opts.steps))
+
     def ks(model_node: str, pos: tuple[str, int], neg: tuple[str, int], latent: tuple[str, int], s: int,
            steps: int, cfg: float, scheduler: str) -> dict[str, Any]:
         return {"class_type": "KSampler", "inputs": {
@@ -454,31 +495,34 @@ def _pixal3d_chain(p: dict[str, Any], model: str, seed: int, faces: int, prefix:
         "sampling": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["rescale_struct", 0], "shift": 5.0}},
         "empty": {"class_type": "EmptyTrellis2LatentStructure", "inputs": {"batch_size": 1}},
     })
-    p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, 12, 7.5, "normal")
+    p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, n(12), 7.5, "normal")
     p["structure"] = {"class_type": "VaeDecodeStructureTrellis2",
-                      "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0], "resolution": "32"}}
+                      "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0],
+                                 "resolution": str(opts.structure)}}
     p["shape_stage"] = {"class_type": "Trellis2ShapeStage",
                         "inputs": {"positive": ["cond", 0], "negative": ["cond", 1], "voxel": ["structure", 0]}}
-    p["s_shape"] = ks("rescale_shape", ("shape_stage", 0), ("shape_stage", 1), ("shape_stage", 2), 42 + seed, 20,
+    p["s_shape"] = ks("rescale_shape", ("shape_stage", 0), ("shape_stage", 1), ("shape_stage", 2), 42 + seed, n(20),
                       7.5, "normal")
     p["upsample"] = {"class_type": "Trellis2UpsampleStage",
                      "inputs": {"positive": ["shape_stage", 0], "negative": ["shape_stage", 1],
-                                "shape_latent": ["s_shape", 0], "vae": ["vae_shape", 0], "target_resolution": 1536}}
-    p["s_up"] = ks("rescale_shape", ("upsample", 0), ("upsample", 1), ("upsample", 2), 42 + seed, 12, 7.5, "simple")
+                                "shape_latent": ["s_shape", 0], "vae": ["vae_shape", 0],
+                                "target_resolution": opts.detail}}
+    p["s_up"] = ks("rescale_shape", ("upsample", 0), ("upsample", 1), ("upsample", 2), 42 + seed, n(12), 7.5,
+                   "simple")
     p["shape"] = {"class_type": "VaeDecodeShapeTrellis", "inputs": {"samples": ["s_up", 0], "vae": ["vae_shape", 0]}}
     p["tex_stage"] = {"class_type": "Trellis2TextureStage",
                       "inputs": {"positive": ["upsample", 0], "negative": ["upsample", 1], "shape_latent": ["s_up", 0]}}
-    p["s_tex"] = ks("unet", ("tex_stage", 0), ("tex_stage", 1), ("tex_stage", 2), 43 + seed, 12, 1.0, "normal")
+    p["s_tex"] = ks("unet", ("tex_stage", 0), ("tex_stage", 1), ("tex_stage", 2), 43 + seed, n(12), 1.0, "normal")
     p["texture"] = {"class_type": "VaeDecodeTextureTrellis",
                     "inputs": {"samples": ["s_tex", 0], "vae": ["vae_tex", 0], "shape_subdivides": ["shape", 1]}}
     # "solid" (not the template's "udf"): a global inside/outside cut gives ONE watertight solid. UDF
     # leaves a double-walled skin (an outer and an inner shell 0.1 mm apart), useless for printing.
     p["remesh"] = {"class_type": "RemeshMesh", "inputs": {
-        "mesh": ["shape", 0], "resolution": 768, "sign_mode": "solid", "sign_mode.fill": 20.0,
-        "sign_mode.qef": False, "band": 1.0, "project_back": 0.0, "fix_poles": False, "smooth_iters": 20,
+        "mesh": ["shape", 0], "resolution": opts.remesh, "sign_mode": "solid", "sign_mode.fill": 20.0,
+        "sign_mode.qef": False, "band": 1.0, "project_back": 0.0, "fix_poles": False, "smooth_iters": opts.smooth,
         "drop_small_components": 0.01, "precluster_max_verts": 20_000_000}}
     p["decimate"] = {"class_type": "DecimateMesh",
-                     "inputs": {"mesh": ["remesh", 0], "target_face_count": faces, "placement_mode": "midpoint"}}
+                     "inputs": {"mesh": ["remesh", 0], "target_face_count": opts.faces, "placement_mode": "midpoint"}}
     p["paint"] = {"class_type": "PaintMesh", "inputs": {"mesh": ["decimate", 0], "voxel_colors": ["texture", 0]}}
     p["glb"] = {"class_type": "MeshToFile3D", "inputs": {"mesh": ["paint", 0]}}
     p["save"] = {"class_type": "Save3DAdvanced", "inputs": {"model_3d": ["glb", 0], "filename_prefix": prefix,
@@ -486,7 +530,7 @@ def _pixal3d_chain(p: dict[str, Any], model: str, seed: int, faces: int, prefix:
     return p
 
 
-def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_FACES,
+def generate_prompt(views: dict[str, str], opts: GenOptions | None = None,
                     prefix: str = "pokefit/figure", fov: float = FOV_DEG) -> dict[str, Any]:
     """The Pixal3D multi-view template ("Multi Views to 3D") as an API prompt: framed rig views -> GLB."""
     p: dict[str, Any] = {"cond": {"class_type": "Pixal3DMultiViewConditioning",
@@ -494,11 +538,10 @@ def generate_prompt(views: dict[str, str], seed: int = 0, faces: int = DEFAULT_F
     for v, name in views.items():
         p[f"view_{v}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
         p["cond"]["inputs"][v] = [f"view_{v}", 0]
-    return _pixal3d_chain(p, MODEL, seed, faces, prefix)
+    return _pixal3d_chain(p, MODEL, opts or GenOptions(), prefix)
 
 
-def single_prompt(photo: str, seed: int = 0, faces: int = DEFAULT_FACES,
-                  prefix: str = "pokefit/figure") -> dict[str, Any]:
+def single_prompt(photo: str, opts: GenOptions | None = None, prefix: str = "pokefit/figure") -> dict[str, Any]:
     """One photo from any angle -> GLB, as the template "Pixal3D & TRELLIS.2: Image to Model": BiRefNet
     mask, crop to it (pad 1.1), MoGe-2 estimates the crop's horizontal FOV, single-view Pixal3D. The mesh is
     posed as the photo shows it (turn it upright in pokefit's Figure card if the photo was angled)."""
@@ -527,7 +570,7 @@ def single_prompt(photo: str, seed: int = 0, faces: int = DEFAULT_FACES,
                                                             "filename_prefix": f"{prefix}_mask"}},
         "show_fov": {"class_type": "PreviewAny", "inputs": {"source": ["fov", 0]}},
     }
-    return _pixal3d_chain(p, MODEL_SINGLE, seed, faces, prefix)
+    return _pixal3d_chain(p, MODEL_SINGLE, opts or GenOptions(), prefix)
 
 
 def _png(img: Image.Image) -> bytes:
@@ -548,7 +591,7 @@ def _first_file(outputs: dict[str, Any], node: str) -> dict[str, Any]:
     raise ComfyError(f"node {node} produced no file: {json.dumps(out)[:500]}")
 
 
-def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, faces: int = DEFAULT_FACES,
+def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, opts: GenOptions | None = None,
                  log: Any = print, photo_colour: bool = True, face_front: bool = True) -> dict[str, Any]:
     """One photo of the figure from any angle -> GLB (single-view Pixal3D, `single_prompt`). The side the
     photo shows takes the photo's colours (the camera is the single-image node's: MoGe's FOV); the rest
@@ -562,7 +605,8 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, 
     stage = "generating with Pixal3D (one photo, a few minutes)"
     log(stage)
     t0 = time.time()
-    outs = comfy.run(single_prompt(name, seed, faces, prefix=f"pokefit/{out.stem}_{tag}"),
+    opts = opts or GenOptions()
+    outs = comfy.run(single_prompt(name, opts, prefix=f"pokefit/{out.stem}_{tag}"),
                      progress=lambda s: log(f"{stage}: {s:.0f} s"))
     data = comfy.fetch(_first_file(outs, "save"))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -588,14 +632,15 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, 
             if plain.is_file():
                 plain.write_bytes(turn_glb(plain.read_bytes(), facing.turn_deg))
     out.write_bytes(data)
-    return {"glb": str(out), "views": ["photo"], "generate_seconds": round(time.time() - t0, 1), "bytes": len(data),
+    return {"glb": str(out), "views": ["photo"], "options": asdict(opts),
+            "generate_seconds": round(time.time() - t0, 1), "bytes": len(data),
             "photo_colour_share": None if seen is None else round(seen, 3), "fov": fov,
             "facing": None if facing is None else {"turn_deg": facing.turn_deg, "front_sure": facing.front_sure,
                                                    "note": facing.note}}
 
 
-def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, seed: int = 0,
-                  faces: int = DEFAULT_FACES, mirror_right: bool = False, work: Path | None = None,
+def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, opts: GenOptions | None = None,
+                  mirror_right: bool = False, work: Path | None = None,
                   log: Any = print, photo_colour: bool = True) -> dict[str, Any]:
     """Run the whole pipeline; writes `out` (.glb) and the framed views next to it. Returns a report."""
     names = [v for v in VIEWS if v in photos]
@@ -628,7 +673,8 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, se
     t1 = time.time()
     stage = f"generating with Pixal3D ({len(names)} views, a few minutes)"
     log(stage)
-    outs = comfy.run(generate_prompt(views, seed, faces, prefix=f"pokefit/{out.stem}_{tag}"),
+    opts = opts or GenOptions()
+    outs = comfy.run(generate_prompt(views, opts, prefix=f"pokefit/{out.stem}_{tag}"),
                      progress=lambda s: log(f"{stage}: {s:.0f} s"))
     data = comfy.fetch(_first_file(outs, "save"))
     seen = None
@@ -637,7 +683,7 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, se
         log("putting the photos' colours on the model")
         data, seen = recolour_glb(data, framed)
     out.write_bytes(data)
-    return {"glb": str(out), "views": names, "mask_seconds": round(t1 - t0, 1),
+    return {"glb": str(out), "views": names, "options": asdict(opts), "mask_seconds": round(t1 - t0, 1),
             "generate_seconds": round(time.time() - t1, 1), "bytes": len(data),
             "photo_colour_share": None if seen is None else round(seen, 3),
             "framing": {v: {"scale": round(f.scale, 4), "box": f.box} for v, f in framed.items()}}

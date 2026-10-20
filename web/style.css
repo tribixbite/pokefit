@@ -295,3 +295,10 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .cam-view { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; margin-top: 8px;
   border-radius: 8px; background: #000; }
 .printer-status { min-height: 1.2em; overflow-wrap: anywhere; }
+
+/* Photos dialog: generation options (collapsed by default). */
+.gen-opts { margin: 8px 0 12px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.gen-opts summary { cursor: pointer; font-size: 14px; min-height: 32px; display: flex; align-items: center; }
+.gen-opts select, .gen-opts input[type="number"] { background: var(--bg2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 8px; font-size: 14px; min-height: 36px; }
+.gen-opts input[type="range"] { width: 100%; min-height: 32px; }

@@ -367,6 +367,29 @@
       </div>
       <p class="hint">One photo works too (a single-view model, turned to face front when its shape makes that clear; the Figure card turns it by hand). Three straight views
         give a better back and sides, and the photos' own colours.</p>
+      <details class="gen-opts" id="genOpts">
+        <summary>Generation options</summary>
+        <p class="hint">Pixal3D's settings. Higher detail costs time; another seed gives another plausible shape from the same photos.</p>
+        <div class="photo-grid">
+          <label>Seed<input id="genSeed" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
+          <label>Shape detail<select id="genDetail" title="Shape upsampling resolution (Trellis2 upsample stage)">
+            <option value="1024">1024 (faster)</option><option value="1536" selected>1536 (default)</option>
+            <option value="2048">2048 (finest)</option></select></label>
+          <label>Coarse shape<select id="genStructure" title="Coarse occupancy grid the shape starts from">
+            <option value="32" selected>32 (default)</option><option value="64">64 (finer; needs most of a 16 GB GPU free)</option></select></label>
+          <label>Remesh<select id="genRemesh" title="Grid of the watertight remesh: finer keeps more surface detail">
+            <option value="512">512</option><option value="768" selected>768 (default)</option>
+            <option value="1024">1024</option><option value="1536">1536</option></select></label>
+          <label>Smoothing <span id="genSmoothVal">20</span><input id="genSmooth" type="range" min="0" max="20" step="1" value="20"
+            title="Smoothing passes after the remesh: fewer keep crisp creases, more smooth out steps" /></label>
+          <label>Triangles<select id="genFaces" title="Triangles kept. Colours sit on the vertices, so more triangles keep finer colour detail (eyes)">
+            <option value="100000">100k</option><option value="200000" selected>200k (default)</option>
+            <option value="400000">400k</option><option value="800000">800k</option></select></label>
+          <label>Sampler steps<select id="genSteps" title="Diffusion steps per stage, times this">
+            <option value="1" selected>1× (default)</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+        </div>
+        <button id="genReset" class="btn" type="button">Defaults</button>
+      </details>
       <div class="row"><button id="photosGo" class="btn primary">Make the figure</button><span id="photosStatus" class="muted"></span></div>
     </div>
   </section>

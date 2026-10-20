@@ -913,6 +913,27 @@ function bind(): void {
   $("photosBtn").addEventListener("click", () => showPhotos(true));
   $("photosClose").addEventListener("click", () => showPhotos(false));
   photosDlg.addEventListener("click", (e) => { if (e.target === photosDlg) showPhotos(false); });
+  // Generation options: one control per GenOptions field; "Defaults" puts the engine's back.
+  const genIds: Record<keyof api.GenOptions, string> = {
+    seed: "genSeed", faces: "genFaces", structure: "genStructure", detail: "genDetail", remesh: "genRemesh",
+    smooth: "genSmooth", steps: "genSteps",
+  };
+  const genOptions = (): api.GenOptions => {
+    const o = { ...api.GEN_DEFAULTS };
+    for (const [k, id] of Object.entries(genIds) as [keyof api.GenOptions, string][]) {
+      const v = Number($<HTMLInputElement>(id).value);
+      if (Number.isFinite(v)) o[k] = v;
+    }
+    o.seed = Math.max(0, Math.round(o.seed));
+    return o;
+  };
+  $("genSmooth").addEventListener("input", () => { $("genSmoothVal").textContent = $<HTMLInputElement>("genSmooth").value; });
+  $("genReset").addEventListener("click", () => {
+    for (const [k, id] of Object.entries(genIds) as [keyof api.GenOptions, string][]) {
+      $<HTMLInputElement>(id).value = String(api.GEN_DEFAULTS[k]);
+    }
+    $("genSmoothVal").textContent = String(api.GEN_DEFAULTS.smooth);
+  });
   $("photosGo").addEventListener("click", () => {
     const pick = (id: string): File | undefined => $<HTMLInputElement>(id).files?.[0];
     const any = pick("photoAny");
@@ -924,7 +945,7 @@ function bind(): void {
     void load(async () => {
       const res = await api.photosToFigure(photos, mirror, (s, what) => {
         $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
-      });
+      }, genOptions());
       // A one-photo model is turned to face front (imageto3d.facing_front): say so, and when it is unsure.
       const facing = res.photos?.facing;
       if (facing && facing.turn_deg) toast(`The figure was ${facing.note}.`);

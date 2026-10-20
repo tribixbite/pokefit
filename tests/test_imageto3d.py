@@ -18,7 +18,7 @@ from PIL import Image
 from pokefit.imageto3d import (FRAME, PAD, ComfyError, Framed, frame_views, generate_prompt, mask_prompt,
                                single_prompt,
                                photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera,
-                               TO_RIG, _glb_vertex_colours, facing_front, turn_glb)
+                               TO_RIG, GenOptions, _glb_vertex_colours, facing_front, turn_glb)
 from pokefit.model3mf import read_project
 
 
@@ -68,18 +68,23 @@ def _links_ok(prompt: dict[str, Any]) -> None:
 
 
 def test_prompts_are_wired() -> None:
-    g = generate_prompt({"front": "f.png", "back": "b.png"}, seed=3, faces=1234)
+    g = generate_prompt({"front": "f.png", "back": "b.png"}, GenOptions(seed=3, faces=12_340))
     _links_ok(g)
     cond = g["cond"]["inputs"]
     assert cond["front"] == ["view_front", 0] and cond["back"] == ["view_back", 0] and "left" not in cond
-    assert g["decimate"]["inputs"]["target_face_count"] == 1234
+    assert g["decimate"]["inputs"]["target_face_count"] == 12_340
     assert g["remesh"]["inputs"]["sign_mode"] == "solid"                       # one watertight solid
     assert g["s_struct"]["inputs"]["seed"] == 59
-    one = single_prompt("p.png", faces=999)
+    one = single_prompt("p.png", GenOptions(faces=99_900))
     _links_ok(one)
     assert one["cond"]["class_type"] == "Pixal3DConditioning" and one["cond"]["inputs"]["camera_angle_x"] == ["fov", 0]
-    assert one["unet"]["inputs"]["unet_name"].startswith("pixal3d_int8") and one["decimate"]["inputs"]["target_face_count"] == 999
+    assert one["unet"]["inputs"]["unet_name"].startswith("pixal3d_int8") and one["decimate"]["inputs"]["target_face_count"] == 99_900
     assert g["unet"]["inputs"]["unet_name"].startswith("pixal3d_multiview")
+    # Defaults are the template's settings.
+    d = single_prompt("p.png")
+    assert (d["structure"]["inputs"]["resolution"], d["upsample"]["inputs"]["target_resolution"],
+            d["remesh"]["inputs"]["resolution"], d["remesh"]["inputs"]["smooth_iters"],
+            d["s_shape"]["inputs"]["steps"]) == ("32", 1536, 768, 20, 20)
     m = mask_prompt({"front": "f.png", "left": "l.png"})
     _links_ok(m)
     assert {k for k in m if k.startswith("save_")} == {"save_front", "save_left"}
@@ -253,3 +258,19 @@ def test_turn_glb_turns_about_the_up_axis() -> None:
     head = rig[rig[:, 2] > 0.9]
     assert head[:, 1].mean() < -0.3 and abs(head[:, 0].mean()) < 0.05     # the head now points at -y
     assert np.allclose(c, 200.0, atol=1.0) and len(f) == len(m.faces)
+
+
+def test_generation_options_reach_their_nodes() -> None:
+    o = GenOptions(seed=2, faces=400_000, structure=64, detail=2048, remesh=1024, smooth=5, steps=1.5)
+    g = single_prompt("p.png", o)
+    assert g["structure"]["inputs"]["resolution"] == "64"
+    assert g["upsample"]["inputs"]["target_resolution"] == 2048
+    assert (g["remesh"]["inputs"]["resolution"], g["remesh"]["inputs"]["smooth_iters"]) == (1024, 5)
+    assert g["decimate"]["inputs"]["target_face_count"] == 400_000
+    assert [g[k]["inputs"]["steps"] for k in ("s_struct", "s_shape", "s_up", "s_tex")] == [18, 30, 18, 18]
+    assert g["s_struct"]["inputs"]["seed"] == 58
+    assert GenOptions.from_dict({"detail": "1280", "unknown": 1, "smooth": None}) == GenOptions(detail=1280)
+    for bad in ({"structure": 48}, {"detail": 1100}, {"remesh": 100}, {"smooth": 30}, {"faces": 10},
+                {"steps": 5}):
+        with pytest.raises(ValueError):
+            GenOptions(**bad)
