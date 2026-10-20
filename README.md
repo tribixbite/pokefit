@@ -26,6 +26,7 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   calibrated on Bambu slices;
 - **matches colours to your printer's AMS** (local version, through [beambam](https://github.com/tribixbite/beambam)):
   reads the loaded filaments, maps the figure's colours to them and can recolour the figure to match;
+- **shows your printer** (local version, beambam): live camera, progress, nozzle and bed temperatures — read-only;
 - **takes models from other apps**: a page can open pokefit and post a model to it (`pokefit:load`, see
   `web/src/handoff.ts`), or link `https://pokefit.party/?url=<model>`;
 - **reads your Bambu Studio presets**: a project 3MF, or the preset exports from *File › Export › Export Preset

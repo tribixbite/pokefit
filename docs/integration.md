@@ -12,7 +12,7 @@ Investigated 2026-10-19 (pokefit `main`, beambam `1c040c9`, craftmatic `9eda695f
 | 3. Colour | Texture/vertex colour → filaments, palette size, tap-to-paint, Bambu split paint | pokefit `gltf`, `colorize`, `paint` | ✔ |
 | 4. Plan | Materials (presets), nozzle split and colour-change cost on the X2D, slice | pokefit `presets`, `toolchange`, `slicer` | ✔ estimates + Bambu CLI slices |
 | 5. Map | Figure colours → filaments loaded in the 4 AMS units | pokefit `printer.py` (reads via beambam) + `remap.match_slots` | ✔ read + match + recolour; verified on the user's X2D (16 spools, track switch) |
-| 6. Print | Upload, start with the AMS mapping, watch live, change filaments | beambam (`ftps`, `print_job`, `cam`, `ams`) | ✗ next (see below) |
+| 6. Print | Upload, start with the AMS mapping, watch live, change filaments | beambam (`ftps`, `print_job`, `cam`, `ams`) | ✔ watch (Printer card: camera + progress); ✗ send / filament control (below) |
 
 ## Boundaries (why not one codebase)
 
@@ -63,16 +63,17 @@ Measured with the Bambu CLI on the user's X2D project (PETG, 0.16 mm, prime towe
    X2D's 4 AMS units (16 spools) through `POKEFIT_BEAMBAM=C:/git/beambam/.venv/Scripts/beambam.exe`.
 2. **Send to printer**: the local Slice step now writes the print file (`…_auto.gcode.3mf` /
    `…_off.gcode.3mf`, with the plate thumbnails the touchscreen needs) and offers it as a download; next is
-   `beambam print <file> --ams-mapping …` from the AMS match. Needs the per-install signing key (`~/.x2d/printer_sign_key.pem`,
-   extracted from Bambu Handy via adb, per beambam's docs). **Blocker in beambam**: the dual-nozzle
-   `nozzle_mapping` in `project_file` is not reproduced yet (err 84033544) — capture one real dual-nozzle
-   print start (Bambu Studio → printer) and add it to beambam first. Until then: upload with
-   `beambam push` and start on the touchscreen (needs the plate thumbnails beambam's
-   `inject_thumbnails.py` adds).
-3. **Live view**: `beambam camera` proxies the X2D's RTSPS feed to MJPEG on 127.0.0.1:8766; the local UI
-   can embed it in a "Printer" card next to the AMS slots (print progress from `beambam status`). Tried
-   2026-10-19: on Windows its ffmpeg pump dies at `select.select()` on a pipe (`beambam/cli/daemon.py:433`,
-   WinError 10038) — a beambam fix (reader thread) comes first.
+   `beambam print <file> --ams-mapping …` from the AMS match. Needs the per-install signing key
+   (`~/.x2d/printer_sign_key.pem` + `printer_cert_id.txt`, extracted from Bambu Handy on a phone via adb,
+   `beambam key`): not on this PC yet — the user's call. beambam's `docs/COMPARISON.md` now records a pure-LAN
+   print start verified on the X2D (err 0, after the `url_enc` and `ftp:///cache/` fixes), while a docstring
+   in `print_job.py` still says the dual-nozzle `project_file` returns 84033544: confirm with one real
+   (user-approved) print before building the button.
+3. Done 2026-10-19: **Printer card** (local): "Watch the printer" starts `beambam camera` as a child
+   (`printer.CameraProxy`, MJPEG on 127.0.0.1:8766, process tree killed on stop / server exit) and polls
+   `beambam status` every 15 s while the page is visible (`print_progress`: state, %, layers, time left,
+   both nozzles' packed temperatures, bed). Read-only. Needed beambam `ebd1a6b` (local, not pushed): its
+   camera pump used `select()` on a pipe, which Windows refuses (WinError 10038).
 4. **Filament control**: `beambam ams-load / ams-unload` and `print.ams_filament_setting` (set a tray's
    type/colour) — a per-slot menu in that card. Every printer-changing action is user-confirmed.
 5. **Auto colour optimisation** across the loop: palette size from the cost table (done: "auto"), snap colours

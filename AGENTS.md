@@ -87,7 +87,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
 | `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`), `best_value_count` = a glTF's "auto" palette size (`Session.auto_texture_count`). Calibrated on Bambu slices. |
-| `printer.py` | The printer's loaded AMS filaments via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide); per-unit nozzle routing and track-switch detection; colours matched with `remap.match_slots`. Credentials live in `~/.x2d/credentials`, never in the repo. |
+| `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
@@ -106,6 +106,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |
 | `src/handoff.ts` | Models from other apps (craftmatic): `pokefit:load` postMessage from trusted origins, `?url=`. |
+| `src/printer.ts` | Printer card (local): "Watch the printer" = camera + status every 15 s while visible. |
 | `public/` | Static files: CNAME, og.gif, icons, `llms.txt` (keep it in sync with features). |
 
 ## Gotchas that cost real time (keep them in mind)

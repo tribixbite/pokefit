@@ -7,16 +7,16 @@ exist only on the original Windows machine (ask the user for the files).
 ## To do (prioritised)
 1. **Printer link next steps** (`docs/integration.md` "Next steps"). Credentials are set up
    (`~/.x2d/credentials`, never in the repo); `beambam status` and "Use my printer's AMS" work on the X2D
-   (4 AMS, 16 spools, track switch installed). Next, read-only first: live view and print progress in a
-   local "Printer" card. `beambam camera` is blocked on Windows: its ffmpeg pump calls `select.select()` on
-   a pipe (`beambam/cli/daemon.py:433`, WinError 10038; Windows select takes sockets only) — needs a reader
-   thread there, in beambam (ask the user before changing that repo). The printer's RTSPS stream is enabled
-   (`ipcam.rtsp_url`) and ffmpeg is installed; then send-to-printer (`beambam print …
-   --ams-mapping` with the Slice step's `.gcode.3mf`), blocked in beambam by the dual-nozzle
-   `nozzle_mapping` print start (err 84033544); AMS load/unload. **Ask the user before any action that
-   changes the printer**, every time.
-2. **craftmatic push**: the "Fit in a Pokéball" handoff is committed in craftmatic (`343cd48a`, `d4182af6`,
-   `VIEW-19`) but not pushed; another agent session works in that repo. Push only when the user says so.
+   (4 AMS, 16 spools, track switch installed). The Printer card (camera + progress, read-only) works on the
+   X2D; it needs beambam `ebd1a6b` (Windows camera fix; committed in beambam, not pushed — push when the
+   user says). Next: send-to-printer (`beambam print … --ams-mapping` with the Slice step's `.gcode.3mf`)
+   needs the signing key on this PC (`beambam key`, from Bambu Handy over adb: the user's call) and one
+   user-approved test print (beambam's docs disagree on whether the dual-nozzle start still fails with
+   err 84033544); then AMS load/unload. **Ask the user before any action that changes the printer**, every
+   time.
+2. **Pushes waiting for the user**: craftmatic "Fit in a Pokéball" (`343cd48a`, `d4182af6`, `VIEW-19`;
+   another agent session works in that repo) and beambam's Windows camera fix (`ebd1a6b`). Push only when
+   the user says so.
 3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
