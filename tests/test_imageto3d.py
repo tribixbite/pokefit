@@ -84,7 +84,7 @@ def test_prompts_are_wired() -> None:
     d = single_prompt("p.png")
     assert (d["structure"]["inputs"]["resolution"], d["upsample"]["inputs"]["target_resolution"],
             d["remesh"]["inputs"]["resolution"], d["remesh"]["inputs"]["smooth_iters"],
-            d["s_shape"]["inputs"]["steps"]) == ("32", 1536, 768, 20, 20)
+            d["s_shape"]["inputs"]["steps"]) == ("32", 1536, 768, 20, 12)
     m = mask_prompt({"front": "f.png", "left": "l.png"})
     _links_ok(m)
     assert {k for k in m if k.startswith("save_")} == {"save_front", "save_left"}
@@ -94,6 +94,7 @@ class FakeComfy(BaseHTTPRequestHandler):
     """Enough of ComfyUI's API for photos_to_glb: masks are the photo's non-white pixels."""
     uploads: dict[str, bytes] = {}
     prompts: list[dict[str, Any]] = []
+    freed = 0
     glb = b""
 
     def log_message(self, *a: Any) -> None:
@@ -142,6 +143,9 @@ class FakeComfy(BaseHTTPRequestHandler):
             data = rest.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n--", 1)[0]
             self.uploads[name] = data
             return self._send(json.dumps({"name": name, "subfolder": "", "type": "input"}).encode())
+        if self.path == "/free":
+            type(self).freed += 1          # (a handler instance per request)
+            return self._send(b"{}")
         if self.path == "/prompt":
             self.prompts.append(json.loads(body)["prompt"])
             return self._send(json.dumps({"prompt_id": str(len(self.prompts) - 1)}).encode())
@@ -172,6 +176,7 @@ def test_photos_to_glb_against_a_fake_comfy(tmp_path: Path, fake_comfy: str) -> 
     framed = Image.open(tmp_path / "fig" / "view_right.png")
     left = Image.open(tmp_path / "fig" / "view_left.png")
     assert np.array_equal(np.asarray(framed), np.asarray(left)[:, ::-1])       # mirrored left
+    assert FakeComfy.freed >= 1                     # ComfyUI's memory freed after the job (issue #16620)
 
 
 def test_needs_a_front_and_a_running_comfy(tmp_path: Path) -> None:
@@ -281,16 +286,16 @@ def test_texture_option_bakes_a_texture() -> None:
 
 
 def test_generation_options_reach_their_nodes() -> None:
-    o = GenOptions(seed=2, faces=400_000, structure=64, detail=2048, remesh=1024, smooth=5, steps=1.5)
+    o = GenOptions(seed=2, faces=400_000, detail=1280, remesh=1024, smooth=5, steps=1.5)
     g = single_prompt("p.png", o)
-    assert g["structure"]["inputs"]["resolution"] == "64"
-    assert g["upsample"]["inputs"]["target_resolution"] == 2048
+    assert g["structure"]["inputs"]["resolution"] == "32"
+    assert g["upsample"]["inputs"]["target_resolution"] == 1280
     assert (g["remesh"]["inputs"]["resolution"], g["remesh"]["inputs"]["smooth_iters"]) == (1024, 5)
     assert g["decimate"]["inputs"]["target_face_count"] == 400_000
-    assert [g[k]["inputs"]["steps"] for k in ("s_struct", "s_shape", "s_up", "s_tex")] == [18, 30, 18, 18]
+    assert [g[k]["inputs"]["steps"] for k in ("s_struct", "s_shape", "s_up", "s_tex")] == [18, 18, 18, 18]
     assert g["s_struct"]["inputs"]["seed"] == 58
     assert GenOptions.from_dict({"detail": "1280", "unknown": 1, "smooth": None}) == GenOptions(detail=1280)
-    for bad in ({"structure": 48}, {"detail": 1100}, {"remesh": 100}, {"smooth": 30}, {"faces": 10},
+    for bad in ({"detail": 2048}, {"detail": 1100}, {"remesh": 100}, {"smooth": 30}, {"faces": 10},
                 {"steps": 5}, {"texture": 100}):
         with pytest.raises(ValueError):
             GenOptions(**bad)

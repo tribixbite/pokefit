@@ -52,7 +52,7 @@ def cmd_photos(a: argparse.Namespace) -> int:
     if a.photo and photos:
         raise SystemExit("give either --photo (one photo, any angle) or --front/--left/--back/--right")
     try:
-        opts = GenOptions.from_dict({k: getattr(a, k) for k in ("seed", "faces", "structure", "detail", "remesh",
+        opts = GenOptions.from_dict({k: getattr(a, k) for k in ("seed", "faces", "detail", "remesh",
                                                                  "smooth", "steps", "texture", "model")})
     except ValueError as exc:
         raise SystemExit(f"photos: {exc}") from exc
@@ -194,8 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     g = ph.add_argument_group("generation options (Pixal3D; defaults = the template's, see imageto3d.GenOptions)")
     g.add_argument("--seed", type=int, help="another seed gives another plausible shape (default 0)")
     g.add_argument("--faces", type=int, help="triangles kept; more keep finer colour detail (default 200000)")
-    g.add_argument("--structure", type=int, choices=(32, 64), help="coarse shape grid (default 32)")
-    g.add_argument("--detail", type=int, help="shape resolution 1024-2048, step 128 (default 1536)")
+    g.add_argument("--detail", type=int, help="shape resolution 1024-1536, step 128 (default 1536)")
     g.add_argument("--remesh", type=int, help="watertight remesh grid 256-2048 (default 768)")
     g.add_argument("--smooth", type=int, help="smoothing passes after the remesh 0-20 (default 20)")
     g.add_argument("--steps", type=float, help="sampler steps x this, 0.5-3 (default 1)")

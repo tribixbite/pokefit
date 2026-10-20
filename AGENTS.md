@@ -171,8 +171,11 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   plane = left-right axis; head forward / tail behind = front; unsure -> only off its side). Its camera is the rig's
   front view with MoGe's FOV and no padding (`Camera(fov, pad=1)`), so the photographed side gets the
   photo's colours too (the graph returns the crop, its mask and the FOV via `PreviewAny`).
-- Settings: `GenOptions` (seed, faces, structure 32/64, detail 1024-2048, remesh grid, smoothing 0-20, steps x);
-  CLI `photos --structure/--detail/--remesh/--smooth/--steps/--seed/--faces`, dialog "Generation options".
+- Settings: `GenOptions` (seed, faces, detail 1024-1536, remesh grid, smoothing 0-20, steps x, texture, model
+  pixal3d/trellis2 for one photo); CLI `photos --detail/--remesh/--smooth/--steps/--seed/--faces/--texture/--model`,
+  dialog "Generation options". Detail stops at 1536 and the structure grid stays 32: ComfyUI lacks upstream's
+  49,152-token cap on the upsample stage, and "64" is the non-cascade pipeline. Shape stage 12 steps (upstream;
+  the template has 20). `Comfy.free()` after every job (multi-view keeps ~3 GiB RAM per view, ComfyUI #16620).
   Structure 64 needs most of the 16 GB free (its texture stage stalled with another app holding 12 GB).
 - RemeshMesh must use `sign_mode: "solid"`: the template's `udf` gives a double-walled skin (92 % of the surface
   "under 0.4 mm thick", not manifold). Colour comes back as `COLOR_0` (linear) under a white PBR material.

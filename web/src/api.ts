@@ -219,7 +219,6 @@ export async function printerCamera(on: boolean): Promise<string | null> {
 export interface GenOptions {
   seed: number;
   faces: number;
-  structure: number;
   detail: number;
   remesh: number;
   smooth: number;
@@ -231,7 +230,7 @@ export interface GenOptions {
 }
 
 export const GEN_DEFAULTS: GenOptions = {
-  seed: 0, faces: 200_000, structure: 32, detail: 1536, remesh: 768, smooth: 20, steps: 1, texture: 0, model: "pixal3d",
+  seed: 0, faces: 200_000, detail: 1536, remesh: 768, smooth: 20, steps: 1, texture: 0, model: "pixal3d",
 };
 
 /** Photos of a figure (by view) -> a coloured 3D figure via the local ComfyUI, loaded like a file. */

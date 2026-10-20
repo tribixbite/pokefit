@@ -62,8 +62,11 @@ class GenOptions:
     seed: int = 0              # another seed = another plausible shape from the same photos
     faces: int = DEFAULT_FACES  # triangles kept (DecimateMesh); vertex colours live on vertices, so more
                                # faces keep finer colour detail (eyes)
-    structure: int = 32        # coarse occupancy grid, 32 or 64 (VaeDecodeStructureTrellis2)
-    detail: int = 1536         # shape upsampling resolution, 1024-2048 step 128 (Trellis2UpsampleStage)
+    detail: int = 1536         # shape upsampling resolution, 1024-1536 step 128 (Trellis2UpsampleStage). Upstream
+                               # TRELLIS.2 / Pixal3D cap that stage at 49,152 tokens and step down from 1536; ComfyUI
+                               # (v0.42.1) has no cap, so 2048 ran every later stage unbounded (30-170 s per texture
+                               # step here). Not offered: VaeDecodeStructureTrellis2 "64" is not a finer structure but
+                               # the non-cascade 1024 pipeline, which upstream never feeds into the upsample stage.
     remesh: int = 768          # watertight remesh grid, 256-2048 (RemeshMesh: finer keeps more detail)
     smooth: int = 20           # Taubin smoothing passes after the remesh, 0-20 (staircase -> smooth)
     steps: float = 1.0         # sampler steps x this (the template's 12 / 20 / 12 / 12), 0.5-3
@@ -74,17 +77,15 @@ class GenOptions:
 
     def __post_init__(self) -> None:
         self.seed, self.faces = int(self.seed), int(self.faces)
-        self.structure, self.detail = int(self.structure), int(self.detail)
+        self.detail = int(self.detail)
         self.remesh, self.smooth, self.steps = int(self.remesh), int(self.smooth), float(self.steps)
         self.texture = int(self.texture)
         if self.model not in ("pixal3d", "trellis2"):
             raise ValueError("model must be pixal3d or trellis2")
         if self.texture and not 512 <= self.texture <= 8192:
             raise ValueError("texture must be 0 (vertex colours) or 512..8192")
-        if self.structure not in (32, 64):
-            raise ValueError("structure must be 32 or 64")
-        if not 1024 <= self.detail <= 2048 or self.detail % 128:
-            raise ValueError("detail must be 1024..2048 in steps of 128")
+        if not 1024 <= self.detail <= 1536 or self.detail % 128:
+            raise ValueError("detail must be 1024..1536 in steps of 128")
         if not 256 <= self.remesh <= 2048:
             raise ValueError("remesh must be 256..2048")
         if not 0 <= self.smooth <= 20:
@@ -432,6 +433,19 @@ class Comfy:
         except (OSError, ValueError):
             return False
 
+    def free(self) -> None:
+        """Unload models and free memory (POST /free). Pixal3D's multi-view conditioning keeps ~3 GiB of RAM per
+        view until this is called (ComfyUI issue #16620), and cached models of another family slowed later runs
+        3-4x here; one call after each job keeps every run like the first. Best effort."""
+        req = urllib.request.Request(self.url + "/free", method="POST",
+                                     data=json.dumps({"unload_models": True, "free_memory": True}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                r.read()
+        except (OSError, ValueError):
+            pass
+
     def upload(self, name: str, png: bytes) -> str:
         """Upload an image to ComfyUI's input folder; returns the name LoadImage uses."""
         boundary = uuid.uuid4().hex
@@ -529,11 +543,11 @@ def _pixal3d_chain(p: dict[str, Any], model: str, opts: GenOptions, prefix: str,
     })
     p["s_struct"] = ks("sampling", ("cond", 0), ("cond", 1), ("empty", 0), 56 + seed, n(12), 7.5, "normal")
     p["structure"] = {"class_type": "VaeDecodeStructureTrellis2",
-                      "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0],
-                                 "resolution": str(opts.structure)}}
+                      "inputs": {"samples": ["s_struct", 0], "vae": ["vae_shape", 0], "resolution": "32"}}
     p["shape_stage"] = {"class_type": "Trellis2ShapeStage",
                         "inputs": {"positive": ["cond", 0], "negative": ["cond", 1], "voxel": ["structure", 0]}}
-    p["s_shape"] = ks("rescale_shape", ("shape_stage", 0), ("shape_stage", 1), ("shape_stage", 2), 42 + seed, n(20),
+    # 12 steps: TRELLIS.2-4B pipeline.json and Pixal3D inference_mv.py (the ComfyUI template has 20).
+    p["s_shape"] = ks("rescale_shape", ("shape_stage", 0), ("shape_stage", 1), ("shape_stage", 2), 42 + seed, n(12),
                       7.5, "normal")
     p["upsample"] = {"class_type": "Trellis2UpsampleStage",
                      "inputs": {"positive": ["shape_stage", 0], "negative": ["shape_stage", 1],
@@ -660,8 +674,11 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, opts: GenOption
     log(stage)
     t0 = time.time()
     opts = opts or GenOptions()
-    outs = comfy.run(single_prompt(name, opts, prefix=f"pokefit/{out.stem}_{tag}"),
-                     progress=lambda s: log(f"{stage}: {s:.0f} s"))
+    try:
+        outs = comfy.run(single_prompt(name, opts, prefix=f"pokefit/{out.stem}_{tag}"),
+                         progress=lambda s: log(f"{stage}: {s:.0f} s"))
+    finally:
+        comfy.free()
     data = comfy.fetch(_first_file(outs, "save"))
     out.parent.mkdir(parents=True, exist_ok=True)
     seen = None
@@ -735,8 +752,11 @@ def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, op
     stage = f"generating with Pixal3D ({len(names)} views, a few minutes)"
     log(stage)
     opts = opts or GenOptions()
-    outs = comfy.run(generate_prompt(views, opts, prefix=f"pokefit/{out.stem}_{tag}"),
-                     progress=lambda s: log(f"{stage}: {s:.0f} s"))
+    try:
+        outs = comfy.run(generate_prompt(views, opts, prefix=f"pokefit/{out.stem}_{tag}"),
+                         progress=lambda s: log(f"{stage}: {s:.0f} s"))
+    finally:
+        comfy.free()
     data = comfy.fetch(_first_file(outs, "save"))
     seen = None
     if photo_colour and opts.texture:

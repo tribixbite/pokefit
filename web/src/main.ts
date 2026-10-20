@@ -973,7 +973,7 @@ function bind(): void {
   photosDlg.addEventListener("click", (e) => { if (e.target === photosDlg) showPhotos(false); });
   // Generation options: one control per GenOptions field; "Defaults" puts the engine's back.
   const genIds: Record<keyof api.GenOptions, string> = {
-    seed: "genSeed", faces: "genFaces", structure: "genStructure", detail: "genDetail", remesh: "genRemesh",
+    seed: "genSeed", faces: "genFaces", detail: "genDetail", remesh: "genRemesh",
     smooth: "genSmooth", steps: "genSteps", texture: "genTexture", model: "genModel",
   };
   const genOptions = (): api.GenOptions => {

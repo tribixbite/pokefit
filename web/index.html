@@ -373,10 +373,8 @@
         <div class="photo-grid">
           <label>Seed<input id="genSeed" type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
           <label>Shape detail<select id="genDetail" title="Shape upsampling resolution (Trellis2 upsample stage)">
-            <option value="1024">1024 (faster)</option><option value="1536" selected>1536 (default)</option>
-            <option value="2048">2048 (finest)</option></select></label>
-          <label>Coarse shape<select id="genStructure" title="Coarse occupancy grid the shape starts from">
-            <option value="32" selected>32 (default)</option><option value="64">64 (finer; needs most of a 16 GB GPU free)</option></select></label>
+            <option value="1024">1024 (faster)</option><option value="1280">1280</option>
+            <option value="1536" selected>1536 (default, finest)</option></select></label>
           <label>Remesh<select id="genRemesh" title="Grid of the watertight remesh: finer keeps more surface detail">
             <option value="512">512</option><option value="768" selected>768 (default)</option>
             <option value="1024">1024</option><option value="1536">1536</option></select></label>
