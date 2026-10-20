@@ -1,10 +1,12 @@
 /** pokefit web UI: wires the panel controls, the 3D view and the underside editor to the API. */
 import * as api from "./api";
 import { ColorizePanel } from "./colorize";
+import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
 import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
+import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import type { AmsSlot, Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
 import { UndersideEditor } from "./underside";
 
@@ -31,7 +33,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, filament_map: null, colours: null, paint: null, texture_colours: null,
+    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, paint_depth: null, filament_map: null, colours: null, paint: null, texture_colours: null,
   },
   report: null,
   focus: null,
@@ -59,6 +61,7 @@ const colorize = new ColorizePanel({
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
   toast: (msg) => toast(msg),
+  slotOf: (n) => slotOf(n),
 });
 
 // ------------------------------------------------------------------ helpers
@@ -465,32 +468,63 @@ function renderMagnets(rep: Report): void {
   }));
 }
 
-/** Figure colour -> project slot table; each row's picker overrides the closest-colour choice. */
-function renderImportMap(rep: Report): void {
-  // Targets: the printer's loaded AMS trays when read, else the reference project's slots.
+/** The slots the figure's colours can map to: the printer's loaded AMS trays when read, else the reference
+ * project's filament slots; plus one "new slot" past them (Bambu adds a filament on import). */
+function slotChoices(extra: number): SlotChoice[] {
   const ams = state.config?.ams ?? [];
-  const slots = ams.length ? ams.map((a) => ({ type: a.type, colour: a.colour, name: `${a.label} ${a.name}`.trim() }))
-    : state.config?.slots ?? [];
+  const choices: SlotChoice[] = ams.length
+    ? ams.map((a, i) => ({ value: i + 1, label: a.label || `Tray ${i + 1}`, detail: slotDetail(a.type, a.name),
+      colour: a.colour.slice(0, 7) }))
+    : (state.config?.slots ?? []).map((s, i) => ({ value: i + 1, label: `Slot ${i + 1}`,
+      detail: slotDetail(s.type, s.name), colour: s.colour.slice(0, 7) }));
+  choices.push({ value: extra, label: `Slot ${extra} (new)`, detail: "Bambu adds it on import; set its colour there", colour: null });
+  return choices;
+}
+
+/** "PETG-CF · Generic PETG-CF": the preset name without its printer suffix ("@BBL X2D 0.4 nozzle"),
+ * and the material only when the name does not already say it. */
+function slotDetail(type: string, name: string): string {
+  const bare = name.replace(/\s*@.*$/, "").trim();
+  if (!bare) return type;
+  return type && !bare.toUpperCase().includes(type.toUpperCase()) ? `${type} · ${bare}` : bare;
+}
+
+/** Label and colour of the slot figure filament `n` prints from, per the last analysis (Colours palette dots). */
+function slotOf(n: number): { label: string; colour: string | null } | null {
+  const m = state.report?.import_map.find((x) => x.source === n);
+  if (!m) return null;
+  const ams = state.config?.ams ?? [];
+  if (m.new) return { label: "+", colour: null };
+  return { label: ams.length ? ams[m.target - 1]?.label ?? String(m.target) : String(m.target), colour: m.target_colour || null };
+}
+
+/** Colours card "Prints from": one row per figure colour, figure swatch -> slot picker (closest colours first). */
+function renderImportMap(rep: Report): void {
+  const ams = state.config?.ams ?? [];
+  const n = ams.length || (state.config?.slots ?? []).length;
+  closeSlotPicker();
   $("snapColours").hidden = !rep.import_map.some((m) => !m.new && m.target_colour && m.target_colour !== m.colour);
   $("importMapBox").hidden = rep.import_map.length === 0;
-  $("importMap").replaceChildren(
-    h("thead", {}, h("tr", {}, ...["figure", "→ your slot", ""].map((t) => h("th", { textContent: t })))),
-    h("tbody", {}, ...rep.import_map.map((m) => {
-      const sel = h("select");
-      sel.setAttribute("aria-label", `Slot for figure colour ${m.source}`);
-      slots.forEach((s, i) => sel.append(h("option", { value: String(i + 1),
-        textContent: `${ams.length ? ams[i].label : i + 1} · ${s.type} ${s.colour}`, title: s.name })));
-      const extra = Math.max(slots.length + 1, m.new ? m.target : 0);
-      sel.append(h("option", { value: String(extra), textContent: `${extra} · new slot (set its colour after import)` }));
-      sel.value = String(m.target);
-      sel.addEventListener("change", () => {
-        state.params.filament_map = { ...(state.params.filament_map ?? {}), [String(m.source)]: +sel.value };
+  $("slotMapBox").hidden = rep.import_map.length === 0;
+  $("slotMapSource").textContent = ams.length ? "your printer's AMS" : "your project's filament slots";
+  $("importMap").replaceChildren(...rep.import_map.map((m) => {
+    const fig = h("span", { cls: "fig-sw", textContent: String(m.source), title: `Figure colour ${m.source} (${m.colour})` });
+    fig.style.background = m.colour;
+    fig.style.color = textOn(m.colour.slice(0, 7));
+    const picker = slotPicker({
+      choices: slotChoices(Math.max(n + 1, m.new ? m.target : 0)),
+      value: m.target,
+      figureColour: m.colour.slice(0, 7),
+      ariaLabel: `Slot for figure colour ${m.source}`,
+      onChange: (v) => {
+        state.params.filament_map = { ...(state.params.filament_map ?? {}), [String(m.source)]: v };
         void runAnalyse();
-      });
-      const note = m.new ? "no close colour in your project" : m.delta_e > 10 ? `colour differs (ΔE ${m.delta_e.toFixed(0)})` : "";
-      return h("tr", {}, h("td", {}, swatch(m.colour), `${m.source}`),
-        h("td", {}, swatch(m.target_colour), sel), h("td", { cls: "muted", textContent: note }));
-    })));
+      },
+    });
+    const row = h("div", { cls: `slot-row${m.manual ? " manual" : ""}` }, fig, h("span", { cls: "arrow", textContent: "→" }), picker);
+    row.setAttribute("role", "listitem");
+    return row;
+  }));
 }
 
 function renderChecks(rep: Report): void {
@@ -829,6 +863,11 @@ function bind(): void {
       void runAnalyse();
     });
   }
+  // Paint depth only changes the exported/sliced settings, so no re-analyse.
+  $<HTMLSelectElement>("paintDepth").addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    state.params.paint_depth = v === "" ? null : +v;
+  });
   $<HTMLInputElement>("flatD").addEventListener("change", (e) => {
     const raw = (e.target as HTMLInputElement).value.trim();
     const v = +raw;

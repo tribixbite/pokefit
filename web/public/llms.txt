@@ -37,7 +37,11 @@
 - Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result
-  is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour.
+  is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
+  figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
+  swatches, closest colour first with its ΔE; the palette swatches carry the slot they print from. "Paint depth"
+  sets how far colours reach into the figure (Bambu's segmented-region width; inside is the main filament): it
+  changes how much of each colour is used, not the print time or the colour changes.
 - Washers: catalogue of steel washers (DIN 9021 M5/M6/M8, US #10 × 3/4", US 1/4" × 1" fender) or a custom size;
   a comparison table shows the largest figure each allows with the magnets on steel. Stainless steel is not magnetic.
 - Orientation: rotate about X, Y and Z by any angle; the lowest point lands on the bed.

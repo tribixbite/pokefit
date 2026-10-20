@@ -89,7 +89,7 @@ def cmd_fit(a: argparse.Namespace) -> int:
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
                     rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
                     texture_colours=a.texture_colours, bend=_bend(a.bend), flat_base=a.flat_base,
-                    flat_depth=a.press, flat_fill=a.fill)
+                    flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
     f = rep.fit
@@ -184,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the washer's; 0 = off)")
     f.add_argument("--press", type=float, default=1.2, help="press the base flat by up to this, mm (0 = off)")
     f.add_argument("--fill", type=float, default=2.5, help="fill gaps up to this under the base, mm (0 = off)")
+    f.add_argument("--paint-depth", type=float, metavar="MM",
+                   help="how far paint reaches into the figure (0 = unlimited; default: the project's setting)")
     f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")
     f.add_argument("--slice", action="store_true", help="Bambu Studio time/filament, supports off vs auto")

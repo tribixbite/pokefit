@@ -55,6 +55,8 @@ export interface Params {
   flat_base: number | null;
   flat_depth: number;
   flat_fill: number;
+  /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
+  paint_depth: number | null;
 }
 
 export interface Washer {

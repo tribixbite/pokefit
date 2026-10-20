@@ -7,6 +7,7 @@
  * State lives in the shared `Params` (`colours`, `paint`), so analysis and
  * export see exactly what the preview shows.
  */
+import { textOn } from "./colour";
 import { formatDuration } from "./geometry";
 import type { FigureHit } from "./scene";
 import type { Params, PaintMode, PickResult, RegionView, Report } from "./types";
@@ -25,6 +26,8 @@ export interface ColorizeHost {
   /** Painting stopped: a good moment to re-analyse if anything changed. */
   settled(): void;
   toast(msg: string): void;
+  /** The slot (AMS tray or project slot) filament `n` prints from, per the last analysis; null = unknown. */
+  slotOf(n: number): { label: string; colour: string | null } | null;
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -177,7 +180,18 @@ export class ColorizePanel {
     if (filament) {
       b.style.background = colour;
       b.textContent = String(filament);
-      b.style.color = luminance(colour) > 0.55 ? "#111" : "#fff";
+      b.style.color = textOn(colour);
+      // Which spool/slot it prints from: a corner dot in that slot's colour, its label in the tooltip.
+      const slot = this.host.slotOf(filament);
+      if (slot) {
+        const dot = document.createElement("span");
+        dot.className = `slot-dot${slot.colour ? "" : " none"}`;
+        if (slot.colour) dot.style.background = slot.colour;
+        dot.textContent = slot.label;
+        b.append(dot);
+        b.title += ` · prints from ${slot.label}`;
+        b.setAttribute("aria-label", b.title);
+      }
     } else b.textContent = "⌫";
     b.addEventListener("click", () => { this.filament = filament; this.render(); });
     return b;
@@ -265,8 +279,3 @@ export class ColorizePanel {
   }
 }
 
-/** Relative luminance (0–1) of a #RRGGBB colour, to pick readable text on a swatch. */
-function luminance(hex: string): number {
-  const v = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
-}

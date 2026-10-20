@@ -103,7 +103,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 |---|---|
 | `src/main.ts` | UI state (`state.params` mirrors `Params`), cards, analyse/export flow. |
 | `src/scene.ts` | three.js viewer, ball/figure/pockets, tap picking. |
-| `src/colorize.ts` | Colours card: palette, paint modes, GLB "Filaments" slider. |
+| `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, GLB "Filaments" slider. |
+| `src/slotpicker.ts`, `src/colour.ts` | "Prints from" slot dropdown with swatches, closest first (ΔE = the engine's CIE76); colour helpers. |
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |
 | `src/handoff.ts` | Models from other apps (craftmatic): `pokefit:load` postMessage from trusted origins, `?url=`. |

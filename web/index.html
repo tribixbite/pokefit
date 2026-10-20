@@ -224,6 +224,14 @@
         <div class="row" id="paintColourRow">
           <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
         </div>
+        <div id="slotMapBox" class="slot-map-box" hidden>
+          <div class="h-row sub">
+            <h3>Prints from</h3>
+            <span id="slotMapSource" class="muted"></span>
+          </div>
+          <div id="importMap" class="slot-map" role="list"></div>
+          <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>
+        </div>
         <div class="row seat-row">
           <span class="muted">Tap fills</span>
           <div class="seg" id="paintMode" role="radiogroup" aria-label="What a tap paints">
@@ -244,6 +252,16 @@
           <button id="paintClear" class="btn">Clear</button>
           <span id="paintInfo" class="muted" aria-live="polite"></span>
         </div>
+        <label class="row seat-row" title="How far painted colours reach into the figure (Bambu “maximum width of a segmented region”); deeper inside is the figure's main filament. Print time and colour changes stay about the same — the colours still appear on the same layers — but less of each colour is used and the inside is one material."><span class="muted">Paint depth</span>
+          <select id="paintDepth">
+            <option value="">Project's setting</option>
+            <option value="0">All the way in</option>
+            <option value="0.8">0.8 mm (two walls)</option>
+            <option value="1.2">1.2 mm</option>
+            <option value="2">2 mm</option>
+            <option value="3">3 mm</option>
+          </select>
+        </label>
       </section>
 
       <section class="card">
@@ -320,9 +338,7 @@
         </div>
         <p id="presetInfo" class="hint" hidden></p>
         <div id="importMapBox" hidden>
-          <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots:</p>
-          <table class="tbl" id="importMap"></table>
-          <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>
+          <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots, as set under <a href="#slotMapBox">Colours → Prints from</a>.</p>
           <p class="hint">Bambu Studio 2.8.2 also says "The 3mf file has invalid config, load geometry data only" on every geometry import — harmless, fixed in later releases.</p>
         </div>
         <div class="row" id="ballModelRow" hidden>

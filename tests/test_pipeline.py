@@ -71,6 +71,24 @@ def test_export_files(critter: Path, tmp_path: Path) -> None:
     assert rep["fit"]["scale"] > 0
 
 
+def test_paint_depth_reaches_the_exported_settings(critter: Path, tmp_path: Path) -> None:
+    from pokefit.pipeline import BUNDLED_REFERENCE
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+    for depth, want in ((0.8, "0.8"), (0, "0")):
+        out = export(s, Params(washer="US1/4x1", paint_depth=depth), tmp_path / f"out{depth}")
+        with zipfile.ZipFile(out["figure_3mf"]) as z:
+            st = json.loads(z.read("Metadata/project_settings.config"))
+        assert st["mmu_segmented_region_max_width"] == want
+    # None keeps the project's own value (the bundled reference has "0").
+    out = export(s, Params(washer="US1/4x1"), tmp_path / "outnone")
+    with zipfile.ZipFile(out["figure_3mf"]) as z:
+        st = json.loads(z.read("Metadata/project_settings.config"))
+    assert st.get("mmu_segmented_region_max_width") == "0"
+    for bad in (-1, 11):
+        with pytest.raises(ValueError):
+            Params(paint_depth=bad)
+
+
 def test_preview_glb(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path)
     glb = preview_glb(s, Params())

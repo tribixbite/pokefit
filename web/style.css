@@ -166,10 +166,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .checks .m { color: var(--muted); font-size: 13px; line-height: 1.35; }
 
 .parts { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.parts .sw, #importMap .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid #0006; }
-#importMap .sw { width: 14px; height: 14px; border-color: #fff4; vertical-align: -3px; }
-#importMap td:nth-child(2) { display: flex; align-items: center; gap: 2px; }
-#importMap select { min-width: 0; flex: 1; }
+.parts .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid #0006; }
 
 .slice-out, .export-out { display: flex; flex-direction: column; gap: 8px; }
 .verdict { font-size: 16px; font-weight: 650; }
@@ -224,7 +221,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 label.off { opacity: .45; }
 
 /* Colorize */
-.palette { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.palette { display: flex; flex-wrap: wrap; gap: 12px 10px; margin: 4px 0 12px; }
 .swatch {
   width: 36px; height: 36px; border-radius: 10px; border: 2px solid #ffffff22; cursor: pointer;
   font: 700 12px/1 inherit; display: grid; place-items: center; padding: 0;
@@ -232,6 +229,60 @@ label.off { opacity: .45; }
 .swatch[aria-checked="true"] { outline: 2px solid var(--accent); outline-offset: 2px; border-color: #fff; }
 .swatch.erase { background: repeating-linear-gradient(45deg, #1b2230 0 6px, #232c3c 6px 12px); color: var(--muted); font-size: 16px; }
 .swatch.add { background: transparent; border: 2px dashed var(--line); color: var(--muted); font-size: 20px; }
+/* The slot a palette colour prints from: a labelled dot in the slot's colour on the swatch's corner. */
+.swatch { position: relative; }
+.slot-dot {
+  position: absolute; right: -6px; bottom: -6px; min-width: 18px; height: 16px; padding: 0 3px; border-radius: 8px;
+  border: 2px solid var(--card); font: 700 9px/12px inherit; color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000;
+  pointer-events: none; box-sizing: border-box;
+}
+.slot-dot.none { background: repeating-linear-gradient(45deg, #2a3446 0 3px, #1b2230 3px 6px); }
+
+/* Colours card "Prints from": figure colour -> slot picker rows. */
+/* contain: inline-size: the slot names (no-wrap, ellipsis) must not set the card's minimum width on a phone. */
+.slot-map-box { margin: 4px 0 10px; padding-top: 8px; border-top: 1px solid var(--line); contain: inline-size; }
+label.seat-row { flex-direction: row; }
+.h-row.sub h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.h-row.sub { margin-bottom: 6px; gap: 8px; }
+.slot-map { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.slot-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.slot-row .arrow { color: var(--muted); }
+.fig-sw {
+  flex: none; width: 32px; height: 32px; border-radius: 9px; border: 2px solid #ffffff22;
+  display: grid; place-items: center; font: 700 12px/1 inherit;
+}
+.slot-picker, .slot-opt {
+  display: flex; align-items: center; gap: 10px; min-width: 0; text-align: left; color: var(--text);
+}
+.slot-picker {
+  flex: 1; min-height: 44px; padding: 4px 10px 4px 6px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg2); cursor: pointer; font: inherit;
+}
+.slot-row.manual .slot-picker { border-color: #3b4b63; }
+.slot-picker:hover, .slot-picker[aria-expanded="true"] { border-color: var(--muted); }
+.slot-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.slot-list:focus { outline: none; }   /* the active option shows where the keyboard is */
+.sp-sw {
+  flex: none; width: 28px; height: 28px; border-radius: 7px; border: 1px solid #ffffff33;
+}
+.sp-sw.none { background: repeating-linear-gradient(45deg, #2a3446 0 5px, #1b2230 5px 10px); border-style: dashed; }
+.sp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sp-label { font-size: 13px; font-weight: 600; }
+.sp-label em { font-style: normal; font-weight: 500; font-size: 11px; color: var(--muted); }
+.sp-detail { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-match { flex: none; font-size: 11px; padding: 2px 6px; border-radius: 6px; white-space: nowrap; }
+.sp-match.good { color: #7ee2a8; background: #1d3a2b; }
+.sp-match.close { color: #f2c46d; background: #3a3020; }
+.sp-match.far, .sp-match.new { color: #ff9a9d; background: #3d2224; }
+.sp-match.new { color: var(--muted); background: #222b38; }
+.sp-caret { flex: none; color: var(--muted); }
+.slot-list {
+  position: fixed; z-index: 50; overflow-y: auto; padding: 4px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--card); box-shadow: 0 12px 32px #0009; overscroll-behavior: contain;
+}
+.slot-opt { min-height: 44px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.slot-opt:hover, .slot-opt.active { background: #1f2836; }
+.slot-opt[aria-selected="true"] { box-shadow: inset 3px 0 0 var(--accent); }
 label.colour-edit { flex-direction: row; }
 .colour-edit { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .colour-edit input[type="color"] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; }

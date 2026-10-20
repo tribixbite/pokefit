@@ -30,6 +30,16 @@ exist only on the original Windows machine (ask the user for the files).
    only the defaults are measured. Research notes: scratchpad `research2.md` (no fp8/NVFP4 Pixal3D; GGUFs are
    single-view or for standalone ports; HF Pixal3D discussion #11: leftover background -> a slab).
    llama-server (the user's) is stopped for these tests: restart command in memory `local-installs`.
+   **Other generators** (research 2026-10-20, Top3D.ai blind votes Oct season; render looks, not printability):
+   Hi3D v3.0 (= Hitem3D, $2-9/run, trains on inputs, credit required) 1100, Tripo H3.1 1100, Rodin Gen-2.5 1079,
+   Meshy 7.1 ~1065, Hunyuan3D 3.1 1031, Pixal3D 936, TRELLIS.2 849. None has open current weights (Hunyuan's last open
+   release 2.1 excludes EU/UK/KR); all are APIs. Next to try: Tripo H3.1 multi-view (2-4 views, ~$0.30-0.70, paid
+   plans own the output, ComfyUI partner node; its API V2 ends 2026-11-01, use V3) and Hunyuan 3.1 (8 views, 20 free/day
+   on the web) with our cleaned Charmander/Squirtle views, scored by our checks + a 35 mm Bambu slice. Their meshes
+   are not in our rig frame, so photo-colour projection would need a pose fit first (else use their texture).
+   Needs the user's API key/account: ask first. In-browser TRELLIS.2 (SpawnDev demo, ~10.5 GB weights cached in
+   Chrome's OPFS): Chrome's WebGPU runs on the Intel Xe-LPG iGPU here, so the device was lost in the structure stage;
+   retry after the user sets Chrome to the high-performance GPU (Windows Settings > Display > Graphics).
 4. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
@@ -48,13 +58,19 @@ exist only on the original Windows machine (ask the user for the files).
    added specks; `--photo-colours` to override). Open: `--pose` did not move the arms (raised arms set the size);
    the "matte" wording did not remove the gloss; try a pose reference image (OpenPose) or lowering arms by prompt
    wording; a second figure to confirm the side-view naming.
-6. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
+6. **Paint depth** (`Params.paint_depth` -> Bambu `mmu_segmented_region_max_width`; Colours card, CLI `fit --paint-depth`):
+   8-colour Charmander slices (scratchpad `paint_depth.py`): 0 (unlimited) / 0.8 / 1.6 / 3 mm = 664 / 665 / 667 / 667 min,
+   284 colour changes each; only the per-colour grams move (colour 2: 0.68 g -> 0.21 g at 0.8 mm). Not measured: strength,
+   `mmu_segmented_region_interlocking_depth`, a figure where a colour exists only inside.
+7. **MakerWorld URLs**: not supported, by design. No public API; files need a logged-in Bambu Cloud token, and
+   MakerWorld's Terms of Use s.9 forbid automated download. The user downloads, then opens the file.
+8. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
    size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
-7. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
+9. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
    4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 65-69 s, was 289 s
    under shapely 2.2 — islands now section each body when loops cross). Next: conform's height fields
    (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's islands sections (~35-49 s, per body).
-8. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
+10. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
    Off now: an `http://` visit gets the page over plain HTTP and only then redirects itself with a script;
    on, Cloudflare answers every `http://` request with a redirect before any content. Explained to the user
    2026-10-19; it is their account, so they flip it.

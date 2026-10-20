@@ -102,6 +102,11 @@ class Params:
     flat_base: float | None = None
     flat_depth: float = DEFAULT_MAX_DEPTH
     flat_fill: float = DEFAULT_FILL
+    # How far painted colours reach into the figure, in mm (Bambu `mmu_segmented_region_max_width`; deeper is
+    # the object's own filament). None = the project's value (0 there = unlimited: paint fills inward until it
+    # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
+    # still appear on the same layers); only how much of each colour, and of the base, is used.
+    paint_depth: float | None = None
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -129,6 +134,10 @@ class Params:
             raise ValueError("flat_depth must be 0..5 mm")
         if not 0 <= float(self.flat_fill) <= 10:
             raise ValueError("flat_fill must be 0..10 mm")
+        if self.paint_depth is not None:
+            self.paint_depth = float(self.paint_depth)
+            if not 0 <= self.paint_depth <= 10:
+                raise ValueError("paint_depth must be 0..10 mm (0 = unlimited, or null for the project's)")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -1128,14 +1137,21 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
             "share": round(len(faces) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2)}
 
 
+def with_paint_depth(settings: dict | None, params: Params) -> dict | None:
+    """`settings` with the chosen paint depth (a copy; unchanged when `params.paint_depth` is None)."""
+    if settings is None or params.paint_depth is None:
+        return settings
+    return {**settings, "mmu_segmented_region_max_width": f"{params.paint_depth:g}"}
+
+
 def export_settings(session: Session, params: Params, supports: bool = False) -> dict | None:
     if params.settings_source == "reference":
         built = session.print_settings(params, supports)
         if built is not None:
-            return built[0]
+            return with_paint_depth(built[0], params)
     if params.colours and session.project.settings:
-        return resize_filaments(session.project.settings, session.colours(params))
-    return session.project.settings
+        return with_paint_depth(resize_filaments(session.project.settings, session.colours(params)), params)
+    return with_paint_depth(session.project.settings, params)
 
 
 def safe_stem(name: str) -> str:
@@ -1235,7 +1251,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:
     built = session.print_settings(params, supports)
     if built is not None:
-        return built[0]
+        return with_paint_depth(built[0], params)
     st = dict(export_settings(session, params) or {})
     if st:
         st["enable_support"] = "1" if supports else "0"
