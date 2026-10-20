@@ -20,11 +20,20 @@ exist only on the original Windows machine (ask the user for the files).
    themselves cost only ~23-42 changes (few layers); they come late because Ward merging is area-weighted.
    Idea, not built: a "keep small details" palette mode (contrast-protected clusters) — ask before changing
    the auto default again.
-3. **Photo models' shape** (same report: head "not smooth", parts "squished" vs the Manex model): the
-   3-photo Pixal3D head is boxy / flat-topped with faceted patches; the 1-photo head is rounder; framing is
-   consistent (head widths front/back/left within 3 %), so it is the generation. Options now exposed
-   (`GenOptions`, dialog "Generation options"); experiments on the user's 3 photos: structure 64 never
-   finished the texture stage (15 min, GPU shared with the user's llama-server). See "Open" for B/C results.
+3. **Photo models: shape and model choice** (user 2026-10-19: head "not smooth", parts "squished"; "revisit
+   our model choice"). Done: the boxy, flat-topped 3-photo head came from the missing right view; the
+   mirrored left view is now the default (round head, multicoloured eyes with photo colours; 174 s vs 192 s).
+   Compared on the Squirtle (renders: scratchpad `render_compare.py`): seed 1 / detail 2048 / baked texture /
+   structure 64 did not help; TRELLIS.2 (now `--model trellis2`, one photo only) has a round head but a
+   wrong-coloured back and a stub tail from the front photo; Pixal3D one-photo an oversized shell. Pixal3D
+   multi-view + mirror stays the default. Applied from research (upstream repos + ComfyUI source): shape
+   12 steps, detail capped at 1536 (ComfyUI lacks the 49,152-token cap), `/free` after every job.
+   **Open: clean timings.** Every timing after ~22:00 was slowed by another Claude Code session's GPU jobs
+   (`recon_gpu.corpus`, `recon_gpu.diag.notext_survey`); rerun Pixal3D 1-photo vs TRELLIS.2 vs 3+mirror when
+   the GPU is idle (`nvidia-smi` near 0 %, scratchpad `fair_timing.sh` restarts ComfyUI per run). Also to try:
+   700k faces before PaintMesh (upstream bakes 2048-4096 px at 500k-1M faces), `--cache-ram`/
+   `--disable-dynamic-vram` only if slowdowns recur, trellis.cpp GGUF (standalone, has a Pixal3D mode).
+   llama-server (the user's) is stopped for these tests: restart command in memory `local-installs`.
 4. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
