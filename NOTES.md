@@ -20,8 +20,10 @@ exist only on the original Windows machine (ask the user for the files).
 3. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
    (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
    survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
-   (21 % of the Squirtle's vertices from its side photo). Auto-turn a single-photo result to face front
-   (now a 90° turn by hand for a side photo).
+   (21 % of the Squirtle's vertices from its side photo). One-photo results turn to face front
+   (`facing_front`: mirror plane for the axis, head-forward + tail-behind for the sign; real side photo
+   -> +86°, multi-view models 0°). The sign cue is tuned on Squirtles only: the Manex Squirtle already
+   reads "unsure" with a different point sample, so other shapes may need the Figure card's turn.
 4. **Profile views from ordinary photos**: one photo from any angle now works (single-view Pixal3D + MoGe
    FOV). Not done: combining several arbitrary-angle photos (would need their camera poses — e.g. estimate
    azimuths, or synthesise the rig views with SV3D / StableZero123, which ComfyUI ships natively).

@@ -215,6 +215,8 @@ export interface LoadResponse {
   session: string;
   file: string;
   report: Report;
+  /** Photos -> 3D only (pokefit/imageto3d.py report): a one-photo model's turn to face front. */
+  photos?: { facing?: { turn_deg: number; front_sure: boolean; note: string } | null };
 }
 
 export interface Slot {

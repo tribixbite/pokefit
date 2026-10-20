@@ -921,9 +921,15 @@ function bind(): void {
     if (!photos.front && !any) { toast("Add a front photo (the pose the figure gets), or one photo from any angle."); return; }
     const mirror = $<HTMLInputElement>("photoMirror").checked;
     showPhotos(false);
-    void load(() => api.photosToFigure(photos, mirror, (s, what) => {
-      $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
-    }), `${(photos.front ?? any)?.name ?? "photo"} (from photos)`);
+    void load(async () => {
+      const res = await api.photosToFigure(photos, mirror, (s, what) => {
+        $("busyText").textContent = `Making the figure from photos (${Math.round(s)} s): ${what || "working"}…`;
+      });
+      // A one-photo model is turned to face front (imageto3d.facing_front): say so, and when it is unsure.
+      const facing = res.photos?.facing;
+      if (facing && facing.turn_deg) toast(`The figure was ${facing.note}.`);
+      return res;
+    }, `${(photos.front ?? any)?.name ?? "photo"} (from photos)`);
   });
 
   // About panel: ✕, Escape or a click outside the text closes it; /#about opens it directly.

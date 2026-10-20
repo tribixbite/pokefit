@@ -17,7 +17,8 @@ from PIL import Image
 
 from pokefit.imageto3d import (FRAME, PAD, ComfyError, Framed, frame_views, generate_prompt, mask_prompt,
                                single_prompt,
-                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera)
+                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera,
+                               TO_RIG, _glb_vertex_colours, facing_front, turn_glb)
 from pokefit.model3mf import read_project
 
 
@@ -212,3 +213,43 @@ def test_vertex_colour_glb_round_trips(tmp_path: Path) -> None:
     empty = Framed("front", Image.new("RGB", (FRAME, FRAME)), 1.0, (0, 0, 0, 0), np.zeros((FRAME, FRAME), bool))
     data, share = recolour_glb(path.read_bytes(), {"front": empty})
     assert share == 0.0 and data[:4] == b"glTF"
+
+
+def _critter(front_x: float) -> trimesh.Trimesh:
+    """Rig-frame figure facing +x (front_x=1) or -x (-1): body, a head forward on top, a long low tail behind.
+    Mirror-symmetric across the y = 0 plane (its left-right axis is y)."""
+    parts = [trimesh.creation.box((1.0, 0.8, 0.8)).apply_translation([0, 0, 0.4]),
+             trimesh.creation.box((0.6, 0.6, 0.5)).apply_translation([0.35 * front_x, 0, 1.05]),
+             trimesh.creation.box((1.0, 0.2, 0.2)).apply_translation([-0.9 * front_x, 0, 0.15])]
+    m = trimesh.util.concatenate(parts)
+    assert isinstance(m, trimesh.Trimesh)
+    return m
+
+
+@pytest.mark.parametrize("front_x, turn", [(1.0, -90.0), (-1.0, 90.0)])
+def test_facing_front_turns_a_side_view_to_face_the_camera(front_x: float, turn: float) -> None:
+    m = _critter(front_x)
+    got = facing_front(m.vertices, m.faces)
+    assert got.axis_sure and got.front_sure
+    assert abs(got.turn_deg - turn) <= 2.0
+    # Already facing front (-y): no turn.
+    rz = trimesh.transformations.rotation_matrix(np.radians(turn), [0, 0, 1])
+    facing = m.copy().apply_transform(rz)
+    assert abs(facing_front(facing.vertices, facing.faces).turn_deg) <= 2.0
+
+
+def test_facing_front_leaves_a_shape_without_a_mirror_plane() -> None:
+    m = trimesh.creation.icosphere(subdivisions=3)
+    got = facing_front(m.vertices, m.faces)
+    assert not got.axis_sure and got.turn_deg == 0.0
+
+
+def test_turn_glb_turns_about_the_up_axis() -> None:
+    m = _critter(1.0)                                # rig frame, faces +x
+    glb_v = m.vertices @ TO_RIG                      # rig -> glTF (y up)
+    data = vertex_colour_glb(glb_v, m.faces, np.full((len(m.vertices), 3), 200.0))
+    v, f, c = _glb_vertex_colours(turn_glb(data, -90.0))
+    rig = v @ TO_RIG.T
+    head = rig[rig[:, 2] > 0.9]
+    assert head[:, 1].mean() < -0.3 and abs(head[:, 0].mean()) < 0.05     # the head now points at -y
+    assert np.allclose(c, 200.0, atol=1.0) and len(f) == len(m.faces)

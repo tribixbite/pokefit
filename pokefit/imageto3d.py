@@ -259,12 +259,85 @@ def recolour_glb(data: bytes, views: dict[str, Framed], cam: Camera = RIG) -> tu
     """The generated GLB with its vertex colours replaced by the photos' (see `photo_colours`)."""
     vertices, faces, base = _glb_vertex_colours(data)
     mesh = trimesh.Trimesh(vertices, faces, process=False)
-    # glTF is y-up; the rig is z-up with the figure facing -y: (x, y, z) -> (x, -z, y)
-    to_rig = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float64)
-    v_rig = vertices @ to_rig.T
-    n_rig = np.asarray(mesh.vertex_normals, np.float64) @ to_rig.T
+    v_rig = vertices @ TO_RIG.T
+    n_rig = np.asarray(mesh.vertex_normals, np.float64) @ TO_RIG.T
     colours, share = photo_colours(v_rig, n_rig, base, views, cam)
     return vertex_colour_glb(vertices, faces, colours), share
+
+
+# glTF is y-up; the rig is z-up with the figure facing -y: (x, y, z) -> (x, -z, y)
+TO_RIG = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float64)
+
+SYM_STEP_DEG = 2          # mirror-plane scan step
+SYM_SAMPLES = 6000        # surface points for the symmetry scan
+SYM_MIN_RATIO = 1.15      # the best mirror plane must beat the best one > 30° away by this factor
+HEAD_BAND = 0.75          # "head": the top quarter of the height
+HEAD_MIN = 0.03           # head offset (share of the horizontal size) needed to call front / back
+
+
+@dataclass
+class Facing:
+    turn_deg: float       # turn about the up axis (counter-clockwise from above) that makes it face front
+    axis_sure: bool       # a clear mirror plane was found (the figure's left-right axis)
+    front_sure: bool      # front / back decided (head forward of the body and the far end behind)
+    note: str
+
+
+def facing_front(vertices: np.ndarray, faces: np.ndarray) -> Facing:
+    """How to turn a model (rig frame: z up, front = -y) so it faces the front camera.
+
+    A one-photo model is posed as the photo shows it, so a side photo gives a figure looking sideways.
+    1. Its left-right axis: the vertical plane it mirrors best across (figures are near-symmetric). The
+       facing axis lies in that plane. Measured on 5 Squirtles: the best plane beats the next one > 30°
+       away 3.6-4.8x for multi-view models, 1.4x for the one-photo model (its back is invented).
+    2. Front or back along that axis: the head (top quarter) sits forward of the body's centre and the
+       far end (a tail) is behind — both must agree and the head offset be clear, else only the axis is
+       fixed (the smaller turn) and the note says front / back is unsure. (5 of 5 Squirtles right; one
+       species, so it is a guess for other shapes — the Figure card turns it by hand.)
+    """
+    mesh = trimesh.Trimesh(np.asarray(vertices, np.float64), np.asarray(faces, np.int64), process=False)
+    pts, _ = trimesh.sample.sample_surface(mesh, SYM_SAMPLES, seed=1)
+    if len(pts) < 100:
+        return Facing(0.0, False, False, "too small to judge")
+    from scipy.spatial import cKDTree
+
+    p = pts - pts.mean(axis=0)
+    size = float(np.ptp(p[:, :2], axis=0).max()) or 1.0
+    tree = cKDTree(p)
+    errs = []
+    for deg in range(0, 180, SYM_STEP_DEG):
+        n = np.array([np.cos(np.radians(deg)), np.sin(np.radians(deg)), 0.0])
+        d, _ = tree.query(p - 2 * np.outer(p @ n, n))
+        errs.append((float(d.mean()), deg))
+    best, deg = min(errs)
+    away = min(e for e, d in errs if min(abs(d - deg), 180 - abs(d - deg)) > 30)
+    if away < SYM_MIN_RATIO * best:
+        return Facing(0.0, False, False, f"no clear mirror plane ({away / best:.2f}x): left as generated")
+    phi = np.radians(deg + 90)                       # facing axis (either way along it)
+    f = np.array([np.cos(phi), np.sin(phi), 0.0])
+    s = p @ f
+    z = pts[:, 2]
+    head = float(s[(z - z.min()) > HEAD_BAND * np.ptp(z)].mean()) / size
+    reach = float(s.max() + s.min())                 # > 0: reaches further along +f than along -f
+    if head > HEAD_MIN and reach < 0:
+        front, sure = phi, True
+    elif head < -HEAD_MIN and reach > 0:
+        front, sure = phi + np.pi, True
+    else:                                            # unsure: the direction nearer the current front
+        front, sure = (phi if f[1] <= 0 else phi + np.pi), False
+    turn = (np.degrees(-np.pi / 2 - front) + 180.0) % 360.0 - 180.0
+    note = (f"turned {turn:+.0f}° to face front" if sure else
+            f"turned {turn:+.0f}° off its side; front or back unsure (turn 180° in the Figure card if needed)")
+    return Facing(round(float(turn), 1), True, sure, note)
+
+
+def turn_glb(data: bytes, turn_deg: float) -> bytes:
+    """The GLB turned by `turn_deg` about the up axis (rig frame: counter-clockwise seen from above)."""
+    vertices, faces, colours = _glb_vertex_colours(data)
+    a = np.radians(turn_deg)
+    rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]], np.float64)
+    v_rig = vertices @ TO_RIG.T @ rz.T
+    return vertex_colour_glb(v_rig @ TO_RIG, faces, colours)
 
 
 class Comfy:
@@ -476,10 +549,11 @@ def _first_file(outputs: dict[str, Any], node: str) -> dict[str, Any]:
 
 
 def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, faces: int = DEFAULT_FACES,
-                 log: Any = print, photo_colour: bool = True) -> dict[str, Any]:
+                 log: Any = print, photo_colour: bool = True, face_front: bool = True) -> dict[str, Any]:
     """One photo of the figure from any angle -> GLB (single-view Pixal3D, `single_prompt`). The side the
     photo shows takes the photo's colours (the camera is the single-image node's: MoGe's FOV); the rest
-    keeps the model's, gain-corrected to match."""
+    keeps the model's, gain-corrected to match. With `face_front` the result is turned to face front
+    (`facing_front`), after the colours (they are projected from the photo's camera)."""
     comfy = Comfy(url)
     if not comfy.alive():
         raise ComfyError(f"ComfyUI is not running at {url} (see AGENTS.md: Photos to 3D)")
@@ -503,9 +577,21 @@ def photo_to_glb(photo: Path, out: Path, url: str = DEFAULT_URL, seed: int = 0, 
             log("putting the photo's colours on the model")
             view = Framed("front", crop, 1.0, (0, 0, FRAME, FRAME), np.asarray(mimg.resize(crop.size)) > 127)
             data, seen = recolour_glb(data, {"front": view}, Camera(fov=fov, pad=1.0))
+    facing = None
+    if face_front:
+        v, f, _ = _glb_vertex_colours(data)
+        facing = facing_front(v @ TO_RIG.T, f)
+        log(facing.note)
+        if facing.turn_deg:
+            data = turn_glb(data, facing.turn_deg)
+            plain = out.parent / f"{out.stem}_model_colours.glb"
+            if plain.is_file():
+                plain.write_bytes(turn_glb(plain.read_bytes(), facing.turn_deg))
     out.write_bytes(data)
     return {"glb": str(out), "views": ["photo"], "generate_seconds": round(time.time() - t0, 1), "bytes": len(data),
-            "photo_colour_share": None if seen is None else round(seen, 3), "fov": fov}
+            "photo_colour_share": None if seen is None else round(seen, 3), "fov": fov,
+            "facing": None if facing is None else {"turn_deg": facing.turn_deg, "front_sure": facing.front_sure,
+                                                   "note": facing.note}}
 
 
 def photos_to_glb(photos: dict[str, Path], out: Path, url: str = DEFAULT_URL, seed: int = 0,
