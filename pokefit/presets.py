@@ -155,6 +155,7 @@ class SystemProfiles:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._index: dict[str, dict[str, Path]] | None = None
+        self._by_id: dict[str, list[str]] | None = None
 
     def _build(self) -> dict[str, dict[str, Path]]:
         idx: dict[str, dict[str, Path]] = {k: {} for k in KINDS}
@@ -177,6 +178,27 @@ class SystemProfiles:
     def load(self, kind: str, name: str) -> dict[str, Any] | None:
         p = self.path(kind, name)
         return _read_json(str(p)) if p else None
+
+    def filaments_by_id(self) -> dict[str, list[str]]:
+        """Selectable system filament presets by Bambu filament id ("GFL99" = Generic PLA, the id an AMS
+        reports per spool as `tray_info_idx`). The id is set on a family's `@base` preset and inherited."""
+        if self._by_id is None:
+            if self._index is None:
+                self._index = self._build()
+            by_id: dict[str, list[str]] = {}
+            for name in self._index["filament"]:
+                d = self.load("filament", name) or {}
+                if str(d.get("instantiation", "")).lower() != "true":
+                    continue
+                fid, parent, seen = d.get("filament_id"), str(d.get("inherits", "") or ""), set()
+                while not fid and parent and parent not in seen:
+                    seen.add(parent)
+                    up = self.load("filament", parent) or {}
+                    fid, parent = up.get("filament_id"), str(up.get("inherits", "") or "")
+                if fid:
+                    by_id.setdefault(str(fid), []).append(name)
+            self._by_id = by_id
+        return self._by_id
 
 
 @lru_cache(maxsize=4096)
@@ -481,6 +503,74 @@ def plate_problem(settings: dict[str, Any], slot: int) -> str:
     except ValueError:
         return ""
     return "" if ok else f"not for your project's {plate} (its {plate} temperature is 0): pick another plate in Bambu Studio"
+
+
+def preset_for_filament_id(system: SystemProfiles | None, filament_id: str,
+                           ref: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """(name, full values) of the installed system filament preset with this Bambu filament id made for
+    the project's printer and nozzle (e.g. GFL96 on an X2D 0.4 -> "Generic PLA Silk @BBL X2D 0.4 nozzle"),
+    or None. The most specific name wins: one naming the nozzle over the printer-wide one."""
+    if system is None or not filament_id:
+        return None
+    best: tuple[int, str, dict[str, Any]] | None = None
+    for name in system.filaments_by_id().get(filament_id, []):
+        data = system.load("filament", name) or {}
+        values, _ = resolve(Preset("filament", name, data, name), system)
+        ok, _why = compatible(values, Preset("filament", name, data, name), ref)
+        if not ok or not printer_code(name):
+            continue
+        rank = 2 if nozzle_of(name) else 1
+        if best is None or rank > best[0]:
+            best = (rank, name, values)
+    return (best[1], best[2]) if best else None
+
+
+def generic_preset(system: SystemProfiles | None, material: str,
+                   ref: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """The system "Generic <material>" preset for the project's printer (a spool whose own preset is not
+    installed for this printer, e.g. eSUN PLA+ on the X2D, prints as Generic PLA)."""
+    if system is None or not material:
+        return None
+    if system._index is None:
+        system._index = system._build()
+    best: tuple[int, str, dict[str, Any]] | None = None
+    for name in system._index["filament"]:
+        if not name.startswith(f"Generic {material} @BBL"):
+            continue
+        data = system.load("filament", name) or {}
+        values, _ = resolve(Preset("filament", name, data, name), system)
+        if not compatible(values, Preset("filament", name, data, name), ref)[0]:
+            continue
+        rank = 2 if nozzle_of(name) else 1
+        if best is None or rank > best[0]:
+            best = (rank, name, values)
+    return (best[1], best[2]) if best else None
+
+
+def ams_filaments(ref: dict[str, Any], system: SystemProfiles | None, spools: list[tuple[str, str]],
+                  fallback: int) -> tuple[dict[str, Any], list[int], list[str]]:
+    """Settings that hold a preset for each of `spools` ((Bambu filament id, material) of the AMS spools the
+    figure's filaments map to), and for each the slot index to copy: (settings, src, preset names). The
+    spool's own system preset for this printer, else the Generic preset of its material; one already a
+    slot of the project is reused, others are added. With neither, slot `fallback` (the export's material)."""
+    out = ref
+    src: list[int] = []
+    names: list[str] = []
+    for fid, material in spools:
+        found = preset_for_filament_id(system, fid, out) or generic_preset(system, material, out)
+        if found is None:
+            src.append(fallback)
+            names.append(str(out["filament_settings_id"][fallback]))
+            continue
+        name, values = found
+        ids = list(out["filament_settings_id"])
+        if name not in ids:
+            mat = material_of(values, name)
+            out = add_filament(out, values, name, _base_slot(out, str(values.get("inherits", "")), mat))
+            ids = list(out["filament_settings_id"])
+        src.append(ids.index(name))
+        names.append(name)
+    return out, src, names
 
 
 def _base_slot(ref: dict[str, Any], inherits: str, material: str) -> int:

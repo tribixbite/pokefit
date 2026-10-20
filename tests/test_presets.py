@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, app_config, export_settings, open_session
-from pokefit.presets import (PresetLibrary, SystemProfiles, add_filament, classify, load_settings_file,
-                             material_of, printer_code, read_presets, resolve)
+from pokefit.presets import (PresetLibrary, SystemProfiles, add_filament, ams_filaments, classify,
+                             load_settings_file, material_of, preset_for_filament_id, printer_code, read_presets,
+                             resolve)
 from pokefit.slicer import reference_settings
 
 REF = reference_settings(BUNDLED_REFERENCE)          # X2D, 0.4 nozzle, 17 filament slots
@@ -167,3 +168,64 @@ def test_plate_the_filament_cannot_use_is_reported() -> None:
     ok = add_filament({**REF, "curr_bed_type": "Supertack Plate"}, {**FILAMENT, "supertack_plate_temp": ["35"]}, "ok", 0)
     assert plate_problem(ok, len(ok["filament_settings_id"]) - 1) == ""
     assert plate_problem({**ok, "curr_bed_type": "Unknown"}, 0) == ""
+
+
+def _system(root: Path) -> SystemProfiles:
+    """Fake Bambu system profiles: Generic PLA / ABS (@base sets the filament id; X2D and A1 leaves) and an
+    eSUN PLA+ that only has an A1 preset."""
+    fil = root / "filament"
+    fil.mkdir(parents=True)
+    files = {
+        "Generic PLA @base": {"filament_id": "GFL99", "filament_type": ["PLA"], "instantiation": "false"},
+        "Generic PLA @BBL X2D 0.4 nozzle": {"inherits": "Generic PLA @base", "instantiation": "true",
+                                            "compatible_printers": ["Bambu Lab X2D 0.4 nozzle"]},
+        "Generic PLA @BBL A1": {"inherits": "Generic PLA @base", "instantiation": "true",
+                                "compatible_printers": ["Bambu Lab A1 0.4 nozzle"]},
+        "Generic ABS @base": {"filament_id": "GFB99", "filament_type": ["ABS"], "instantiation": "false",
+                              "nozzle_temperature": ["260"]},
+        "Generic ABS @BBL X2D 0.4 nozzle": {"inherits": "Generic ABS @base", "instantiation": "true",
+                                            "compatible_printers": ["Bambu Lab X2D 0.4 nozzle"]},
+        "eSUN PLA+ @base": {"filament_id": "GFL03", "filament_type": ["PLA"], "instantiation": "false"},
+        "eSUN PLA+ @BBL A1": {"inherits": "eSUN PLA+ @base", "instantiation": "true",
+                              "compatible_printers": ["Bambu Lab A1 0.4 nozzle"]},
+    }
+    for name, data in files.items():
+        (fil / f"{name}.json").write_text(json.dumps({"type": "filament", "name": name, **data}), encoding="utf-8")
+    return SystemProfiles(root)
+
+
+def test_ams_spools_find_their_presets(tmp_path: Path) -> None:
+    system = _system(tmp_path / "BBL")
+    found = preset_for_filament_id(system, "GFL99", REF)
+    assert found is not None and found[0] == "Generic PLA @BBL X2D 0.4 nozzle"     # not the A1 one
+    assert preset_for_filament_id(system, "GFL03", REF) is None                     # no X2D preset
+    out, src, names = ams_filaments(REF, system, [("GFB99", "ABS"), ("GFL03", "PLA"), ("GFL99", "PLA"),
+                                                  ("", "")], fallback=0)
+    # ABS is added as an 18th slot; eSUN PLA+ falls back to Generic PLA (a slot the project has);
+    # an unknown spool keeps the fallback slot's material.
+    assert names == ["Generic ABS @BBL X2D 0.4 nozzle", "Generic PLA @BBL X2D 0.4 nozzle",
+                     "Generic PLA @BBL X2D 0.4 nozzle", "Generic PETG @BBL X2D 0.4 nozzle"]
+    assert len(out["filament_settings_id"]) == 18 and src[0] == 17
+    assert [out["filament_type"][i] for i in src] == ["ABS", "PLA", "PLA", "PETG"]
+    assert out["nozzle_temperature"][17 * 6] == "260"          # per-variant block filled from the preset
+
+
+def test_export_slices_each_filament_as_its_spool(tmp_path: Path) -> None:
+    import trimesh
+
+    from pokefit.printer import AmsSlot
+
+    stl = tmp_path / "box.stl"
+    trimesh.creation.box((20, 20, 20)).export(stl)
+    s = open_session(stl, reference_path=BUNDLED_REFERENCE, work_dir=tmp_path / "w")
+    s.presets = PresetLibrary(system=_system(tmp_path / "BBL"))
+    p = Params(colours=["#E02020", "#2020E0"])
+    assert export_settings(s, p)["filament_type"] == ["PETG", "PETG"]           # no printer read: slot material
+    s.ams = [AmsSlot(0, "A1", "#E52222", "ABS", "", None, "GFB99"), AmsSlot(5, "B2", "#2222E5", "PLA", "", None, "GFL99")]
+    assert [a.label if a else None for a in s.ams_spools(p)] == ["A1", "B2"]
+    st = export_settings(s, p)
+    assert st["filament_type"] == ["ABS", "PLA"] and st["filament_colour"] == ["#E02020", "#2020E0"]
+    assert st["filament_settings_id"] == ["Generic ABS @BBL X2D 0.4 nozzle", "Generic PLA @BBL X2D 0.4 nozzle"]
+    # A colour no loaded spool is close to: that filament keeps the project's material.
+    s.ams = s.ams[:1]
+    assert s.ams_spools(p)[1] is None and export_settings(s, p)["filament_type"] == ["ABS", "PETG"]

@@ -39,6 +39,7 @@ class AmsSlot:
     type: str          # "PETG", "PLA", ...
     name: str          # brand / sub-brand if the printer knows it
     extruder: int | None = None   # nozzle the unit feeds (firmware id: 0 right, 1 left); None = either / unknown
+    filament_id: str = ""         # Bambu filament id of the spool (tray_info_idx, e.g. GFL99 = Generic PLA)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,12 +121,14 @@ def ams_slots(state: dict[str, Any]) -> list[AmsSlot]:
                 continue                      # empty slot
             t = int(tray.get("id", 0))
             out.append(AmsSlot(u * 4 + t, f"{chr(ord('A') + u)}{t + 1}", colour, str(tray.get("tray_type")),
-                               str(tray.get("tray_sub_brands") or tray.get("tray_id_name") or ""), ext))
+                               str(tray.get("tray_sub_brands") or tray.get("tray_id_name") or ""), ext,
+                               str(tray.get("tray_info_idx") or "")))
     ext = pr.get("vt_tray")
     for tray in ext if isinstance(ext, list) else [ext] if isinstance(ext, dict) else []:
         colour = _colour(tray.get("tray_color"))
         if colour and tray.get("tray_type"):
-            out.append(AmsSlot(254, "Ext", colour, str(tray.get("tray_type")), str(tray.get("tray_sub_brands") or "")))
+            out.append(AmsSlot(254, "Ext", colour, str(tray.get("tray_type")), str(tray.get("tray_sub_brands") or ""),
+                               None, str(tray.get("tray_info_idx") or "")))
     return out
 
 

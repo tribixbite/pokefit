@@ -89,13 +89,14 @@ def _hex_rgb(c: str) -> np.ndarray:
     return np.array([int(c[i:i + 2], 16) for i in (0, 2, 4)], float)
 
 
-def adapt_settings(ref: dict, colours: list[str], slot: int, supports: bool) -> dict:
-    """Reference settings reduced to len(colours) filaments, all using material `slot`.
+def adapt_settings(ref: dict, colours: list[str], slot: int, supports: bool, src: list[int] | None = None) -> dict:
+    """Reference settings reduced to len(colours) filaments, all using material `slot` — or, with `src`,
+    filament i using material src[i] (the presets of the AMS spools they print from).
 
     The flush matrix (extruders × n_ref × n_ref) keeps the reference's purge
     volume between the slots whose colours are closest to each figure colour.
     """
-    out = _filaments_from(ref, [slot] * max(1, len(colours)), colours)
+    out = _filaments_from(ref, src if src else [slot] * max(1, len(colours)), colours)
     out["enable_support"] = "1" if supports else "0"
     if supports and not str(out.get("support_type", "")).endswith("(auto)"):
         out["support_type"] = "tree(auto)"

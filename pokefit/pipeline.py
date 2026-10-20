@@ -35,7 +35,7 @@ from .model3mf import (FigureObject, Part, Project, plate_size, read_project, re
                        write_project)
 from .gltf import MAX_PICK
 from .paint import decode_majority, leaves, parse_tree
-from .presets import PresetLibrary, PresetNote
+from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
@@ -327,6 +327,33 @@ class Session:
             solid = [p.mesh() for p in self.unit_parts(params) if p.subtype == "normal_part"]
             self._fields[key] = height_field(solid)
         return self._fields[key].scaled(s)
+
+    def ams_spools(self, params: Params) -> list[AmsSlot | None]:
+        """The AMS spool each figure filament (1..n) prints from, once the printer was read: the user's
+        choice (`filament_map`) or the closest colour; None where no loaded spool is close."""
+        if not self.ams:
+            return []
+        colours = self.colours(params)
+        manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
+        ms = match_slots(list(range(1, len(colours) + 1)), colours, [a.colour for a in self.ams], manual)
+        return [self.ams[m.target - 1] if not m.new and 1 <= m.target <= len(self.ams) else None for m in ms]
+
+    def print_settings(self, params: Params, supports: bool) -> tuple[dict, list[str]] | None:
+        """The reference settings cut to the figure's filaments (`adapt_settings`), and the preset each
+        filament prints with. With the printer's AMS read, filament i takes the preset of its spool
+        (`presets.ams_filaments`: PLA spools slice as PLA); else every filament the material of `slot`."""
+        ref = self.settings(params)
+        if not ref:
+            return None
+        colours = self.colours(params)
+        spools = self.ams_spools(params)
+        if not spools:
+            st = adapt_settings(ref, colours, self.slot(params), supports)
+            return st, list(st.get("filament_settings_id", []))
+        system = self.presets.system if self.presets else None
+        ref2, src, names = ams_filaments(ref, system, [(a.filament_id, a.type) if a else ("", "") for a in spools],
+                                         self.slot(params))
+        return adapt_settings(ref2, colours, self.slot(params), supports, src), names
 
     def slot_matches(self, params: Params) -> list[SlotMatch]:
         """How the figure's filaments map onto the user's project slots (for the import file): the
@@ -1102,9 +1129,10 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
 
 
 def export_settings(session: Session, params: Params, supports: bool = False) -> dict | None:
-    ref = session.settings(params)
-    if params.settings_source == "reference" and ref:
-        return adapt_settings(ref, session.colours(params), session.slot(params), supports)
+    if params.settings_source == "reference":
+        built = session.print_settings(params, supports)
+        if built is not None:
+            return built[0]
     if params.colours and session.project.settings:
         return resize_filaments(session.project.settings, session.colours(params))
     return session.project.settings
@@ -1186,6 +1214,10 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     # The print file of the variant the slicer says to print (supports only if it generated any).
     chosen = out["auto"] if needs else out["off"]
     out["print_file"] = chosen.get("print_file") or None
+    # The AMS slot each filament of the print file is sliced for (send-to-printer passes them on).
+    spools = session.ams_spools(params)
+    loaded = [a for a in spools if a is not None]
+    out["ams_slots"] = [a.slot for a in loaded] if spools and len(loaded) == len(spools) else None
     if x10:
         v = np.vstack([p.vertices for p in final])
         ext = np.ptp(v, axis=0)
@@ -1201,9 +1233,9 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
 
 
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:
-    ref = session.settings(params)
-    if ref:
-        return adapt_settings(ref, session.colours(params), session.slot(params), supports)
+    built = session.print_settings(params, supports)
+    if built is not None:
+        return built[0]
     st = dict(export_settings(session, params) or {})
     if st:
         st["enable_support"] = "1" if supports else "0"
