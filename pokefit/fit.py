@@ -116,10 +116,22 @@ def annulus_margin(pockets_unit: np.ndarray, s: float, offset: np.ndarray, annul
     return float(np.min(np.minimum(r - lo, hi - r)))
 
 
+class _Enough(Exception):
+    """Raised inside the search once an offset reaches the margin asked for (`best_offset(enough=...)`)."""
+
+    def __init__(self, x: np.ndarray, f: float) -> None:
+        super().__init__()
+        self.x, self.f = x, f
+
+
 def best_offset(points: HullPoints, cavity: Cavity, s: float,
                 pockets_unit: np.ndarray | None = None,
-                annulus: tuple[float, float] | None = None) -> tuple[np.ndarray, float]:
+                annulus: tuple[float, float] | None = None,
+                enough: float | None = None) -> tuple[np.ndarray, float]:
     """XY offset maximising min(fit margin, annulus margin); returns (offset, margin).
+
+    `enough`: stop as soon as an offset with at least this margin is found (a yes/no fit test needs no
+    more), returning that offset and margin instead of the best.
 
     The fit margin alone is concave in the offset, but the annulus term
     (|p + o| >= inner radius) is not, so a coarse grid over plausible offsets
@@ -144,8 +156,12 @@ def best_offset(points: HullPoints, cavity: Cavity, s: float,
     def neg_margin(o: np.ndarray) -> float:
         """One offset (Nelder–Mead calls this ~10⁴ times per fit): hypot on columns, no (k, n, 2) array."""
         if use_annulus:
-            return -float(margins(o[None, :])[0])
-        return -float(np.min(allowed - np.hypot(qx + o[0], qy + o[1])))
+            f = -float(margins(o[None, :])[0])
+        else:
+            f = -float(np.min(allowed - np.hypot(qx + o[0], qy + o[1])))
+        if enough is not None and -f >= enough:
+            raise _Enough(np.array(o, float), f)
+        return f
 
     centre = -(q.min(axis=0) + q.max(axis=0)) / 2
     starts = [centre]                      # concave case: any start reaches the optimum
@@ -157,10 +173,13 @@ def best_offset(points: HullPoints, cavity: Cavity, s: float,
         gm = np.concatenate([margins(grid[i:i + 64]) for i in range(0, len(grid), 64)])
         starts += [grid[i] for i in np.argsort(-gm)[:3]] + [-s * pockets_unit.mean(axis=0)]
     best_x, best_f = None, np.inf
-    for o0 in starts:
-        x, f = _nelder_mead_restarts(neg_margin, np.asarray(o0, float))
-        if f < best_f:
-            best_x, best_f = x, f
+    try:
+        for o0 in starts:
+            x, f = _nelder_mead_restarts(neg_margin, np.asarray(o0, float))
+            if f < best_f:
+                best_x, best_f = x, f
+    except _Enough as hit:
+        return hit.x, -hit.f
     assert best_x is not None
     return best_x, -float(best_f)
 
@@ -206,9 +225,10 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
     def ok(s: float, with_annulus: bool = False) -> bool:
         if cavity.floor_z + s * points.height > cavity.top_z + 1e-9:
             return False
+        # A yes/no test: the search stops at the first offset that fits (enough=0).
         if with_annulus:
-            return best_offset(points, cavity, s, pockets_unit, annulus)[1] >= 0
-        return best_offset(points, cavity, s)[1] >= 0
+            return best_offset(points, cavity, s, pockets_unit, annulus, enough=0.0)[1] >= 0
+        return best_offset(points, cavity, s, enough=0.0)[1] >= 0
 
     if not ok(lo):
         return None

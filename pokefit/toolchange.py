@@ -130,26 +130,28 @@ class Estimate:
         return d
 
 
-def simulate(use: np.ndarray, nozzle_of: list[int], flush: np.ndarray, n_nozzles: int = 2) -> Estimate:
+def layer_lists(use: np.ndarray) -> list[tuple[int, ...]]:
+    """The filaments (0-based, ascending) each layer of `use` prints: computed once per `plan`, so the many
+    assignments it simulates walk plain tuples instead of indexing numpy rows per layer."""
+    return [tuple(int(f) for f in np.flatnonzero(row)) for row in np.asarray(use, dtype=bool)]
+
+
+def simulate(use: np.ndarray, nozzle_of: list[int], flush: np.ndarray, n_nozzles: int = 2,
+             layers: list[tuple[int, ...]] | None = None) -> Estimate:
     """Changes, nozzle switches and purge for one assignment (module doc, step 2).
 
-    `flush[a, b]` is the purge volume (mm³) going from filament a to b (0-based)."""
-    used = np.asarray(use.any(axis=0), dtype=bool)
+    `flush[a, b]` is the purge volume (mm³) going from filament a to b (0-based); `layers` = `layer_lists(use)`
+    when the caller has it."""
+    layers = layer_lists(use) if layers is None else layers
     per = [0] * n_nozzles
     purge = 0.0
-    switches = 0
     for n in range(n_nozzles):
-        mine = np.array([nozzle_of[f] == n + 1 and used[f] for f in range(use.shape[1])])
-        if not mine.any():
-            continue
+        mine = [[f for f in layer if nozzle_of[f] == n + 1] for layer in layers]
         loaded = -1
-        rows = use[:, mine]
-        idx = np.nonzero(mine)[0]
-        for li in range(len(rows)):
-            here = [int(f) for f in idx[rows[li]]]
+        for li, here in enumerate(mine):
             if not here:
                 continue
-            nxt = [int(f) for f in idx[rows[li + 1]]] if li + 1 < len(rows) else []
+            nxt = mine[li + 1] if li + 1 < len(mine) else []
             order = sorted(here, key=lambda f: (f != loaded, f in nxt))   # loaded first, a carry-over last
             for f in order:
                 if f != loaded:
@@ -157,10 +159,8 @@ def simulate(use: np.ndarray, nozzle_of: list[int], flush: np.ndarray, n_nozzles
                         per[n] += 1
                         purge += float(flush[loaded, f])
                     loaded = f
-    nozzle_by_layer = np.stack([use[:, [f for f in range(use.shape[1]) if nozzle_of[f] == n + 1]].any(axis=1)
-                                if any(nozzle_of[f] == n + 1 for f in range(use.shape[1]))
-                                else np.zeros(len(use), bool) for n in range(n_nozzles)], axis=1)
-    switches = int(np.sum(nozzle_by_layer.sum(axis=1) > 1))
+    # A nozzle switch on every layer that prints from more than one nozzle.
+    switches = sum(1 for layer in layers if len({nozzle_of[f] for f in layer}) > 1)
     changes = sum(per)
     secs = changes * CHANGE_S + switches * SWITCH_S
     return Estimate(list(nozzle_of), changes, switches, purge, secs, per)
@@ -181,13 +181,14 @@ def plan(use: np.ndarray, flush: np.ndarray, n_nozzles: int = 2,
     """(best assignment, everything on nozzle 1) — `allowed[f]` limits filament f to some nozzles."""
     n = use.shape[1]
     allowed = allowed or [set(range(1, n_nozzles + 1)) for _ in range(n)]
-    single = simulate(use, [min(a) for a in allowed], flush, n_nozzles)
+    layers = layer_lists(use)
+    single = simulate(use, [min(a) for a in allowed], flush, n_nozzles, layers)
     best = single
     if n <= EXHAUSTIVE:
         for combo in itertools.product(*[sorted(a) for a in allowed]):
             if combo[0] != 1 and all(1 in a for a in allowed):
                 continue                       # mirror images of an assignment cost the same
-            est = simulate(use, list(combo), flush, n_nozzles)
+            est = simulate(use, list(combo), flush, n_nozzles, layers)
             if _better(est, best):
                 best = est
     else:
@@ -200,7 +201,7 @@ def plan(use: np.ndarray, flush: np.ndarray, n_nozzles: int = 2,
                     if nz == cur[f]:
                         continue
                     trial = cur[:f] + [nz] + cur[f + 1:]
-                    est = simulate(use, trial, flush, n_nozzles)
+                    est = simulate(use, trial, flush, n_nozzles, layers)
                     if _better(est, best):
                         best, cur, improved = est, trial, True
     return best, single
