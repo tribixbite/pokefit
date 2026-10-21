@@ -135,7 +135,7 @@ def test_colour_count_and_preview(tmp_path: Path) -> None:
     s = open_session(f, work_dir=tmp_path / "w")
     rep, _ = analyse(s, Params())
     info = rep.to_dict()["object"]["texture_colours"]
-    assert info == {"auto": 3, "count": 3, "max": 16}
+    assert info == {"auto": 3, "count": 3, "max": 16, "details": 0, "max_details": 3}
     two = Params(texture_colours=2)                         # the dot joins its nearer colour
     rep2, _ = analyse(s, two)
     o = rep2.to_dict()["object"]
@@ -145,8 +145,16 @@ def test_colour_count_and_preview(tmp_path: Path) -> None:
     # The preview draws split paint as sub-triangles: more triangles than the mesh has.
     glb = trimesh.load(trimesh.util.wrap_as_stream(preview_glb(s, Params())), file_type="glb")
     assert sum(len(g.faces) for g in glb.geometry.values()) > len(s.unit_parts(Params())[0].faces)
+    # Two colours plus one detail: the dot keeps its own filament again (the third colour, painted).
+    det = Params(texture_colours=2, texture_details=1)
+    rep3, _ = analyse(s, det)
+    assert len(rep3.to_dict()["object"]["colours"]) == 3
+    assert set(np.unique(_states(s.figure_parts(det)[0])).tolist()) == {1, 2, 3}
+    assert [m.source for m in s.slot_matches(det)] == [1, 2, 3]      # the detail gets a slot too
     with pytest.raises(ValueError):
         Params(texture_colours=0)
+    with pytest.raises(ValueError):
+        Params(texture_details=4)
 
 
 def test_auto_count_is_the_best_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,3 +249,21 @@ def test_small_palettes_keep_large_distinct_colours() -> None:
     assert any(4 in g and len(g) > 1 for g in three)  # the tiny dark joins a neighbour
     four = [sorted(g) for g in tex.groups(4)]
     assert [4] in four                                # at 4 the dark detail gets its own filament
+
+
+def test_details_keep_small_contrasting_colours() -> None:
+    """`details` takes the small cluster that contrasts most with its group out as its own filament (black
+    pupils at 3 colours); a near shade of it joins the same detail; large clusters never become details."""
+    from pokefit.gltf import TextureColours, _lab
+    rgb = np.array([[140, 200, 215], [150, 205, 220], [200, 190, 160], [165, 100, 65], [30, 30, 25],
+                    [40, 36, 30], [175, 110, 75]], float)
+    weight = np.array([0.40, 0.10, 0.25, 0.20, 0.006, 0.004, 0.04])
+    tex = TextureColours(np.zeros((1, 1), np.intp), _lab(rgb), rgb, weight, np.ones(1), np.zeros((0, 2), np.intp), False)
+    plain = [sorted(g) for g in tex.groups(3)]
+    assert not any(g in ([4], [4, 5]) for g in plain)          # without details the dark merges away
+    one = [sorted(g) for g in tex.groups(3, details=1)]
+    assert len(one) == 4 and one[-1] == [4, 5]                  # both dark shades: one detail, last
+    assert sorted(i for g in one for i in g) == list(range(7))  # every cluster still has a group
+    assert [sorted(g) for g in tex.groups(3, details=3)][3:] == [[4, 5]]   # nothing else is a detail
+    pal, _, _ = tex.paint(3, 1)
+    assert len(pal) == 4 and pal[-1].startswith("#2")           # the detail's colour is the dark one

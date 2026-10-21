@@ -33,7 +33,7 @@ from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, plate_size, read_project, remesh_part, world_parts,
                        write_project)
-from .gltf import MAX_PICK
+from .gltf import MAX_DETAILS, MAX_PICK
 from .paint import decode_majority, leaves, parse_tree
 from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
@@ -94,6 +94,9 @@ class Params:
     # glTF colour (texture, vertex colours, materials): how many filaments to reduce it to
     # (None = automatic, see gltf.py). Ignored for other files.
     texture_colours: int | None = None
+    # ... plus up to this many "detail" filaments: small features that contrast most with the colour they would
+    # merge into (black pupils on a cream head) keep their own (gltf.TextureColours._details). 0..MAX_DETAILS.
+    texture_details: int = 0
     # Conform to the ball's floor (conform.py): bend legs/tails that reach past the washer up along the
     # sphere (None = automatic, 0 = off, else strength 0..1) and make the base flat over a disc of
     # `flat_base` mm (None = the washer's diameter, 0 = off): press it by at most `flat_depth` mm,
@@ -126,6 +129,9 @@ class Params:
             self.texture_colours = int(self.texture_colours)
             if not 1 <= self.texture_colours <= MAX_PICK:
                 raise ValueError(f"texture_colours must be 1..{MAX_PICK}")
+        self.texture_details = int(self.texture_details)
+        if not 0 <= self.texture_details <= MAX_DETAILS:
+            raise ValueError(f"texture_details must be 0..{MAX_DETAILS}")
         if self.bend is not None and not 0 <= float(self.bend) <= 1:
             raise ValueError("bend must be 0..1 (or null for automatic)")
         if self.flat_base is not None and not 0 <= float(self.flat_base) <= 60:
@@ -254,7 +260,7 @@ class Session:
             return list(params.colours)
         n = self.texture_count(params)
         if self.project.texture is not None and n is not None:
-            return list(self.project.texture.paint(n)[0])
+            return list(self.project.texture.paint(n, params.texture_details)[0])
         return list(self.project.colours)
 
     def texture_count(self, params: Params) -> int | None:
@@ -273,7 +279,7 @@ class Session:
         own palette, by colour distance) when no added colour is a jump, or no settings / fit are known.
         At the fit limit rather than the chosen size, so resizing the figure does not change its palette."""
         key = (self._key(params), round(self.ball_scale(params), 6), params.washer, params.clearance, params.slot,
-               params.process, self.presets.version if self.presets else 0)
+               params.process, self.presets.version if self.presets else 0, params.texture_details)
         if key not in self._auto_count:
             if len(self._auto_count) > 16:
                 self._auto_count.clear()
@@ -292,11 +298,11 @@ class Session:
         n = self.texture_count(params)
         if self.project.texture is None or n is None:
             return parts
-        key = (self._key(params), n)
+        key = (self._key(params), n, params.texture_details)
         if key not in self._textured:
             if len(self._textured) > 8:
                 self._textured.clear()
-            _, extra, base = self.project.texture.paint(n)
+            _, extra, base = self.project.texture.paint(n, params.texture_details)
             p0 = parts[0]
             # The conform step's flat base prints in the base filament, which depends on the count.
             rest = [Part(p.name, base, p.vertices, p.faces, p.tri_extra, p.subtype) if p.name == FILL_NAME else p
@@ -317,7 +323,8 @@ class Session:
         parts = self.textured_parts(params)
         if not params.paint:
             return parts
-        key = (self._key(params), self.texture_count(params), json.dumps(params.paint, sort_keys=True))
+        key = (self._key(params), self.texture_count(params), params.texture_details,
+               json.dumps(params.paint, sort_keys=True))
         if key not in self._painted:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
                 self._painted.clear()
@@ -371,7 +378,8 @@ class Session:
         if not targets:
             return []
         obj = self.obj(params)
-        ukey = f"{obj.id}:{self.texture_count(params)}:{json.dumps(params.paint, sort_keys=True)}"
+        ukey = (f"{obj.id}:{self.texture_count(params)}:{params.texture_details}:"
+                f"{json.dumps(params.paint, sort_keys=True)}")
         if ukey not in self._used:
             parts = self.figure_parts(params)
             self._used[ukey] = used_filaments(parts, obj.extruder)
@@ -823,7 +831,7 @@ def colour_rows(session: Session, params: Params, scale: float) -> list[dict[str
     if tex is None or not ref or scale <= 0:
         return []
     key = (session._key(params), round(scale, 5), params.slot, params.process,
-           session.presets.version if session.presets else 0)
+           session.presets.version if session.presets else 0, params.texture_details)
     if key not in session._tc_table:
         rows = []
         unit = session.unit_parts(params)
@@ -832,7 +840,7 @@ def colour_rows(session: Session, params: Params, scale: float) -> list[dict[str
         lh = float(ref.get("layer_height", 0.2) or 0.2)
         first = float(ref.get("initial_layer_print_height", lh) or lh)
         for k in range(1, min(MAX_PICK, max(tex.auto_count + 2, 6)) + 1):
-            cols, spans, base = tex.colour_spans(k, corner_z)
+            cols, spans, base = tex.colour_spans(k, corner_z, params.texture_details)
             use = tc.layer_use_arrays(spans[:, 2], spans[:, 3], spans[:, 1].astype(np.int64), len(cols), lh, first)
             rest = [Part(p.name, base, p.vertices, p.faces, {}, p.subtype) for p in unit[1:]]
             if rest:                         # the flat base prints in the base filament
@@ -985,7 +993,8 @@ def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, 
             # "auto": the count used when none is chosen (best value, else the file's own palette).
             "texture_colours": None if session.project.texture is None else {
                 "auto": _auto_count(session, params),
-                "count": params.texture_colours or _auto_count(session, params), "max": MAX_PICK},
+                "count": params.texture_colours or _auto_count(session, params), "max": MAX_PICK,
+                "details": params.texture_details, "max_details": MAX_DETAILS},
             "objects": [{"id": o.id, "name": o.name, "faces": o.face_count} for o in session.project.objects]}
 
 

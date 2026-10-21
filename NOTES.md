@@ -5,75 +5,48 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **Send to printer** (`docs/integration.md` "Next steps"). Ready: credentials + signing key/certs in
-   `~/.x2d` (copied from the user's phone backup at `C:\.x2d`, which the user made; never in a repo);
-   "Use my printer's AMS" + the Printer card work on the X2D (4 AMS, 16 spools, track switch); with the AMS
-   read, Slice slices each filament as its spool's preset (`Session.print_settings`, `presets.ams_filaments`)
-   and returns `ams_slots`; beambam `print --slot 4,0,12` takes one slot per filament (beambam `5e380d8`,
-   pushed). To build: a "Send to printer" button on the sliced print file -> confirm dialog (filament ->
-   spool, plate, temps) -> `beambam print <file> --slot …` as a job. **The first real print needs the user's
-   OK in chat, and every later one their click.** beambam's notes disagree on whether a dual-nozzle start
-   still fails (err 84033544): the first approved print settles it. Then AMS load/unload.
-2. **Eyes vs. auto palette** (user, 2026-10-19: "the squirtle lost its multicolored eyes"): auto = best value
-   picks 2 colours for both Squirtles, which drops the eyes. Black pupils need 4 (Manex, +325 min) / 5
-   (photo model); red iris 6-7 (+10-11 h); the white highlight merges into cream up to 8. The eye colours
-   themselves cost only ~23-42 changes (few layers); they come late because Ward merging is area-weighted.
-   Idea, not built: a "keep small details" palette mode (contrast-protected clusters) — ask before changing
-   the auto default again.
-3. **Photo models: shape and model choice** (user 2026-10-19/20). Pixal3D multi-view + mirrored right view stays
-   the default (round head, multicoloured eyes; renders: scratchpad `render_compare.py`); TRELLIS.2 is `--model
-   trellis2` for one photo (wrong-coloured back, stub tail). Clean timings 2026-10-20, idle GPU, fresh ComfyUI per
-   run (scratchpad `fair_timing.sh`, ComfyUI "Prompt executed in"): Pixal3D 1 photo 164 s, TRELLIS.2 1 photo 472 s
-   (its upsample + colour stages 275 s + 145 s vs 81 + 43), 3 photos 160 s, 3 + mirror 166 s, 700k faces 162 s
-   (looks the same as 200k: the voxel colours, not the faces, limit the eyes). Every stage setting is now in
-   `GenOptions` / the dialog (guidance, colour guidance, shift, sampler, loose pieces, photo colours on/off);
-   only the defaults are measured. Research notes: scratchpad `research2.md` (no fp8/NVFP4 Pixal3D; GGUFs are
-   single-view or for standalone ports; HF Pixal3D discussion #11: leftover background -> a slab).
-   llama-server (the user's) is stopped for these tests: restart command in memory `local-installs`.
-   **Other generators** (research 2026-10-20, Top3D.ai blind votes Oct season; render looks, not printability):
-   Hi3D v3.0 (= Hitem3D, $2-9/run, trains on inputs, credit required) 1100, Tripo H3.1 1100, Rodin Gen-2.5 1079,
-   Meshy 7.1 ~1065, Hunyuan3D 3.1 1031, Pixal3D 936, TRELLIS.2 849. None has open current weights (Hunyuan's last open
-   release 2.1 excludes EU/UK/KR); all are APIs. Next to try: Tripo H3.1 multi-view (2-4 views, ~$0.30-0.70, paid
-   plans own the output, ComfyUI partner node; its API V2 ends 2026-11-01, use V3) and Hunyuan 3.1 (8 views, 20 free/day
-   on the web) with our cleaned Charmander/Squirtle views, scored by our checks + a 35 mm Bambu slice. Their meshes
-   are not in our rig frame, so photo-colour projection would need a pose fit first (else use their texture).
-   Needs the user's API key/account: ask first. In-browser TRELLIS.2 (SpawnDev demo, ~10.5 GB weights cached in
-   Chrome's OPFS): Chrome's WebGPU runs on the Intel Xe-LPG iGPU here, so the device was lost in the structure stage;
-   retry after the user sets Chrome to the high-performance GPU (Windows Settings > Display > Graphics).
-4. **Photos -> 3D colour, what is left** (`pokefit/imageto3d.py`): photo colours now replace the model's
-   (eyes, iris, shell plates right); left: glossy highlights in the photos become light specks (a few
-   survive despeckling on the head). Single photo: the photographed side now takes the photo's colours
-   (21 % of the Squirtle's vertices from its side photo). One-photo results turn to face front
-   (`facing_front`: mirror plane for the axis, head-forward + tail-behind for the sign; real side photo
-   -> +86°, multi-view models 0°). The sign cue is tuned on Squirtles only: the Manex Squirtle already
-   reads "unsure" with a different point sample, so other shapes may need the Figure card's turn.
-5. **Ordinary photos -> clean views** (`pokefit/photoclean.py`, CLI `photos --clean P1 P2 P3 [--pose]`, dialog
-   "Or ordinary photos"): Qwen-Image-Edit-2511 int8 (Apache-2.0) + Lightning 8-step + fal Multiple-Angles LoRA
-   redraws 1-3 noisy photos as a clean front, then left/back from it plus the original photos; then the usual
-   Pixal3D run. Charmander stock photos (`imageto3d/charmander/`: in a ball, flames, off-angle), scratchpad
-   `char_clean3/`: ball, base and flames gone, tail flame kept; 52 s front + ~48 s per view (views from the clean
-   front alone: ~10 s but the tail flame vanished), Pixal3D 153 s; fits at 32.8 mm (limited by the raised arms
-   against the shell wall). Measured choices: fal's "left side view" faces the image's right, so the rig's left
-   asks for "right side view"; cleaned runs keep the MODEL's colours (projected redrawn views doubled the eyes and
-   added specks; `--photo-colours` to override). Open: `--pose` did not move the arms (raised arms set the size);
-   the "matte" wording did not remove the gloss; try a pose reference image (OpenPose) or lowering arms by prompt
-   wording; a second figure to confirm the side-view naming.
+1. **First real print** (Send to printer is built, `fffd03c`: with the AMS read, Slice -> "Send to printer…" -> confirm
+   panel (filament -> spool, plate, bed temp) -> "Start print" = `beambam print <file> --slot …`; credentials and signing
+   key in `~/.x2d`, never in a repo). "Start print" has never been pressed. **The first real print needs the user's OK in
+   chat, every later one their click.** It also settles whether a dual-nozzle start still fails (beambam notes disagree,
+   err 84033544). Then: AMS load/unload. `beambam print --dry-run` (purge check only, touches no printer) is safe to use.
+2. **Eyes: "Keep details"** (`Params.texture_details` 0-3, `gltf.TextureColours._details`, Colours card select, CLI
+   `fit --details N`): small fine clusters (< 2 % of the surface) contrasting most (full CIELAB ΔE ≥ 25) with the colour
+   they would merge into keep their own filament. +1 detail = the black pupils on both Squirtles at 2 and 3 colours.
+   Bambu slices, 2 colours vs 2 + 1 detail: Manex 1h45/19.8 g -> 2h58/40.9 g, photo Squirtle 1h56/20.7 g -> 2h45/35.6 g
+   (pupils at 4-5 colours cost ~5.4 h before). Off by default: ask the user before making it part of "auto". At 1 colour
+   + 1 the Manex picks a shell-brown cluster, not the pupils (highest contrast vs a blue mean); not a goal so far.
+3. **Photo models**: Pixal3D multi-view + mirrored right view stays the default; TRELLIS.2 is `--model trellis2` for one
+   photo. Clean timings 2026-10-20 (idle GPU, fresh ComfyUI): Pixal3D 1 photo 164 s, TRELLIS.2 1 photo 472 s, 3 photos
+   160 s, 3 + mirror 166 s, 700k faces 162 s (looks like 200k: voxel colours limit the eyes). Only the defaults of the
+   dialog's settings are measured. Paid generators: dropped (user, 2026-10-20). In-browser TRELLIS.2 (SpawnDev demo,
+   ~10.5 GB cached in Chrome's OPFS) lost the WebGPU device on the Intel iGPU; retry only after the user switches Chrome
+   to the high-performance GPU (Windows Settings > Display > Graphics). llama-server is stopped: restart command in
+   memory `local-installs`.
+4. **Gloss specks** (photo colours, `imageto3d.photo_colours`): light streaks of the toy's shiny plastic become light
+   patches. Two detectors tried 2026-10-20 and NOT kept (diff: scratchpad `gloss_attempt.diff`, probe `gloss_probe.py`,
+   renders `gloss2_cmp.png`): (a) image-space "lighter + paler than a 41 px local mean" flagged colour edges (eye rims,
+   mouth line), not the streaks; (b) multi-view "lighter + paler than the darkest view" left the head side paler (the
+   darkest view is usually a grazing, shaded one). Next ideas: compare each sample with the model's own lighting-free
+   albedo after the gain fit; or have Qwen-Image-Edit remove reflections in the photo step (`photoclean.py`).
+5. **Ordinary photos -> clean views** (`pokefit/photoclean.py`, `photos --clean P1 P2 P3 [--pose]`): Charmander
+   (`imageto3d/charmander/`, scratchpad `char_clean3/`) fits at 32.8 mm, limited by the raised arms. Open: `--pose`
+   did not move the arms; "matte" wording did not remove gloss; try an OpenPose reference or arm wording; a second
+   figure to confirm the side-view naming ("right side view" in fal's LoRA = the rig's left).
 6. **Paint depth** (`Params.paint_depth` -> Bambu `mmu_segmented_region_max_width`; Colours card, CLI `fit --paint-depth`):
    8-colour Charmander slices (scratchpad `paint_depth.py`): 0 (unlimited) / 0.8 / 1.6 / 3 mm = 664 / 665 / 667 / 667 min,
-   284 colour changes each; only the per-colour grams move (colour 2: 0.68 g -> 0.21 g at 0.8 mm). Not measured: strength,
+   284 colour changes each; only the per-colour grams move. Not measured: strength,
    `mmu_segmented_region_interlocking_depth`, a figure where a colour exists only inside.
-7. **MakerWorld URLs**: not supported, by design. No public API; files need a logged-in Bambu Cloud token, and
-   MakerWorld's Terms of Use s.9 forbid automated download. The user downloads, then opens the file.
-8. **Conform limits**: designed for the largest-fit scale and the default washer's floor (a smaller chosen
-   size keeps the same shape); the flat base's walls are vertical (a pedestal between the legs).
-9. **Big meshes** (200k-face photo Squirtle: first analyse 18.7 s = conform 6.1 s, colour-change table
-   4.5 s, pockets 2.5, printability 2.5; 684k-triangle LEGO GLB (16k overlapping bricks): 65-69 s, was 289 s
-   under shapely 2.2 — islands now section each body when loops cross). Next: conform's height fields
-   (7 per run, 2.4 s), `prepare_points` (1.4 s), the LEGO's islands sections (~35-49 s, per body).
-10. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates).
-   Off now: an `http://` visit gets the page over plain HTTP and only then redirects itself with a script;
-   on, Cloudflare answers every `http://` request with a redirect before any content. Explained to the user
-   2026-10-19; it is their account, so they flip it.
+7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
+   automated download). The user downloads, then opens the file.
+8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
+   vertical (a pedestal between the legs).
+9. **Big meshes**: 200k-face photo Squirtle first analyse ~19.6 s wall (2026-10-20, after the toolchange simulator
+   reads per-layer tuples, 2.8x, and fit tests stop at the first offset that fits; was 21.6-24 s). Profile (scratchpad
+   `prof_analyse.py`): conform 6.2 s, colour-change table 5.3 s (despeckle per palette size 2.0 s, colour spans 3.2 s),
+   pockets 2.7 s, islands 1.7 s, `prepare_points` 2.2 s over 7 calls. 684k-triangle LEGO GLB: 65-69 s.
+10. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+   `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
 SketchUp exports here are at **16× working scale** and often non-manifold.

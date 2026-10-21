@@ -217,6 +217,15 @@
             </label>
             <button id="texColAuto" class="btn" aria-pressed="true" title="Best value (★): the count before an added colour costs many more filament changes; else as many as the file clearly has (up to 8)">Auto</button>
           </div>
+          <label class="row seat-row" title="Small features that contrast most with the colour they would be merged into (black pupils on a cream head, a red mouth) keep their own filament on top of the count above">
+            <span class="muted">Keep details</span>
+            <select id="texDetails" aria-label="Extra filaments for small details">
+              <option value="0">none</option>
+              <option value="1">+1 filament</option>
+              <option value="2">+2 filaments</option>
+              <option value="3">+3 filaments</option>
+            </select>
+          </label>
           <div id="texCost" class="tex-cost" aria-label="Colour-change cost per number of filaments"></div>
         </div>
         <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
@@ -228,6 +237,7 @@
           <div class="h-row sub">
             <h3>Prints from</h3>
             <span id="slotMapSource" class="muted"></span>
+            <button id="slotSourceBtn" class="btn small" hidden></button>
           </div>
           <div id="importMap" class="slot-map" role="list"></div>
           <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>

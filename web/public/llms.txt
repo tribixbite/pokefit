@@ -33,13 +33,17 @@
   colours (shading ignored, a chosen 1–16, or automatic: the best-value count, the one before an added colour
   would cost many more filament changes, else as many as the file clearly has, up to 8), cleared of specks, and
   written as split Bambu paint on one solid part, so it slices multi-colour with crisp edges. Fewer filaments =
-  less purge waste and print time; each palette size's estimated cost is shown.
+  less purge waste and print time; each palette size's estimated cost is shown. "Keep details" (+1 to +3
+  filaments) keeps small features that contrast most with the colour they would merge into (black pupils on a
+  cream head) as their own filaments: on two Squirtle models, 2 colours + 1 detail kept the pupils for +49 to
+  +73 min in Bambu slices, against 4-5 colours otherwise.
 - Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
-  swatches, closest colour first with its ΔE; the palette swatches carry the slot they print from. "Paint depth"
+  swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"
+  when nothing loaded is close); the palette swatches carry the slot they print from. "Paint depth"
   sets how far colours reach into the figure (Bambu's segmented-region width; inside is the main filament): it
   changes how much of each colour is used, not the print time or the colour changes.
 - Washers: catalogue of steel washers (DIN 9021 M5/M6/M8, US #10 × 3/4", US 1/4" × 1" fender) or a custom size;

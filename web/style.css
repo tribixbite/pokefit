@@ -241,9 +241,12 @@ label.off { opacity: .45; }
 /* Colours card "Prints from": figure colour -> slot picker rows. */
 /* contain: inline-size: the slot names (no-wrap, ellipsis) must not set the card's minimum width on a phone. */
 .slot-map-box { margin: 4px 0 10px; padding-top: 8px; border-top: 1px solid var(--line); contain: inline-size; }
-label.seat-row { flex-direction: row; }
+label.seat-row { flex-direction: row; align-items: center; flex-wrap: nowrap; }
+label.seat-row select { width: auto; flex: 1; min-width: 0; max-width: 220px; }
 .h-row.sub h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .h-row.sub { margin-bottom: 6px; gap: 8px; }
+.h-row.sub #slotMapSource { flex: 1; min-width: 0; }
+.btn.small { padding: 4px 10px; font-size: 12px; min-height: 30px; }
 .slot-map { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .slot-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .slot-row .arrow { color: var(--muted); }

@@ -33,7 +33,7 @@ const state: State = {
     rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
     pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
     pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, paint_depth: null, filament_map: null, colours: null, paint: null, texture_colours: null,
+    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, paint_depth: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
   },
   report: null,
   focus: null,
@@ -250,7 +250,7 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
     state.session = res.session;
     colorize.reset();
     state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null };
+      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0 };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
@@ -473,12 +473,21 @@ function renderMagnets(rep: Report): void {
 function slotChoices(extra: number): SlotChoice[] {
   const ams = state.config?.ams ?? [];
   const choices: SlotChoice[] = ams.length
-    ? ams.map((a, i) => ({ value: i + 1, label: a.label || `Tray ${i + 1}`, detail: slotDetail(a.type, a.name),
+    ? ams.map((a, i) => ({ value: i + 1, label: a.label || `Tray ${i + 1}`, detail: slotDetail(a.type, a.name) + nozzleOf(a),
       colour: a.colour.slice(0, 7) }))
     : (state.config?.slots ?? []).map((s, i) => ({ value: i + 1, label: `Slot ${i + 1}`,
       detail: slotDetail(s.type, s.name), colour: s.colour.slice(0, 7) }));
-  choices.push({ value: extra, label: `Slot ${extra} (new)`, detail: "Bambu adds it on import; set its colour there", colour: null });
+  // With the AMS read, "new" means no loaded spool is near this colour: the print cannot be sent until one is.
+  choices.push(ams.length
+    ? { value: extra, label: "No spool", detail: "load one near this colour and read the AMS again", colour: null }
+    : { value: extra, label: `Slot ${extra} (new)`, detail: "Bambu adds it on import; set its colour there", colour: null });
   return choices;
+}
+
+/** Which nozzle an AMS spool feeds, when each AMS unit is wired to one (X2D/H2D without a track switch). */
+function nozzleOf(a: AmsSlot): string {
+  if (state.config?.track_switch || a.extruder == null) return "";
+  return a.extruder === 1 ? " · left nozzle" : " · right nozzle";
 }
 
 /** "PETG-CF · Generic PETG-CF": the preset name without its printer suffix ("@BBL X2D 0.4 nozzle"),
@@ -494,7 +503,7 @@ function slotOf(n: number): { label: string; colour: string | null } | null {
   const m = state.report?.import_map.find((x) => x.source === n);
   if (!m) return null;
   const ams = state.config?.ams ?? [];
-  if (m.new) return { label: "+", colour: null };
+  if (m.new) return { label: ams.length ? "?" : "+", colour: null };
   return { label: ams.length ? ams[m.target - 1]?.label ?? String(m.target) : String(m.target), colour: m.target_colour || null };
 }
 
@@ -507,6 +516,9 @@ function renderImportMap(rep: Report): void {
   $("importMapBox").hidden = rep.import_map.length === 0;
   $("slotMapBox").hidden = rep.import_map.length === 0;
   $("slotMapSource").textContent = ams.length ? "your printer's AMS" : "your project's filament slots";
+  const src = $<HTMLButtonElement>("slotSourceBtn");
+  src.hidden = !state.config?.printer_link;
+  src.textContent = ams.length ? "Use project slots" : "Use my printer's AMS";
   $("importMap").replaceChildren(...rep.import_map.map((m) => {
     const fig = h("span", { cls: "fig-sw", textContent: String(m.source), title: `Figure colour ${m.source} (${m.colour})` });
     fig.style.background = m.colour;
@@ -614,10 +626,10 @@ async function doSlice(): Promise<void> {
 
 /** Why a sliced file cannot be sent: the AMS was not read, or some colour has no loaded spool near it. */
 function unmappedText(): string {
-  if (!state.config?.ams.length) return "To send it to the printer, use my printer's AMS (Export card), then slice again.";
+  if (!state.config?.ams.length) return "To send it to the printer, use my printer's AMS (Colours → Prints from), then slice again.";
   const missing = (state.report?.import_map ?? []).filter((m) => m.new).map((m) => m.source);
   return missing.length
-    ? `No loaded spool is close to colour ${missing.join(", ")}: pick a spool for it in the Export card's table ` +
+    ? `No loaded spool is close to colour ${missing.join(", ")}: pick a spool for it under Colours → Prints from ` +
       "(or load one and read the AMS again), then slice again to send it to the printer."
     : "Slice again to send it to the printer with the spools just read.";
 }
@@ -994,6 +1006,8 @@ function bind(): void {
   $("amsBtn").addEventListener("click", () => void printer(false));
   new PrinterCard($<HTMLButtonElement>("watchBtn"), $("printerStatus"), $<HTMLImageElement>("camView"));
   $("amsClear").addEventListener("click", () => void printer(true));
+  // The same switch beside the slot map: read the AMS, or go back to the project's slots.
+  $("slotSourceBtn").addEventListener("click", () => void printer(Boolean(state.config?.ams.length)));
   // Recolour the figure with the matched filaments' colours (what will actually print).
   $("snapColours").addEventListener("click", () => {
     const rep = state.report;

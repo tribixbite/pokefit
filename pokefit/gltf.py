@@ -16,6 +16,11 @@ multi-colour:
    MERGE_DE apart (at most MAX_COLOURS), a count merges until that many remain.
    Small but distinct areas (eyes, a mouth) survive because they are far from
    everything else.
+   Optional details (`groups(count, details)`): a palette of a few colours
+   averages small features into the big colours (black pupils into a cream
+   head). Up to `details` small fine clusters (under DETAIL_SHARE of the
+   surface) that contrast most with the colour they were merged into (full
+   CIELAB ΔE ≥ DETAIL_DE) keep their own filament on top of the count.
 3. Specks are removed: a colour that covers less than SPECK_SHARE of the surface
    in one connected patch joins the colour around it (each such patch costs a
    filament change on every layer it spans, for a fleck nobody would miss).
@@ -51,6 +56,9 @@ WARD_BETA = 0.5           # area weight's exponent in the merge cost (TextureCol
 L_WEIGHT = 0.5            # shading changes lightness more than hue: count it half
 FIT_SAMPLES = 200_000     # samples the clustering is fitted on (area-weighted draw)
 SPECK_SHARE = 2e-4        # a one-colour patch under this share of the surface is a speck
+MAX_DETAILS = 3           # most extra "detail" filaments (TextureColours.groups)
+DETAIL_SHARE = 0.02       # a detail covers less than this share of the surface (eyes, a mouth)
+DETAIL_DE = 25.0          # ... and differs from the colour it would merge into by at least this (full CIELAB)
 
 Sampler = Callable[[np.ndarray, np.ndarray], np.ndarray]   # (faces, barycentric (n,3)) -> sRGB (n,3)
 
@@ -180,15 +188,16 @@ class TextureColours:
     area: np.ndarray          # (faces,) triangle areas (file units)
     adjacency: np.ndarray     # (n, 2) face pairs sharing an edge
     exact: bool               # the fine clusters are the file's own flat colours
-    _cache: dict[int | None, tuple[list[str], dict[int, str], int]] = field(default_factory=dict)
-    _leaves: dict[int | None, tuple[list[list[int]], np.ndarray]] = field(default_factory=dict)
+    _cache: dict[tuple[int | None, int], tuple[list[str], dict[int, str], int]] = field(default_factory=dict)
+    _leaves: dict[tuple[int | None, int], tuple[list[list[int]], np.ndarray]] = field(default_factory=dict)
 
     @property
     def auto_count(self) -> int:
         return len(self.groups(None))
 
-    def groups(self, count: int | None) -> list[list[int]]:
-        """Fine clusters merged into groups, largest group first.
+    def groups(self, count: int | None, details: int = 0) -> list[list[int]]:
+        """Fine clusters merged into groups, largest group first, then up to `details` detail groups
+        (`_details`; module doc step 2).
 
         Automatic (count None): near-duplicates (closer than MERGE_DE) merge closest-first, then, above
         MAX_COLOURS, the cheapest pair by Ward's criterion. A chosen count merges by Ward's criterion
@@ -218,29 +227,69 @@ class TextureColours:
             groups[a] = groups[a] + groups[b]
             del groups[b], centres[b], weights[b]
         order = np.argsort(-np.array(weights), kind="stable")
-        return [groups[i] for i in order]
+        merged = [groups[i] for i in order]
+        return self._details(merged, details) if details > 0 else merged
 
-    def leaves(self, count: int | None) -> tuple[list[list[int]], np.ndarray]:
+    def _details(self, groups: list[list[int]], details: int) -> list[list[int]]:
+        """Take up to `details` small, high-contrast fine clusters out of their groups as groups of their own.
+
+        A candidate is a fine cluster under DETAIL_SHARE of the surface in a group of several; its contrast is
+        the full-lightness CIELAB ΔE to the rest of its group (the colour it would print as otherwise). The
+        most contrasting go first; one within MERGE_DE of a detail already taken joins it (both pupils' shades
+        are one detail) without using up a slot. A group always keeps at least one cluster."""
+        full = self.lab * np.array([1 / L_WEIGHT, 1.0, 1.0])            # undo the lightness down-weighting
+        cands: list[tuple[float, int, int]] = []
+        for gi, g in enumerate(groups):
+            if len(g) < 2:
+                continue
+            w = self.weight[g]
+            for k, i in enumerate(g):
+                if self.weight[i] >= DETAIL_SHARE:
+                    continue
+                rest = np.delete(np.arange(len(g)), k)
+                centre = (full[g][rest] * w[rest, None]).sum(axis=0) / w[rest].sum()
+                de = float(np.linalg.norm(full[i] - centre))
+                if de >= DETAIL_DE:
+                    cands.append((de, gi, i))
+        out = [list(g) for g in groups]
+        picked: list[list[int]] = []
+        for _, gi, i in sorted(cands, reverse=True):
+            if len(out[gi]) < 2:
+                continue
+            home = next((d for d in picked if min(float(np.linalg.norm(self.lab[i] - self.lab[j])) for j in d)
+                         < MERGE_DE), None)
+            if home is None:
+                if len(picked) >= min(details, MAX_DETAILS):
+                    continue
+                home = []
+                picked.append(home)
+            home.append(i)
+            out[gi].remove(i)
+        return out + picked
+
+    def leaves(self, count: int | None, details: int = 0) -> tuple[list[list[int]], np.ndarray]:
         """(groups, (faces, leaves) despeckled group per sub-triangle) for a palette size, cached."""
-        if count not in self._leaves:
-            groups = self.groups(count)
+        key = (count, details)
+        if key not in self._leaves:
+            groups = self.groups(count, details)
             to_group = np.zeros(len(self.lab), np.intp)
             for gi, g in enumerate(groups):
                 to_group[g] = gi
-            self._leaves[count] = (groups, self._despeckle(to_group[self.labels], len(groups)))
-        return self._leaves[count]
+            self._leaves[key] = (groups, self._despeckle(to_group[self.labels], len(groups)))
+        return self._leaves[key]
 
-    def paint(self, count: int | None = None) -> tuple[list[str], dict[int, str], int]:
-        """(palette hex colours, tri_extra paint per face, base filament) for a palette size."""
-        if count not in self._cache:
-            groups, leaf = self.leaves(count)
+    def paint(self, count: int | None = None, details: int = 0) -> tuple[list[str], dict[int, str], int]:
+        """(palette hex colours, tri_extra paint per face, base filament) for a palette size (+ details)."""
+        key = (count, details)
+        if key not in self._cache:
+            groups, leaf = self.leaves(count, details)
             n_leaf = leaf.shape[1]
             share = np.bincount(leaf.ravel(), weights=np.repeat(self.area / n_leaf, n_leaf), minlength=len(groups))
             base = int(np.argmax(share))
             extra = {i: f'paint_color="{encode_tree(tree_of(leaf[i] + 1))}"'
                      for i in np.nonzero((leaf != base).any(axis=1))[0].tolist()}
-            self._cache[count] = (self._palette(groups), extra, base + 1)
-        return self._cache[count]
+            self._cache[key] = (self._palette(groups), extra, base + 1)
+        return self._cache[key]
 
     def _palette(self, groups: list[list[int]]) -> list[str]:
         """Hex colour of each group: the surface-weighted mean of its fine clusters."""
@@ -251,11 +300,12 @@ class TextureColours:
             colours.append("#{:02X}{:02X}{:02X}".format(*(int(round(x)) for x in np.clip(c, 0, 255))))
         return colours
 
-    def colour_spans(self, count: int | None, corner_z: np.ndarray) -> tuple[list[str], np.ndarray, int]:
+    def colour_spans(self, count: int | None, corner_z: np.ndarray,
+                     details: int = 0) -> tuple[list[str], np.ndarray, int]:
         """(palette, spans, base filament) for a palette size without building paint: `spans` rows are
         (face, filament 1-based, z bottom, z top) of each colour inside each triangle, from the heights of
         its (despeckled) sub-triangles — exactly what the paint prints. `corner_z`: (faces, 3) corner z."""
-        groups, leaf = self.leaves(count)
+        groups, leaf = self.leaves(count, details)
         n_faces, n_leaf = leaf.shape
         n = len(groups)
         rows = np.repeat(np.arange(n_faces), n_leaf)

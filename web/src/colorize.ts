@@ -73,6 +73,8 @@ export class ColorizePanel {
     tex.addEventListener("input", () => { $("texColVal").textContent = String(tex.value); });
     tex.addEventListener("change", () => this.setTextureColours(+tex.value));
     $("texColAuto").addEventListener("click", () => this.setTextureColours(null));
+    const details = $<HTMLSelectElement>("texDetails");
+    details.addEventListener("change", () => this.setTextureDetails(+details.value));
   }
 
   /**
@@ -84,8 +86,21 @@ export class ColorizePanel {
     const auto = this.host.report()?.object.texture_colours?.auto;
     const next = n === auto ? null : n;
     if (next === p.texture_colours) { this.render(); return; }
+    this.recut(() => { p.texture_colours = next; });
+  }
+
+  /** Keep `d` small, high-contrast features of a GLB as their own filaments (Params.texture_details). */
+  private setTextureDetails(d: number): void {
+    const p = this.host.params();
+    if (d === p.texture_details) { this.render(); return; }
+    this.recut(() => { p.texture_details = d; });
+  }
+
+  /** Apply a change to how a GLB's colours are cut into filaments: palette edits and paint steps go. */
+  private recut(change: () => void): void {
+    const p = this.host.params();
     if (p.paint?.length) this.host.toast("Paint steps cleared: the filaments were re-cut from the file's colours.");
-    p.texture_colours = next;
+    change();
     p.colours = null;
     p.paint = null;
     this.filament = 1;
@@ -107,6 +122,7 @@ export class ColorizePanel {
     p.paint = null;
     p.colours = null;
     p.texture_colours = null;
+    p.texture_details = 0;
     this.filament = 1;
     this.regions = false;
     this.setPainting(false);
@@ -127,15 +143,19 @@ export class ColorizePanel {
       // "auto" is the engine's best-value count (★) when the cost table has a jump, else the file's palette.
       $("texColVal").textContent = p.texture_colours === null ? `${n} (auto${n === pick ? " ★" : ""})` : String(n);
       $("texColAuto").setAttribute("aria-pressed", String(p.texture_colours === null));
+      $<HTMLSelectElement>("texDetails").value = String(p.texture_details);
+      if (tex.details) $("texColVal").textContent += ` + ${tex.details} detail${tex.details > 1 ? "s" : ""}`;
       // What each palette size costs in filament changes (estimated); tap one to use it.
+      // With details on, each row is that count plus the detail filaments ("2+1").
       const rows = toolchange?.by_count ?? [];
+      const plus = tex.details ? `+${tex.details}` : "";
       $("texCost").replaceChildren(...rows.map((r) => {
         const b = document.createElement("button");
         b.setAttribute("aria-current", String(r.count === n));
-        b.title = `${r.count} filament${r.count === 1 ? "" : "s"}: about ${r.changes} filament changes, ` +
+        b.title = `${r.count}${plus} filament${r.count === 1 && !plus ? "" : "s"}: about ${r.changes} filament changes, ` +
           `${formatDuration(r.minutes * 60)} and ${r.purge_g} g of purge on top of the print`;
         const extra = r.minutes > 0 ? ` · +${formatDuration(r.minutes * 60)}` : "";
-        b.innerHTML = `<b>${r.count}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}` +
+        b.innerHTML = `<b>${r.count}${plus}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}` +
           (r.count === pick ? " ★" : "");
         if (r.count === pick) b.title += ". ★ Best value: the next colour would add many more filament changes.";
         b.addEventListener("click", () => this.setTextureColours(r.count));
@@ -186,10 +206,11 @@ export class ColorizePanel {
       if (slot) {
         const dot = document.createElement("span");
         dot.className = `slot-dot${slot.colour ? "" : " none"}`;
-        if (slot.colour) dot.style.background = slot.colour;
+        if (slot.colour) { dot.style.background = slot.colour; dot.style.color = textOn(slot.colour); }
         dot.textContent = slot.label;
         b.append(dot);
-        b.title += ` · prints from ${slot.label}`;
+        b.title += slot.label === "?" ? " · no loaded spool is close"
+          : slot.label === "+" ? " · prints from a new slot (Bambu adds it on import)" : ` · prints from ${slot.label}`;
         b.setAttribute("aria-label", b.title);
       }
     } else b.textContent = "⌫";

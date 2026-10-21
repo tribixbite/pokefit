@@ -90,7 +90,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
 | `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`. Weights listed in its module doc. |
-| `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`). Module doc explains the algorithm. |
+| `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`, plus `texture_details` high-contrast detail filaments). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
 | `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), `apply_paint`. |
 | `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball, max-scale fit (Nelder–Mead with restarts), washer-seat shell. |

@@ -88,7 +88,7 @@ def cmd_fit(a: argparse.Namespace) -> int:
     params = Params(ball_scale=a.ball, ball_diameter=a.diameter, washer=a.washer, clearance=a.clearance,
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
                     rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
-                    texture_colours=a.texture_colours, bend=_bend(a.bend), flat_base=a.flat_base,
+                    texture_colours=a.texture_colours, texture_details=a.details, bend=_bend(a.bend), flat_base=a.flat_base,
                     flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth)
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.washers)
@@ -179,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="GLB/glTF: reduce the file's colours (texture, vertex colours) to N filaments "
                         "(default: the best value, the count before an added colour costs many more filament "
                              "changes; else as many as are clearly distinct, up to 8)")
+    f.add_argument("--details", type=int, default=0, choices=[0, 1, 2, 3],
+                   help="GLB/glTF: keep up to N small, high-contrast features (eyes, a mouth) as their own "
+                        "filaments on top of --colours, instead of merging them into a big colour")
     f.add_argument("--bend", default="auto", help="bend legs/tail lying out past the washer up along the sphere: "
                                                   "auto (default), off, or a strength 0..1")
     f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the washer's; 0 = off)")

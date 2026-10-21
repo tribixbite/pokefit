@@ -46,7 +46,7 @@ function swatchEl(colour: string | null, text = ""): HTMLSpanElement {
 
 /** "ΔE 12" with its level, or "new" for a slot Bambu adds on import. */
 function matchText(c: SlotChoice, figure: string): { text: string; level: MatchLevel | "new" } {
-  if (!c.colour) return { text: "new slot", level: "new" };
+  if (!c.colour) return { text: c.label === "No spool" ? "not loaded" : "new slot", level: "new" };
   const de = deltaE(c.colour, figure);
   return { text: de < 1 ? "same colour" : `ΔE ${de.toFixed(0)}`, level: matchLevel(de) };
 }
