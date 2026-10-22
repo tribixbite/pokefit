@@ -14,7 +14,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -274,7 +274,8 @@ class Session:
 
     def auto_texture_count(self, params: Params) -> int | None:
         """Automatic filament count of a glTF: the best value of the colour-change cost table at the largest
-        size that fits (`toolchange.best_value_count`: the count before the biggest jump in filament changes),
+        size that fits (`toolchange.best_value_count`: the count before the biggest jump in filament changes, capped
+        at AUTO_MAX_MIN minutes of colour changes),
         so "auto" trades detail for hours of print time only where a colour is expensive. None (the file's
         own palette, by colour distance) when no added colour is a jump, or no settings / fit are known.
         At the fit limit rather than the chosen size, so resizing the figure does not change its palette."""
@@ -559,7 +560,7 @@ def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, wash
     best = None
     prev_fail = None
     s = s_fit
-    while s >= max(0.05, MIN_SCALE_FOR_MAGNETS * s_fit):
+    while s >= MIN_SCALE_FOR_MAGNETS * s_fit:      # (no absolute floor: generated GLBs fit at ~4 %)
         pk, ch, off = _place(session, params, cavity, washer, s, relaxed)
         if pk:
             best = (s, pk, ch, off)
@@ -611,8 +612,13 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
     # and show as many as do fit.
     probe = params.figure_scale or s_fit
     free_pk, free_ch = choose_pockets(_pocket_map(session, params, probe), spec, n)
-    if len(free_pk) < n:
+    if not free_pk:
         return probe, s_fit, free_pk, free_ch, fit_offset(probe)
+    if len(free_pk) < n:
+        # Fewer fit than asked: place those like a full set, on the steel ring (a lone pocket placed freely sat
+        # on a Pikachu's centre, over the washer's hole), keeping the "only room for k" warning.
+        scale, top, pk, ch, off = _solve(session, replace(params, magnets=len(free_pk)), cavity, washer)
+        return scale, top, pk, free_ch + [c for c in ch if c.id != "pockets:feet"], off
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
         key = (session._key(params), session.ball_scale(params), washer.key, params.clearance, spec, n, relaxed)
@@ -701,7 +707,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                                 "unit_height": hp.height, "unit_extents": _extents(unit)}
     if scale <= 0:
         checks.append(Check("fit", "Fits in the ball", "fail",
-                            "Does not fit even at 5 % — check the orientation (z up) and the file's units."))
+                            "Does not fit even when very small — check the orientation (z up) and the file's units."))
         rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict, [],
                      [c.to_dict() for c in checks], "fail", [], t)
         return rep, unit

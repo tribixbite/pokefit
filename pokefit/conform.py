@@ -303,9 +303,12 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
     blocks = field.z1[:cy * b, :cx * b].reshape(cy, b, cx, b)
     zmin = blocks.min(axis=(1, 3))
     under = np.isfinite(blocks).all(axis=(1, 3))
-    # The top reaches the HIGHEST underside point of its cell (+ overlap), so no hairline gap is left
-    # where the underside slopes, but stays below the top of that first solid span.
-    zmax = np.where(under, np.where(np.isfinite(blocks), blocks, -np.inf).max(axis=(1, 3)), np.inf)
+    # The top reaches the HIGHEST underside point of its cell (+ overlap), so no gap is left where the
+    # underside slopes (a Pikachu's feet: 0.3-1 mm gaps when capped two cells above the lowest), but stays
+    # below the top of that first solid span. Points of the cell more than `max_gap` above its lowest are not
+    # underside the base fills (a cell on the footprint's edge that "sees" the chin far up).
+    low = np.isfinite(blocks) & (blocks <= zmin[:, None, :, None] + max_gap)
+    zmax = np.where(under, np.where(low, blocks, -np.inf).max(axis=(1, 3)), np.inf)
     span_top = field.z2[:cy * b, :cx * b].reshape(cy, b, cx, b).min(axis=(1, 3))
     step = field.step * b
     xs = field.x0 + (np.arange(cx) * b + (b - 1) / 2) * field.step
@@ -323,14 +326,11 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
     mask = np.isin(labels, list(touching))
     if not (mask & (zmin > overlap * 0.25)).any():
         return None                         # nothing to fill: the figure already sits flat here
-    # Highest point, but never more than a steep slope (2 cells) above the lowest: a cell on the edge
-    # of the footprint can "see" something far up (the chin), which would raise a spike to it.
-    reach = np.minimum(zmax, zmin + 2 * step)
-    top = np.where(mask, np.minimum(reach + overlap, np.maximum(span_top - overlap, reach)), np.inf)
-    # Corner (i, j) is shared by cells (i-1..i, j-1..j); its height is the lowest of theirs (a gap of
-    # at most the slope across one cell; the overlap covers it).
-    pad = np.pad(top, 1, constant_values=np.inf)
-    corner = np.minimum.reduce([pad[:-1, :-1], pad[:-1, 1:], pad[1:, :-1], pad[1:, 1:]])
+    top = np.where(mask, np.minimum(zmax + overlap, np.maximum(span_top - overlap, zmax)), -np.inf)
+    # Corner (i, j) is shared by cells (i-1..i, j-1..j); its height is the highest of the filled ones, so the
+    # top meets the underside across every cell (it may reach further into the figure: the slicer unions it).
+    pad = np.pad(top, 1, constant_values=-np.inf)
+    corner = np.maximum.reduce([pad[:-1, :-1], pad[:-1, 1:], pad[1:, :-1], pad[1:, 1:]])
     used = np.isfinite(corner)
     idx = -np.ones(corner.shape, np.int64)
     idx[used] = np.arange(int(used.sum()))

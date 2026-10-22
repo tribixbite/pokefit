@@ -26,6 +26,7 @@ from .ball import Cavity
 
 N_SLABS = 200
 HINT_SPAN = 0.15      # max_scale(hint=...): bracket searched around the hint first
+MIN_SCALE = 0.05      # max_scale: smallest scale tried, as a share of the height-limited scale (or of 1)
 
 
 @dataclass
@@ -206,7 +207,8 @@ def _nelder_mead_restarts(f, x0: np.ndarray, step: float = 1.0, max_restarts: in
 def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | None = None,
               annulus: tuple[float, float] | None = None, tol: float = 1e-3,
               hint: float | None = None) -> FitResult | None:
-    """Largest figure scale that fits (bisection to `tol` relative). None if even 5 % does not fit.
+    """Largest figure scale that fits (bisection to `tol` relative). None if even the smallest scale tried
+    (MIN_SCALE of the height-limited scale, or of 1) does not fit.
 
     `hint`: a scale the answer is probably near (a previous fit of a slightly changed figure); when it
     brackets the answer within ±HINT_SPAN the bisection starts there (about half the steps).
@@ -216,11 +218,13 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
     is bisected below that scale: shrinking the figure only brings the pockets
     closer, and two pockets any distance apart up to the ring's diameter can
     both sit on it, so the combined test is monotone in practice. If not even
-    5 % works, the fit-only result is returned and the caller reports it.
+    that smallest scale works, the fit-only result is returned and the caller reports it.
     """
     room = cavity.top_z - cavity.floor_z
     hi = room / points.height
-    lo = 0.05 if 0.05 < hi else hi * 0.5
+    # The smallest scale tried: 5 % of the size the height allows, or of the file's own size when that is
+    # smaller (a file in metres read as mm, like generated GLBs ~700 units tall, fits at ~4 %).
+    floor = lo = MIN_SCALE * min(1.0, hi)
 
     def ok(s: float, with_annulus: bool = False) -> bool:
         if cavity.floor_z + s * points.height > cavity.top_z + 1e-9:
@@ -245,8 +249,8 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
         else:
             hi = mid
     if pockets_unit is not None and annulus is not None and not ok(lo, with_annulus=True):
-        if ok(0.05, with_annulus=True):
-            a, b = 0.05, lo
+        if ok(floor, with_annulus=True):
+            a, b = floor, lo
             while (b - a) / a > tol:
                 mid = (a + b) / 2
                 if ok(mid, with_annulus=True):

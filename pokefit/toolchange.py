@@ -41,20 +41,30 @@ PURGE_G_PER_MM3 = 0.00133   # grams per mm³ of flush volume (1.217 x the matrix
 SWITCH_G = 0.092            # grams per nozzle switch (prime tower)
 EXHAUSTIVE = 12
 BEST_JUMP = 50              # best_value_count: an added colour costing this many more changes is a jump
+AUTO_MAX_MIN = 120          # best_value_count: auto never adds more than this many minutes of colour changes
 
 
-def best_value_count(rows: list[dict], min_jump: int = BEST_JUMP) -> int | None:
+def best_value_count(rows: list[dict], min_jump: int = BEST_JUMP, max_minutes: float = AUTO_MAX_MIN) -> int | None:
     """The palette size just before the biggest jump in filament changes (the knee of the cost curve), from
-    rows {count, changes} in count order; None when no added colour costs at least `min_jump` more changes.
+    rows {count, changes[, minutes]} in count order; None when no added colour costs at least `min_jump` more
+    changes. Capped: when that size (or, without a jump, the largest) adds more than `max_minutes` of colour
+    changes, the largest size within `max_minutes` (at least 2).
 
     Manex Squirtle: 0, 0, 29, 159, 180, 287, 287 changes for 1-7 colours -> 3 (blue / cream / brown, 2.35 h;
-    the 4th colour, the black eyes, adds 130 changes and ~3 h)."""
+    the 4th colour, the black eyes, adds 130 changes and ~3 h). A photo Charmander rises steadily to 8 colours
+    (+394 min) and jumps only at 9: the cap gives 3 (orange / yellow / eyes, +90 min)."""
     best: int | None = None
     jump = min_jump - 1
     for prev, cur in zip(rows, rows[1:]):
         d = int(cur["changes"]) - int(prev["changes"])
         if d > jump:
             jump, best = d, int(prev["count"])
+    if not rows or "minutes" not in rows[0]:
+        return best
+    minutes = {int(r["count"]): float(r["minutes"]) for r in rows}
+    if minutes.get(best if best is not None else int(rows[-1]["count"]), 0.0) > max_minutes:
+        within = [c for c, m in minutes.items() if m <= max_minutes]
+        best = max([2, *within])
     return best
 
 

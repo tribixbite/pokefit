@@ -157,7 +157,7 @@ export class ColorizePanel {
         const extra = r.minutes > 0 ? ` · +${formatDuration(r.minutes * 60)}` : "";
         b.innerHTML = `<b>${r.count}${plus}</b> · ${r.changes ? `${r.changes} changes` : "no changes"}${extra}` +
           (r.count === pick ? " ★" : "");
-        if (r.count === pick) b.title += ". ★ Best value: the next colour would add many more filament changes.";
+        if (r.count === pick) b.title += ". ★ Best value: the next colour would add many more filament changes (auto adds at most 2 h of them).";
         b.addEventListener("click", () => this.setTextureColours(r.count));
         return b;
       }));

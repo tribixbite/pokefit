@@ -31,7 +31,8 @@
   kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
   materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament
   colours (shading ignored, a chosen 1–16, or automatic: the best-value count, the one before an added colour
-  would cost many more filament changes, else as many as the file clearly has, up to 8), cleared of specks, and
+  would cost many more filament changes, else as many as the file clearly has, up to 8; never more than 2 h of
+  colour changes), cleared of specks, and
   written as split Bambu paint on one solid part, so it slices multi-colour with crisp edges. Fewer filaments =
   less purge waste and print time; each palette size's estimated cost is shown. "Keep details" (+1 to +3
   filaments) keeps small features that contrast most with the colour they would merge into (black pupils on a

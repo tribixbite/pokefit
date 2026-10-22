@@ -53,6 +53,16 @@ def test_too_big_returns_none() -> None:
     assert max_scale(prepare_points(huge.vertices), cav) is None
 
 
+def test_large_units_still_fit() -> None:
+    # A generated GLB in metres read as mm, wider than tall: its height alone would allow 6 %, so the search
+    # used to start at an absolute 5 %, where it is far too wide for the ball ("does not fit even at 5 %").
+    cav = Cavity(plain_ball(30.0), 1.0, THIN, clearance=0.0)
+    wide = trimesh.creation.box([1000.0, 1000.0, 500.0])
+    wide.apply_translation([0, 0, 250.0])
+    res = max_scale(prepare_points(wide.vertices), cav)
+    assert res is not None and 0.01 < res.max_scale < 0.05
+
+
 def test_annulus_forces_offset() -> None:
     cav = Cavity(plain_ball(60.0), 1.0, THIN, clearance=1.0)
     figure = trimesh.creation.box([12, 4, 4])

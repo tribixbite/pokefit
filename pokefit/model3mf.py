@@ -443,6 +443,7 @@ def write_project(src: Project, name: str, extruder: int, parts: list[Part], out
     settings = settings if settings is not None else src.settings
     if positions is None:
         positions = [plate_centre(settings)]
+        settings = front_wipe_tower(settings)
     obj_id = len(parts) + 1
 
     # Part meshes: one sub-model file, ids 1..k; the top-level object composes them.
@@ -517,6 +518,23 @@ def plate_centre(settings: dict | None) -> tuple[float, float]:
         return float(pts[:, 0].mean()), float(pts[:, 1].mean())
     except (TypeError, KeyError, ValueError):
         return 128.0, 128.0
+
+
+# One figure at the plate centre: plate 1's prime tower moves to the front of the bed (y TOWER_FRONT_Y), where
+# it can grow as deep as it needs. The reference project keeps it at y 200 of a 256 mm bed, which leaves 56 mm:
+# 9 filaments outgrew that and Bambu refused the slice ("G-code outside of the printable area", code -104).
+# x stays (40 in the reference): on the X2D the second nozzle cannot reach x < 20.5 (`extruder_printable_area`;
+# a tower at x 15 failed with code -102).
+TOWER_FRONT_Y = 15.0
+
+
+def front_wipe_tower(settings: dict | None) -> dict | None:
+    """`settings` with plate 1's prime tower (`wipe_tower_y`, one entry per plate) at the front of the bed."""
+    if not settings or not isinstance(settings.get("wipe_tower_y"), list) or not settings["wipe_tower_y"]:
+        return settings
+    out = dict(settings)
+    out["wipe_tower_y"] = [f"{TOWER_FRONT_Y:g}", *settings["wipe_tower_y"][1:]]
+    return out
 
 
 def plate_size(settings: dict | None) -> tuple[float, float]:

@@ -83,6 +83,26 @@ def test_multiple_instances(tmp_path: Path) -> None:
     assert cfg.count("<model_instance>") == 3
 
 
+def test_single_figure_moves_plate_1_prime_tower_to_the_front(tmp_path: Path) -> None:
+    # 9 filaments outgrew the reference's tower spot (y 200 of 256 mm): one centred figure gets it at the front.
+    box = trimesh.creation.box([10, 10, 10])
+    proj = read_project(write_inline_3mf(tmp_path / "b.3mf", box, np.eye(4)))
+    st = {"printable_area": ["0x0", "256x0", "256x256", "0x256"],
+          "wipe_tower_x": ["40", "40", "165"], "wipe_tower_y": ["200", "200", "202.644"]}
+
+    def tower(out: Path) -> tuple[list[str], list[str]]:
+        with zipfile.ZipFile(out) as z:
+            ps = json.loads(z.read("Metadata/project_settings.config"))
+        return ps["wipe_tower_x"], ps["wipe_tower_y"]
+
+    one = write_project(proj, "box", 1, proj.default_object().parts, tmp_path / "one.3mf", settings=st)
+    assert tower(one) == (["40", "40", "165"], ["15", "200", "202.644"])     # x kept: nozzle 2 starts at 20.5
+    assert st["wipe_tower_y"][0] == "200"                       # the caller's settings are not changed
+    grid = write_project(proj, "box", 1, proj.default_object().parts, tmp_path / "grid.3mf",
+                         positions=[(60, 128), (196, 128)], settings=st)
+    assert tower(grid) == (st["wipe_tower_x"], st["wipe_tower_y"])
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not REAL_DRAGON.exists(), reason="real dragon 3MF not present")
 def test_real_dragon() -> None:

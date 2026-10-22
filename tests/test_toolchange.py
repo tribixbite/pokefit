@@ -94,6 +94,22 @@ def test_best_value_is_the_count_before_the_biggest_jump() -> None:
     assert best_value_count([]) is None
 
 
+def test_best_value_is_capped_in_minutes() -> None:
+    # A photo Charmander: changes rise steadily to 8 colours and jump at 9; 8 colours would add 394 minutes.
+    rows = [{"count": i + 1, "changes": c, "minutes": m} for i, (c, m) in enumerate(
+        [(0, 0), (0, 17), (23, 90), (47, 132), (81, 196), (100, 229), (176, 361), (195, 394), (397, 751)])]
+    assert best_value_count(rows) == 3
+    assert best_value_count(rows, max_minutes=1000) == 8
+    # a knee within the cap is kept; no jump and a cheap largest size stays None (the file's own palette)
+    cheap = [{"count": 1, "changes": 0, "minutes": 0}, {"count": 2, "changes": 0, "minutes": 46},
+             {"count": 3, "changes": 120, "minutes": 255}]
+    assert best_value_count(cheap) == 2
+    assert best_value_count([{"count": 1, "changes": 0, "minutes": 0}, {"count": 2, "changes": 10, "minutes": 30}]) is None
+    # never below 2 colours, even when the second costs more than the cap
+    assert best_value_count([{"count": 1, "changes": 0, "minutes": 0}, {"count": 2, "changes": 200, "minutes": 300},
+                             {"count": 3, "changes": 210, "minutes": 320}], min_jump=500) == 2
+
+
 def test_settings_without_nozzles_mean_one() -> None:
     assert nozzle_count({}) == 1 and nozzle_count({"nozzle_diameter": "0.4"}) == 1
     use = np.ones((5, 2), bool)

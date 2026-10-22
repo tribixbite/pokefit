@@ -242,7 +242,9 @@ def _first_spans(cell: np.ndarray, z: np.ndarray, sign: np.ndarray, n: int) -> t
     z2 = np.full(n, -np.inf)
     if not len(cell):
         return z1, z2
-    order = np.lexsort((z, cell))
+    # Entries before exits at the same height: two parts sharing a face (a flat base under a figure's flat bottom)
+    # cross at one z, and an exit first would close the span at once (0 mm of material).
+    order = np.lexsort((-sign, z, cell))
     cell, z, sign = cell[order], z[order], sign[order]
     starts = np.r_[0, np.nonzero(np.diff(cell))[0] + 1]
     lengths = np.diff(np.r_[starts, len(cell)])
