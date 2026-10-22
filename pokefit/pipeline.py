@@ -28,7 +28,9 @@ from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
 from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
-from .colorize import PaintOp, TopologyCache, apply_paint, centroid_trees, pick_face, region_colours, region_faces
+from .strengthen import StrengthenInfo, strengthen
+from .colorize import (MAX_PATH, PaintOp, PaintState, TopologyCache, apply_paint, centroid_trees, pick_face,
+                       region_colours, region_faces)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
@@ -75,6 +77,9 @@ class Params:
     washer: str = DEFAULT_WASHER
     clearance: float = 1.0
     figure_scale: float | None = None            # None = largest that fits
+    # A height in mm to print at (when figure_scale is None): kept across files by the UI, so it is a height, not
+    # a scale. Capped at the largest that fits (with the magnets on the steel), with a note.
+    figure_height: float | None = None
     rotate_x: float = 0.0                        # degrees, any angle; applied X, then Y, then Z
     rotate_y: float = 0.0
     rotate_z: float = 0.0
@@ -111,6 +116,13 @@ class Params:
     flat_base: float | None = None
     flat_depth: float = DEFAULT_MAX_DEPTH
     flat_fill: float = DEFAULT_FILL
+    # The flat base's fill over a circle the user places instead of round the washer: {x, y, d} in the figure
+    # frame at scale 1 (file mm, like the figure itself, so it stays put under the figure at any size). Inside
+    # it every gap under the figure up to `flat_fill` is filled, connected or not (None = automatic).
+    fill_circle: dict[str, float] | None = None
+    # Strengthen thin parts (strengthen.py): thin features get this minimum thickness in mm where they join the
+    # figure, tapering toward their tips (0 = off). Measured at `figure_height` if set, else the largest size.
+    strengthen: float = 0.0
     # How far painted colours reach into the figure, in mm (Bambu `mmu_segmented_region_max_width`; deeper is
     # the object's own filament). None = the project's value (0 there = unlimited: paint fills inward until it
     # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
@@ -146,6 +158,20 @@ class Params:
             raise ValueError("flat_depth must be 0..5 mm")
         if not 0 <= float(self.flat_fill) <= 10:
             raise ValueError("flat_fill must be 0..10 mm")
+        self.strengthen = float(self.strengthen)
+        if not 0 <= self.strengthen <= 3:
+            raise ValueError("strengthen must be 0..3 mm (0 = off)")
+        if self.figure_height is not None:
+            self.figure_height = float(self.figure_height)
+            if not 1 <= self.figure_height <= 1000:
+                raise ValueError("figure_height must be 1..1000 mm (or null for the largest that fits)")
+        if self.fill_circle is not None:
+            try:
+                self.fill_circle = {k: float(self.fill_circle[k]) for k in ("x", "y", "d")}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("fill_circle must be {x, y, d} in mm") from exc
+            if not self.fill_circle["d"] > 0 or not all(np.isfinite(v) for v in self.fill_circle.values()):
+                raise ValueError("fill_circle needs a diameter > 0")
         if self.paint_depth is not None:
             self.paint_depth = float(self.paint_depth)
             if not 0 <= self.paint_depth <= 10:
@@ -181,6 +207,7 @@ class Session:
     _frames: dict[tuple, list[Part]] = field(default_factory=dict)           # orientation + conform -> parts
     _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
     _conform: dict[tuple, ConformInfo] = field(default_factory=dict)
+    _strength: dict[tuple, StrengthenInfo] = field(default_factory=dict)       # same key -> strengthen.py result
     _fills: dict[tuple, float] = field(default_factory=dict)                 # `_auto_fill` decisions
     _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
     _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
@@ -214,19 +241,27 @@ class Session:
         return self._spec_key(params, self.conform_spec(params))
 
     def _spec_key(self, params: Params, spec: ConformSpec | None) -> tuple:
+        strong = (round(params.strengthen, 3), params.figure_height if params.strengthen else None,
+                  round(self.ball_scale(params), 6) if params.strengthen else None,
+                  params.clearance if params.strengthen else None)
         if spec is None:
-            return self._orientation(params)
+            return self._orientation(params) + strong
         return self._orientation(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
-                                             round(self.ball_scale(params), 6), params.clearance)
+                                             spec.fill_circle, round(self.ball_scale(params), 6), params.clearance
+                                             ) + strong
 
     def conform_spec(self, params: Params) -> ConformSpec | None:
         """The conform step's settings, or None when bend and flat base are both off. The default flat-base
         fill is raised (`AUTO_FILLS`) when no magnet pocket fits under the figure with it (`_auto_fill`)."""
         flat = get_washer(params.washer).od if params.flat_base is None else float(params.flat_base)
         bend = None if params.bend is None else float(params.bend)
-        if bend == 0 and (flat <= 0 or (params.flat_depth <= 0 and params.flat_fill <= 0)):
+        circle = params.fill_circle
+        pressed = flat > 0 and params.flat_depth > 0
+        filled = params.flat_fill > 0 and (flat > 0 or circle is not None)
+        if bend == 0 and not pressed and not filled:
             return None
-        spec = ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill))
+        spec = ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill),
+                           fill_circle=(circle["x"], circle["y"], circle["d"]) if circle else None)
         if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None:
             spec = replace(spec, fill=self._auto_fill(params, spec))
         return spec
@@ -295,9 +330,29 @@ class Session:
                 cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
                 # Vertices move, faces keep their order: paint and texture colour carry over.
                 parts, self._conform[key] = conform(parts, cavity, spec)
+            if params.strengthen > 0:
+                parts = self._strengthened(params, parts, key)
             self._frames[key] = parts
             self._points[key] = prepare_points(np.vstack([p.vertices for p in parts]))
         return self._frames[key]
+
+    def _strengthened(self, params: Params, parts: list[Part], key: tuple) -> list[Part]:
+        """`parts` with thin features thickened (strengthen.py), measured at the height asked for or else the
+        largest that fits (no magnets); the conform step's flat base is solid already and is left alone."""
+        cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+        v = np.vstack([p.vertices for p in parts])
+        free = max_scale(prepare_points(v), cavity)
+        s = free.max_scale if free is not None else 0.0
+        height = float(np.ptp(v[:, 2]))
+        if params.figure_height and height > 0:
+            s = min(s, params.figure_height / height) if s > 0 else params.figure_height / height
+        figure = [p for p in parts if p.name != FILL_NAME]
+        done, self._strength[key] = strengthen(figure, s, params.strengthen)
+        return [*done, *[p for p in parts if p.name == FILL_NAME]]
+
+    def strengthen_info(self, params: Params) -> StrengthenInfo | None:
+        self.unit_parts(params)
+        return self._strength.get(self._key(params))
 
     def colours(self, params: Params) -> list[str]:
         """Filament colours (index 0 = filament 1): the user's palette, else the file's (for a
@@ -643,6 +698,17 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
            ) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
     """(scale, max scale, pockets in the figure frame, pocket checks, XY offset)."""
     hp = session.points(params)
+    if params.figure_scale is None and params.figure_height is not None:
+        # A height asked for: that size, unless it is larger than the largest that fits (with the magnets).
+        auto = _solve(session, replace(params, figure_height=None), cavity, washer)
+        want = params.figure_height / hp.height
+        if auto[0] <= 0 or want < auto[0] * (1 - 1e-4):
+            return _solve(session, replace(params, figure_height=None, figure_scale=want), cavity, washer)
+        note = Check("size:height", "Size", "info",
+                     f"{params.figure_height:g} mm was asked for; the largest that fits"
+                     f"{' with the magnets on the steel' if params.magnets else ''} is {auto[0] * hp.height:.1f} mm, "
+                     "so it prints at that.")
+        return auto[0], auto[1], auto[2], [*auto[3], note], auto[4]
     spec, n = params.spec, params.magnets
     free = max_scale(hp, cavity)
     if free is None:
@@ -725,7 +791,8 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
         cav = Cavity(session.ball, session.ball_scale(params), w, params.clearance)
         # The same figure shape for every washer (flat disc pinned to the current one's).
         spec = session.conform_spec(params)
-        p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "pockets": None,
+        p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "figure_height": None,
+                              "pockets": None,
                               "flat_base": spec.flat_diameter if spec else params.flat_base})
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
         steel = "off"
@@ -803,6 +870,15 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
         conform_check = _conform_check(info, raised)
         if conform_check:
             checks.append(conform_check)
+    sinfo = session.strengthen_info(params)
+    if sinfo is not None:
+        fit_dict["strengthen"] = sinfo.to_dict()
+        checks.append(Check("strengthen", "Thin parts strengthened", "info",
+                            f"{sinfo.thin_share:.1%} of the surface was thinner than {sinfo.target_mm:g} mm at "
+                            f"{sinfo.scale * hp.height:.1f} mm tall: thickened at the joins, tapering to the tips "
+                            f"(up to {sinfo.max_push_mm:.2f} mm out)." if sinfo.thin_share > 0 else
+                            f"Nothing was thinner than {sinfo.target_mm:g} mm at {sinfo.scale * hp.height:.1f} mm tall.",
+                            round(sinfo.thin_share, 4)))
 
     t2 = time.time()
     meshes = [p.mesh() for p in final]
@@ -1266,29 +1342,61 @@ def preview_faces(session: Session, params: Params, regions: tuple[str, float] |
             "parts": [base64.b64encode(np.asarray(i, np.uint8).tobytes()).decode("ascii") for i in idx]}
 
 
-def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
-         mode: str = "part", angle: float = 15.0, radius: float = 0.0) -> dict[str, Any]:
-    """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
-
-    The answer's part/face go into a colorize paint operation, which then
-    paints the same region on every later analysis and export.
-    """
-    PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius})
-    parts = session.unit_parts(params)
+def _pick_trees_for(session: Session, params: Params) -> list[Any]:
     key = session._key(params)
     if key not in session._pick_trees:
         session._pick_trees.clear()                 # one orientation at a time: trees are large
-        session._pick_trees[key] = centroid_trees(parts)
-    pi, fi, dist = pick_face(parts, np.asarray(point, float), None if normal is None else np.asarray(normal, float),
-                             trees=session._pick_trees[key])
+        session._pick_trees[key] = centroid_trees(session.unit_parts(params))
+    return session._pick_trees[key]
+
+
+def prepare_paint(session: Session, params: Params, mode: str = "part", angle: float = 15.0) -> dict[str, Any]:
+    """Build what taps need (pick trees, edge topology, the mode's regions) before the first tap: the UI
+    calls it when painting starts, so the first tap on a big mesh answers as fast as the rest."""
+    _pick_trees_for(session, params)
+    topo = session.topology(params)
+    for i in range(len(topo)):
+        topo.labels(i, mode, angle) if mode not in ("brush", "face") else topo.part(i)
+    return {"parts": len(topo)}
+
+
+def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
+         mode: str = "part", angle: float = 15.0, radius: float = 0.0,
+         stroke: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
+
+    The answer's part/face go into a colorize paint operation, which then
+    paints the same region on every later analysis and export. `stroke` (brush
+    only): further {point, normal} samples of a drag; their triangles on the
+    same part come back as `path`. Fills are counted against the current
+    paint, so a fill that stops at a painted outline reports the faces inside it.
+    """
+    PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius})
+    if stroke and mode != "brush":
+        raise ValueError("only the brush paints strokes")
+    parts = session.unit_parts(params)
+    trees = _pick_trees_for(session, params)
+
+    def at(pt: list[float], nrm: list[float] | None) -> tuple[int, int, float]:
+        return pick_face(parts, np.asarray(pt, float)[:3], None if nrm is None else np.asarray(nrm, float)[:3],
+                         trees=trees)
+
+    pi, fi, dist = at(point, normal)
     if pi < 0:
         raise ValueError("no triangle near that point")
-    if pi >= len(session.topology(params)):
+    topo = session.topology(params)
+    if pi >= len(topo):
         raise ValueError("That is the flat base under the figure: it prints in the figure's main colour.")
-    faces = region_faces(session.topology(params), pi, fi, mode, angle, radius)
+    path: list[int] = []
+    for sample in (stroke or [])[:MAX_PATH]:
+        sp, sf, _ = at(sample["point"], sample.get("normal"))
+        if sp == pi and sf != fi and (not path or path[-1] != sf):
+            path.append(sf)
+    paint = PaintState(session.figure_parts(params)[pi]) if mode in ("part", "region") and params.paint else None
+    faces = region_faces(topo, pi, fi, mode, angle, radius, tuple(path), paint)
     tri = parts[pi].vertices[parts[pi].faces[faces]]
     area = float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum() / 2)
-    return {"part": pi, "face": fi, "distance": dist, "faces": int(len(faces)),
+    return {"part": pi, "face": fi, "distance": dist, "faces": int(len(faces)), "path": path,
             "share": round(len(faces) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2)}
 
 

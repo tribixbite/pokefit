@@ -16,8 +16,15 @@ triangles around it that its mode selects:
   * "piece": every triangle connected to it (a separate shell: loose eyes,
     a hat modelled as its own body);
   * "brush": the connected surface within `radius` mm (file units) of the
-    triangle: spots and stripes on a smooth sculpt that has no edge to follow;
+    triangle, or of any triangle on its `path` (a stroke dragged across the
+    figure): spots, stripes and outlines on a smooth sculpt that has no edge
+    to follow;
   * "face": that triangle only.
+
+"part" and "region" fills also stop where the visible colour changes (bucket
+fill): a sculpt whose eyes or belly have no crease all the way round (a
+generated or smoothed figure) gets them by outlining with a brush stroke and
+tapping inside.
 
 Filament 0 removes paint (the part's own filament prints there). The result
 is written as Bambu/Prusa per-triangle paint (`paint_color`, whole-triangle
@@ -40,6 +47,10 @@ from .model3mf import Part
 
 MODES = ("part", "region", "piece", "brush", "face")
 DEFAULT_ANGLE = 15.0        # degrees; "part" mode (Bambu's smart fill, the "region" rule, defaults to 30)
+MAX_PATH = 4000             # triangles on one brush stroke's path
+JOIN_STEPS = 8              # a stroke step up to this many brush radii long is filled in; longer ones jumped
+BOUNDED = ("part", "region")  # fills that stop where the colour changes
+_FILL_CACHE = 64            # colour-bounded fills kept per object (keyed by the paint state they saw)
 _PAINT_RE = re.compile(r'\s*paint_color="[^"]*"')
 
 
@@ -51,11 +62,13 @@ class PaintOp:
     mode: str = "part"
     angle: float = DEFAULT_ANGLE
     radius: float = 0.0       # "brush": mm in the file's units (the UI converts from print mm)
+    path: tuple[int, ...] = ()  # "brush": more triangles of the same part along a dragged stroke
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PaintOp":
         op = cls(int(d["part"]), int(d["face"]), int(d["filament"]), str(d.get("mode", "part")),
-                 float(d.get("angle", DEFAULT_ANGLE)), float(d.get("radius", 0.0)))
+                 float(d.get("angle", DEFAULT_ANGLE)), float(d.get("radius", 0.0)),
+                 tuple(int(f) for f in d.get("path") or ()))
         if op.mode not in MODES:
             raise ValueError(f"paint mode must be one of {', '.join(MODES)}, not {op.mode!r}")
         if not (0 <= op.filament <= 64):
@@ -64,10 +77,19 @@ class PaintOp:
             raise ValueError(f"angle must be in (0, 180], not {op.angle}")
         if op.mode == "brush" and not (op.radius > 0):
             raise ValueError("a brush needs a radius > 0")
+        if op.path and op.mode != "brush":
+            raise ValueError("only a brush stroke has a path")
+        if len(op.path) > MAX_PATH:
+            raise ValueError(f"a stroke has at most {MAX_PATH} points")
         return op
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        if self.path:
+            d["path"] = list(self.path)
+        else:
+            del d["path"]
+        return d
 
 
 @dataclass
@@ -78,6 +100,7 @@ class Topology:
     angles: np.ndarray         # (k,) degrees between the two face normals (0 = flat)
     convex: np.ndarray         # (k,) the edge bends outward (a ridge), not into a valley
     centroids: np.ndarray      # (n, 3) triangle centres, file mm
+    _tree: Any = None          # KD-tree of `centroids`, built by the first brush
 
     def labels(self, mode: str, angle: float) -> np.ndarray:
         """Region id per triangle for a seed-independent mode (all but "brush")."""
@@ -91,12 +114,39 @@ class Topology:
             keep = self.angles < angle
         return self._components(keep)
 
-    def brush(self, face: int, radius: float) -> np.ndarray:
-        """Faces within `radius` of `face`'s centre and connected to it inside that ball."""
-        near = np.linalg.norm(self.centroids - self.centroids[face], axis=1) <= radius
-        near[face] = True
+    def brush(self, seeds: list[int], radius: float) -> np.ndarray:
+        """Faces within `radius` of a seed's centre and connected to a seed inside those balls: one dab, or
+        a stroke (a dab per point along it; a thin ridge between two dabs is not bridged)."""
+        if self._tree is None:
+            from scipy.spatial import cKDTree
+
+            self._tree = cKDTree(self.centroids)
+        seed = np.asarray(seeds, np.int64)
+        centres = self.centroids[seed]
+        if len(seed) > 1:
+            # Join consecutive samples (a fast drag leaves gaps a fill would leak through): points along each
+            # step at most half a radius apart. A step longer than JOIN_STEPS radii jumped to another surface
+            # (the drag crossed a silhouette) and is not bridged.
+            a, b = centres[:-1], centres[1:]
+            n = np.ceil(np.linalg.norm(b - a, axis=1) / (radius * 0.5)).astype(np.int64)
+            n[n > JOIN_STEPS * 2] = 1
+            k = np.repeat(np.arange(len(a)), n.astype(np.intp))
+            t = (np.arange(len(k)) - np.repeat(np.cumsum(n) - n, n.astype(np.intp))) / n[k]
+            centres = np.vstack([a[k] + (b[k] - a[k]) * t[:, None], centres[-1:]])
+        near = np.zeros(self.n_faces, bool)
+        for idx in self._tree.query_ball_point(centres, r=radius):
+            near[idx] = True
+        near[seed] = True
         lab = self._components(near[self.pairs[:, 0]] & near[self.pairs[:, 1]])
-        return np.nonzero(lab == lab[face])[0]
+        return np.nonzero(near & np.isin(lab, lab[seed]))[0]
+
+    def bounded(self, region: np.ndarray, face: int, colour: np.ndarray) -> np.ndarray:
+        """The part of `region` (a fill's faces) connected to `face` through faces of `face`'s colour."""
+        inside = np.zeros(self.n_faces, bool)
+        inside[region] = True
+        inside &= colour == colour[face]
+        lab = self._components(inside[self.pairs[:, 0]] & inside[self.pairs[:, 1]])
+        return np.nonzero(inside & (lab == lab[face]))[0]
 
     def _components(self, keep: np.ndarray) -> np.ndarray:
         p = self.pairs[keep]
@@ -134,22 +184,71 @@ def _with_paint(attrs: str | None, code: str | None) -> str | None:
     return rest or None
 
 
+class PaintState:
+    """One part's per-triangle attributes as an index per triangle into a list of distinct strings, so a
+    paint operation updates hundreds of thousands of triangles with a few array operations."""
+
+    def __init__(self, part: Part):
+        self.extruder = part.extruder
+        self.values: list[str | None] = [None]
+        self._ids: dict[str | None, int] = {None: 0}
+        self.state = np.zeros(len(part.faces), np.int32)
+        if part.tri_extra:
+            idx = np.fromiter(part.tri_extra.keys(), np.int64, len(part.tri_extra))
+            self.state[idx] = [self._id(v) for v in part.tri_extra.values()]
+        self._colours: np.ndarray | None = None
+
+    def _id(self, value: str | None) -> int:
+        if value not in self._ids:
+            self._ids[value] = len(self.values)
+            self.values.append(value)
+        return self._ids[value]
+
+    def paint(self, faces: np.ndarray, code: str | None) -> None:
+        """Give `faces` the paint `code` (None = remove it), keeping their other attributes."""
+        uniq, inv = np.unique(self.state[faces], return_inverse=True)
+        new = np.asarray([self._id(_with_paint(self.values[u], code)) for u in uniq.tolist()], np.int32)
+        self.state[faces] = new[inv.reshape(-1)]
+        self._colours = None
+
+    def colours(self) -> np.ndarray:
+        """The filament each triangle shows most (its dominant paint, else the part's own)."""
+        if self._colours is None:
+            from .paint import attr_paint
+
+            per_value = [self.extruder]
+            for v in self.values[1:]:
+                fp = attr_paint(v or "")
+                per_value.append(fp.majority if fp is not None and fp.majority > 0 else self.extruder)
+            self._colours = np.asarray(per_value, np.int32)[self.state]
+        return self._colours
+
+    def key(self) -> str:
+        """A digest of the per-triangle colours (what a colour-bounded fill depends on)."""
+        import hashlib
+
+        return hashlib.blake2b(self.colours().tobytes(), digest_size=16).hexdigest()
+
+    def extra(self) -> dict[int, str]:
+        """Back to `Part.tri_extra` form."""
+        idx = np.nonzero(self.state)[0]
+        vals = self.values
+        return {f: v for f, s in zip(idx.tolist(), self.state[idx].tolist()) if (v := vals[s]) is not None}
+
+
 def apply_paint(parts: list[Part], ops: list[PaintOp], topo: "TopologyCache") -> list[Part]:
     """Copies of `parts` with the paint operations applied in order (later ones win)."""
-    extras = [dict(p.tri_extra) for p in parts]
+    states: dict[int, PaintState] = {}
     for op in ops:
         if not (0 <= op.part < min(len(parts), len(topo))) or not (0 <= op.face < len(parts[op.part].faces)):
             continue                       # from another object or orientation of the file: ignore
-        faces = region_faces(topo, op.part, op.face, op.mode, op.angle, op.radius)
-        code = paint_code(op.filament) if op.filament else None
-        ex = extras[op.part]
-        for f in faces.tolist():
-            v = _with_paint(ex.get(f), code)
-            if v is None:
-                ex.pop(f, None)
-            else:
-                ex[f] = v
-    return [Part(p.name, p.extruder, p.vertices, p.faces, ex, p.subtype) for p, ex in zip(parts, extras)]
+        n = len(parts[op.part].faces)
+        path = tuple(f for f in op.path if 0 <= f < n)
+        st = states.setdefault(op.part, PaintState(parts[op.part]))
+        faces = region_faces(topo, op.part, op.face, op.mode, op.angle, op.radius, path, st)
+        st.paint(faces, paint_code(op.filament) if op.filament else None)
+    return [Part(p.name, p.extruder, p.vertices, p.faces, states[i].extra() if i in states else dict(p.tri_extra),
+                 p.subtype) for i, p in enumerate(parts)]
 
 
 class TopologyCache:
@@ -159,6 +258,7 @@ class TopologyCache:
         self._parts = parts
         self._topo: dict[int, Topology] = {}
         self._labels: dict[tuple[int, str, float], np.ndarray] = {}
+        self._fills: dict[tuple[Any, ...], np.ndarray] = {}
 
     def __len__(self) -> int:
         """Parts it covers: the file's own (not the conform step's flat base, which taps cannot paint)."""
@@ -176,10 +276,29 @@ class TopologyCache:
         return self._labels[key]
 
 
+    def fill(self, i: int, face: int, mode: str, angle: float, paint: PaintState) -> np.ndarray:
+        """A "part"/"region" fill that also stops where the colour changes (see `region_faces`)."""
+        lab = self.labels(i, mode, angle)
+        region = np.nonzero(lab == lab[face])[0]
+        colour = paint.colours()
+        if (colour[region] == colour[face]).all():
+            return region                  # one colour throughout (the usual case): no extra work
+        key = (i, face, mode, round(float(angle), 3), paint.key())
+        if key not in self._fills:
+            if len(self._fills) >= _FILL_CACHE:
+                self._fills.pop(next(iter(self._fills)))
+            self._fills[key] = self.part(i).bounded(region, face, colour)
+        return self._fills[key]
+
+
 def region_faces(topo: TopologyCache, part: int, face: int, mode: str, angle: float,
-                 radius: float = 0.0) -> np.ndarray:
+                 radius: float = 0.0, path: tuple[int, ...] = (), paint: PaintState | None = None) -> np.ndarray:
+    """The faces a paint operation covers. With `paint` (the part's current paint), "part" and "region"
+    fills stop where the visible colour changes, like a bucket fill."""
     if mode == "brush":
-        return topo.part(part).brush(face, radius)
+        return topo.part(part).brush([face, *path], radius)
+    if paint is not None and mode in BOUNDED:
+        return topo.fill(part, face, mode, angle, paint)
     lab = topo.labels(part, mode, angle)
     return np.nonzero(lab == lab[face])[0]
 

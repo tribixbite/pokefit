@@ -20,6 +20,19 @@ export interface FigureHit {
   normal: number[];
 }
 
+/** A brush stroke being drawn: its samples and the line that shows it. */
+interface Stroke {
+  id: number;
+  hits: FigureHit[];
+  line: THREE.Line;
+  last: { x: number; y: number };
+  lastAt: number;               // performance.now() of the last raycast
+}
+
+const STROKE_PX = 4;          // screen distance between stroke samples (the engine joins the gaps)
+const STROKE_MS = 12;         // and time between them
+const MAX_STROKE = 2000;      // samples per stroke (the engine takes up to 4000)
+
 const STATUS_COLOUR: Record<string, number> = { fail: 0xff4d5e, warn: 0xffb347, pass: 0x4cd38a, info: 0x7aa2ff };
 
 /** Lathe around the z axis (three's LatheGeometry spins around y). */
@@ -56,6 +69,9 @@ export class Viewer {
   private ballRadius = 25;
   /** Colorize: called with a tap on the figure (figure frame, scale 1); null = taps orbit only. */
   private pickHandler: ((hit: FigureHit) => void) | null = null;
+  /** Colorize brush: called with a stroke's samples when a drag on the figure ends; null = drags orbit. */
+  private strokeHandler: ((hits: FigureHit[]) => void) | null = null;
+  private stroke: Stroke | null = null;
   private raycaster = new THREE.Raycaster();
 
   constructor(private host: HTMLElement) {
@@ -97,6 +113,93 @@ export class Viewer {
       const hit = this.hitFigure(e.clientX, e.clientY);
       if (hit) this.pickHandler(hit);
     });
+
+    // Brush strokes: a press ON the figure paints along the drag instead of orbiting. Captured on the host, before
+    // OrbitControls (on the canvas) sees it; presses beside the figure, a second finger or the right button still
+    // turn the view.
+    host.addEventListener("pointerdown", (e) => {
+      if (!this.strokeHandler || e.target !== canvas || !e.isPrimary || e.button !== 0) {
+        if (this.stroke && !e.isPrimary) this.endStroke(false);      // a pinch started: no stroke
+        return;
+      }
+      const hit = this.hitFigure(e.clientX, e.clientY);
+      if (!hit) return;
+      e.stopPropagation();
+      try {
+        canvas.setPointerCapture(e.pointerId);      // moves outside the canvas still reach the stroke
+      } catch {
+        // a pointer the browser no longer tracks: the stroke ends on its own pointerup anyway
+      }
+      this.startStroke(e.pointerId, e.clientX, e.clientY, hit);
+    }, { capture: true });
+    canvas.addEventListener("pointermove", (e) => {
+      const s = this.stroke;
+      if (!s || e.pointerId !== s.id) return;
+      // At most one raycast per STROKE_MS (a 300k-triangle figure takes several ms each); by time, not by animation
+      // frame, which a background tab hardly fires. The engine joins the gaps between samples.
+      if (performance.now() - s.lastAt < STROKE_MS) return;
+      this.sampleStroke(s, e.clientX, e.clientY);
+    });
+    const finish = (e: PointerEvent) => {
+      const s = this.stroke;
+      if (!s || e.pointerId !== s.id) return;
+      if (e.type === "pointerup") this.sampleStroke(s, e.clientX, e.clientY);     // where the drag ended
+      this.endStroke(e.type === "pointerup");
+    };
+    canvas.addEventListener("pointerup", finish);
+    canvas.addEventListener("pointercancel", finish);
+  }
+
+  /** Brush mode: a drag that starts on the figure is a stroke, reported on release (null = drags orbit). */
+  setStrokeHandler(fn: ((hits: FigureHit[]) => void) | null): void {
+    this.strokeHandler = fn;
+    if (!fn && this.stroke) this.endStroke(false);
+    // While strokes take one-finger / left drags on the figure, the right button turns the view too.
+    this.controls.mouseButtons.RIGHT = fn ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  }
+
+  /** Add the figure point under (x, y) to the stroke, if it moved far enough on screen and hits the figure. */
+  private sampleStroke(s: Stroke, x: number, y: number): void {
+    if (Math.hypot(x - s.last.x, y - s.last.y) < STROKE_PX) return;
+    s.lastAt = performance.now();
+    const hit = this.hitFigure(x, y);
+    if (!hit) return;
+    s.last = { x, y };
+    this.addStrokePoint(s, hit);
+  }
+
+  private startStroke(id: number, x: number, y: number, hit: FigureHit): void {
+    if (!this.figure) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(MAX_STROKE * 3), 3));
+    geom.setDrawRange(0, 0);
+    const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+    line.renderOrder = 10;
+    this.figure.add(line);
+    this.stroke = { id, hits: [], line, last: { x, y }, lastAt: performance.now() };
+    this.addStrokePoint(this.stroke, hit);
+  }
+
+  private addStrokePoint(s: Stroke, hit: FigureHit): void {
+    if (s.hits.length >= MAX_STROKE) return;
+    s.hits.push(hit);
+    const pos = s.line.geometry.getAttribute("position") as THREE.BufferAttribute;
+    pos.setXYZ(s.hits.length - 1, hit.point[0], hit.point[1], hit.point[2]);
+    pos.needsUpdate = true;
+    s.line.geometry.setDrawRange(0, s.hits.length);
+    this.requestFrame();
+  }
+
+  /** Stop the current stroke; `report` hands its samples to the stroke handler. */
+  private endStroke(report: boolean): void {
+    const s = this.stroke;
+    if (!s) return;
+    this.stroke = null;
+    s.line.removeFromParent();
+    s.line.geometry.dispose();
+    (s.line.material as THREE.Material).dispose();
+    this.requestFrame();
+    if (report && this.strokeHandler) this.strokeHandler(s.hits);
   }
 
   /** Turn tap-to-pick on (with a handler) or off. */

@@ -25,9 +25,17 @@
   solid column) and the low footprint's aspect ratio; it is kept only if the figure then fits ≥ 1 % larger. The
   base over the washer is made flat: bumps pressed down by up to 1.2 mm, then gaps up to 2.5 mm between the
   underside and the washer filled by a separate solid "flat base" part (main colour; at the default, raised to 4
-  or 6 mm when no magnet pocket fits otherwise, e.g. a figure on four thin legs). Only vertices move, so paint
-  and texture colour are kept. Settings: bend Auto/Off/Slight/Medium/Follow the sphere, flat base diameter
-  (default the washer's), press depth, fill height.
+  or 6 mm when no magnet pocket fits otherwise, e.g. a figure on four thin legs). "Fill where": round the washer
+  (joined to where the figure stands) or only inside a circle the user places and drags under the body. Only
+  vertices move, so paint and texture colour are kept. Settings: bend Auto/Off/Slight/Medium/Follow the sphere,
+  flat base diameter (default the washer's), press depth, fill height, fill where.
+- Strengthen thin parts (off by default; 1.2 / 1.6 / 2 mm): local thickness is measured at the print size (voxels
+  and a distance transform); a thin feature (ear, tail tip, flame) gets the minimum where it joins the figure,
+  tapering to 40 % of it at its tip, and a thin neck between two thick parts gets it all along. Vertices move
+  out along smoothed normals, blended into the surface around, so colours are kept.
+- Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
+  largest that fits is used, with a note. Settings that are changed (ball, washer, magnets, pockets, height, shape,
+  strengthen, paint depth) are remembered in the browser as the defaults; "reset settings" in the footer clears them.
 - GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
   kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
   materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament
@@ -41,7 +49,9 @@
   +73 min in Bambu slices, against 4-5 colours otherwise.
 - Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
-  crease (like Bambu's smart fill), a separate shell, or a brush disc. Colours can be added or changed; the result
+  crease (like Bambu's smart fill), a separate shell, or a brush disc; dragging the brush paints a stroke, and a
+  part or crease fill stops where the colour changes (outline an eye or a belly that has no crease round it, then
+  tap inside). Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
   swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"

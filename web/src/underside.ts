@@ -8,8 +8,12 @@ import { bounds, insideRings, onSteel } from "./geometry";
 import type { Underside } from "./types";
 
 const NS = "http://www.w3.org/2000/svg";
+/** `dragging` value for the fill circle (pocket indices are >= 0). */
+const CIRCLE = -2;
 
 export type Pocket = { x: number; y: number };
+/** The flat base's fill circle as drawn: centre and radius in final mm (figure frame). */
+export type FillCircle = { x: number; y: number; r: number };
 
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
   const e = document.createElementNS(NS, tag);
@@ -25,10 +29,13 @@ export class UndersideEditor {
   readonly svg: SVGSVGElement;
   private data: Underside | null = null;
   private pockets: Pocket[] = [];
+  private circle: FillCircle | null = null;
+  /** Pocket index being dragged, CIRCLE for the fill circle, -1 = none. */
   private dragging = -1;
 
-  /** `onChange` fires when a drag ends, with all pocket positions. */
-  constructor(host: HTMLElement, private onChange: (p: Pocket[]) => void) {
+  /** `onChange` fires when a pocket drag ends, with all pocket positions; `onCircle` when the fill circle moved. */
+  constructor(host: HTMLElement, private onChange: (p: Pocket[]) => void,
+              private onCircle: (c: Pocket) => void = () => undefined) {
     this.svg = el("svg", { class: "underside", role: "img", "aria-label": "Figure underside with magnet pockets" });
     host.appendChild(this.svg);
     this.svg.addEventListener("pointermove", (e) => this.move(e));
@@ -36,9 +43,10 @@ export class UndersideEditor {
     this.svg.addEventListener("pointercancel", (e) => this.drop(e));
   }
 
-  render(data: Underside, pockets: Pocket[]): void {
+  render(data: Underside, pockets: Pocket[], circle: FillCircle | null = null): void {
     this.data = data;
     this.pockets = pockets.map((p) => ({ ...p }));
+    this.circle = circle ? { ...circle } : null;
     const s = this.svg;
     s.replaceChildren();
     const ring = data.ring;
@@ -46,6 +54,7 @@ export class UndersideEditor {
       [ring.x - ring.outer, ring.y - ring.outer],
       [ring.x + ring.outer, ring.y + ring.outer],
       ...pockets.map((p) => [p.x, p.y]),
+      ...(circle ? [[circle.x - circle.r, circle.y - circle.r], [circle.x + circle.r, circle.y + circle.r]] : []),
     ];
     const ext = data.extent;
     const [x0, y0, x1, y1] = bounds(data.feet, [...extra, [ext[0], ext[1]], [ext[2], ext[3]]]);
@@ -66,6 +75,17 @@ export class UndersideEditor {
     g.appendChild(el("path", { d: ringsPath(data.feet), class: "u-feet", "fill-rule": "evenodd" }));
     if (data.valid.length) g.appendChild(el("path", { d: ringsPath(data.valid), class: "u-valid", "fill-rule": "evenodd" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: 0.6, class: "u-centre" }));
+    if (this.circle) {
+      const c = el("circle", { cx: this.circle.x, cy: this.circle.y, r: this.circle.r, class: "u-fill", tabindex: 0,
+        "data-fill": 1, "aria-label": "Flat base fill circle: drag to move" });
+      c.addEventListener("pointerdown", (e) => {
+        this.dragging = CIRCLE;
+        (e.target as Element).setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      c.addEventListener("keydown", (e) => this.nudge(e, CIRCLE));
+      g.appendChild(c);
+    }
 
     this.pockets.forEach((p, i) => {
       const ok = this.pocketOk(p);
@@ -100,6 +120,14 @@ export class UndersideEditor {
   }
 
   private move(e: PointerEvent): void {
+    if (this.dragging === CIRCLE && this.circle) {
+      const p = this.toFigure(e);
+      this.circle = { ...this.circle, x: p.x, y: p.y };
+      const c = this.svg.querySelector<SVGCircleElement>("circle[data-fill]");
+      c?.setAttribute("cx", String(p.x));
+      c?.setAttribute("cy", String(p.y));
+      return;
+    }
     if (this.dragging < 0 || !this.data) return;
     this.pockets[this.dragging] = this.toFigure(e);
     const c = this.svg.querySelector<SVGCircleElement>(`circle[data-i="${this.dragging}"]`);
@@ -117,12 +145,17 @@ export class UndersideEditor {
   }
 
   private drop(_e: PointerEvent): void {
+    if (this.dragging === CIRCLE && this.circle) {
+      this.dragging = -1;
+      this.onCircle({ x: +this.circle.x.toFixed(3), y: +this.circle.y.toFixed(3) });
+      return;
+    }
     if (this.dragging < 0) return;
     this.dragging = -1;
     this.onChange(this.pockets.map((p) => ({ x: +p.x.toFixed(3), y: +p.y.toFixed(3) })));
   }
 
-  /** Arrow keys move a focused pocket by 0.25 mm (in the underside view's directions). */
+  /** Arrow keys move a focused pocket (or the fill circle) by 0.25 mm (in the underside view's directions). */
   private nudge(e: KeyboardEvent, i: number): void {
     const step = e.shiftKey ? 1 : 0.25;
     const d: Record<string, [number, number]> = {
@@ -131,6 +164,10 @@ export class UndersideEditor {
     const v = d[e.key];
     if (!v) return;
     e.preventDefault();
+    if (i === CIRCLE) {
+      if (this.circle) this.onCircle({ x: +(this.circle.x + v[0]).toFixed(3), y: +(this.circle.y + v[1]).toFixed(3) });
+      return;
+    }
     this.pockets[i] = { x: this.pockets[i].x + v[0], y: this.pockets[i].y + v[1] };
     this.onChange(this.pockets.map((p) => ({ x: +p.x.toFixed(3), y: +p.y.toFixed(3) })));
   }

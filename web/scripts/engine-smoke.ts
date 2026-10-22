@@ -84,6 +84,21 @@ console.log(`[${secs()} s] colorize: region ${side.faces} faces, piece ${leg.fac
   `painted ${rep3.object.parts.map((x: { painted: number }) => x.painted).join("+")} faces; regions preview ${regionBytes} B`);
 const [paintedJson] = api.run_export(loaded.session, painted).toJs({ create_proxies: false });
 
+// Brush stroke along the leg's side (a path of triangles, joined), a fill that stops at the painted leg,
+// the tap structures prepared up front, and thin parts strengthened (voxels + distance transform + dijkstra).
+api.paint_prepare(loaded.session, plain, JSON.stringify({ mode: "part", angle: 15 }));
+const stroke = JSON.parse(api.pick_face(loaded.session, plain, JSON.stringify({
+  point: [-13, -2, 3], normal: [-1, 0, 0], mode: "brush", angle: 15, radius: 0.8,
+  stroke: [5, 7, 9].map((z) => ({ point: [-13, 2, z], normal: [-1, 0, 0] })) })));
+const bounded = JSON.parse(api.pick_face(loaded.session, painted,
+  JSON.stringify({ point: [0, -4.5, 15], normal: [0, -1, 0], mode: "part", angle: 15 })));
+const strong = JSON.parse(api.run_analyse(loaded.session, JSON.stringify({ ...rep.params, strengthen: 1.6 })));
+if (!stroke.path.length || bounded.faces <= 0 || !strong.fit.strengthen) {
+  throw new Error(`stroke path ${stroke.path.length}, bounded fill ${bounded.faces}, strengthen ${JSON.stringify(strong.fit.strengthen)}`);
+}
+console.log(`[${secs()} s] stroke ${stroke.path.length + 1} samples ${stroke.faces} faces; fill beside paint ${bounded.faces} faces; ` +
+  `strengthen ${(strong.fit.strengthen.thin_share * 100).toFixed(1)} % thin`);
+
 const glb = api.preview(loaded.session, params, "null");
 const bytes = glb.toJs();
 glb.destroy();

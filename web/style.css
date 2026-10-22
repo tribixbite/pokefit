@@ -141,6 +141,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .u-valid { fill: rgba(76, 211, 138, .22); stroke: var(--ok); stroke-width: .08; stroke-dasharray: .4 .3; }
 .u-centre { fill: var(--steel); }
 .u-pocket { stroke-width: .25; cursor: grab; }
+.u-fill { fill: rgba(255, 179, 71, .18); stroke: #ffb347; stroke-width: .25; stroke-dasharray: .8 .5; cursor: grab; }
+.u-fill:focus { outline: none; stroke: #6aa8ff; }
 .u-pocket.ok { fill: rgba(255, 255, 255, .85); stroke: #fff; }
 .u-pocket.bad { fill: rgba(255, 77, 94, .85); stroke: #fff; }
 .u-pocket:focus { outline: none; stroke: #6aa8ff; stroke-width: .4; }
@@ -363,3 +365,4 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
   border: 1px solid rgba(255, 255, 255, 0.25); }
 .print-check { font-size: 13px; display: grid; gap: 4px; }
 .print-check .warn-text { color: var(--warn); }
+.linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }

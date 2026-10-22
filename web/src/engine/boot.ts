@@ -34,6 +34,7 @@ export interface WebApi {
   preview(sid: string, params: string, regions: string): { toJs(): Uint8Array; destroy(): void };
   faces(sid: string, params: string, regions: string): string;
   pick_face(sid: string, params: string, req: string): string;
+  paint_prepare(sid: string, params: string, req: string): string;
   run_export(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
 }
 

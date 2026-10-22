@@ -57,6 +57,12 @@ export interface Params {
   flat_base: number | null;
   flat_depth: number;
   flat_fill: number;
+  /** Fill the flat base over this circle instead of round the washer: figure frame at scale 1 (file mm). */
+  fill_circle: { x: number; y: number; d: number } | null;
+  /** Print height in mm when figure_scale is null (capped at the largest that fits); null = the largest. */
+  figure_height: number | null;
+  /** Strengthen thin parts: minimum thickness (mm) at their joins, tapering to their tips; 0 = off. */
+  strengthen: number;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
 }
@@ -131,6 +137,8 @@ export interface PaintOp {
   angle: number;
   /** Brush radius in the file's mm (print mm ÷ figure scale). */
   radius: number;
+  /** Brush stroke: more triangles of the same part along the drag. */
+  path?: number[];
 }
 
 /** Colour the preview by what a tap would paint. */
@@ -155,11 +163,15 @@ export interface PickRequest {
   mode: PaintMode;
   angle: number;
   radius: number;
+  /** Brush stroke: the rest of the drag after `point` (figure frame, scale 1). */
+  stroke?: { point: number[]; normal: number[] | null }[];
 }
 
 export interface PickResult {
   part: number;
   face: number;
+  /** Brush stroke: the triangles under the rest of the drag. */
+  path: number[];
   distance: number;
   faces: number;
   share: number;

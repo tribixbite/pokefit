@@ -65,6 +65,8 @@ class ConformSpec:
     max_depth: float = DEFAULT_MAX_DEPTH  # mm, deepest press for the flat base
     fill: float = DEFAULT_FILL      # mm, largest gap under the figure filled by the flat base (0 = off)
     scale: float | None = None      # print scale to design for (None = the largest that fits)
+    # The fill over a circle the user placed (x, y, diameter; figure frame, scale 1) instead of the flat disc
+    fill_circle: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -254,12 +256,17 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     info.lift_mm = float(np.max(best.v[:, 2] - v0[:, 2]) * (s0 if spec.scale else best_scale))
     s_final = s0 if spec.scale else best_scale
     out = parts if best.depth == 0 and info.bend == 0 else _with_vertices(parts, best.v)
-    if r_flat > 0 and spec.fill > 0 and s_final > 0:
+    base: Part | None = None
+    if spec.fill_circle is not None and spec.fill > 0 and s_final > 0:
+        cx, cy, d = spec.fill_circle
+        base = base_fill(out, np.array([cx, cy]), d / 2, spec.fill / s_final, FILL_CELL / s_final,
+                         FILL_OVERLAP / s_final, parts[0].extruder, connected=False)
+    elif r_flat > 0 and spec.fill > 0 and s_final > 0:
         base = base_fill(out, best.axis, r_flat / s_final, spec.fill / s_final, FILL_CELL / s_final,
                          FILL_OVERLAP / s_final, parts[0].extruder)
-        if base is not None:
-            out = [*out, base]
-            info.fill_mm2 = float(base.mesh().area_faces[base.mesh().face_normals[:, 2] < -0.9].sum()) * s_final ** 2
+    if base is not None:
+        out = [*out, base]
+        info.fill_mm2 = float(base.mesh().area_faces[base.mesh().face_normals[:, 2] < -0.9].sum()) * s_final ** 2
     return out, info
 
 
@@ -286,13 +293,14 @@ def smooth_outline(px: np.ndarray, py: np.ndarray, walls: list[tuple[int, int]],
 
 
 def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float, cell: float, overlap: float,
-              extruder: int) -> Part | None:
-    """A solid filling the gap between the bed and the figure's underside over the disc.
+              extruder: int, connected: bool = True) -> Part | None:
+    """A solid filling the gap between the bed and the figure's underside over the disc round `axis`.
 
     Built on a coarse grid (`cell`) from the underside height field: flat bottom at z = 0, top at
     the underside (the lowest point in each cell) + `overlap`, vertical walls round its outline.
-    Only cells where the gap is at most `max_gap`, connected to where the figure already touches
-    the bed (or the largest patch), and fully under the figure are filled. Unit-scale frame.
+    Only cells where the gap is at most `max_gap` and fully under the figure are filled, and with
+    `connected` only those joined to where the figure already touches the bed (or the largest
+    patch); a circle the user placed (`connected=False`) fills all of them. Unit-scale frame.
     """
     from scipy import ndimage
 
@@ -321,12 +329,13 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
     mask = ndimage.binary_opening(under & inside & (zmin <= max_gap))
     if not mask.any():
         return None
-    labels, n = ndimage.label(mask)
-    touching = set(np.unique(labels[mask & (zmin <= overlap)])) - {0}
-    if not touching:
-        sizes = ndimage.sum(mask, labels, range(1, n + 1))
-        touching = {int(np.argmax(sizes)) + 1}
-    mask = np.isin(labels, list(touching))
+    if connected:
+        labels, n = ndimage.label(mask)
+        touching = set(np.unique(labels[mask & (zmin <= overlap)])) - {0}
+        if not touching:
+            sizes = ndimage.sum(mask, labels, range(1, n + 1))
+            touching = {int(np.argmax(sizes)) + 1}
+        mask = np.isin(labels, list(touching))
     if not (mask & (zmin > overlap * 0.25)).any():
         return None                         # nothing to fill: the figure already sits flat here
     top = np.where(mask, np.minimum(zmax + overlap, np.maximum(span_top - overlap, zmax)), -np.inf)

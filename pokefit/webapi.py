@@ -13,8 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, preview_faces, preview_glb,
-                       safe_stem, washer_table)
+from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, prepare_paint, preview_faces,
+                       preview_glb, safe_stem, washer_table)
 from .presets import PresetLibrary, load_settings_file
 
 WORK = Path("/tmp/pokefit")
@@ -121,10 +121,18 @@ def faces(sid: str, params_json: str, regions_json: str = "null") -> str:
 
 
 def pick_face(sid: str, params_json: str, req_json: str) -> str:
-    """The triangle under a tap: req = {point, normal, mode, angle} (figure frame, scale 1)."""
+    """The triangle under a tap: req = {point, normal, mode, angle, radius, stroke?} (figure frame, scale 1)."""
     req = json.loads(req_json)
     return _dump(pick(_session(sid), Params.from_dict(json.loads(params_json)), req["point"], req.get("normal"),
-                      str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0))))
+                      str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0)),
+                      req.get("stroke")))
+
+
+def paint_prepare(sid: str, params_json: str, req_json: str) -> str:
+    """Build the tap structures (`pipeline.prepare_paint`) when painting starts: req = {mode, angle}."""
+    req = json.loads(req_json)
+    return _dump(prepare_paint(_session(sid), Params.from_dict(json.loads(params_json)),
+                               str(req.get("mode", "part")), float(req.get("angle", 15.0))))
 
 
 def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:

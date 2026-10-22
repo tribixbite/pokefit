@@ -14,10 +14,17 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
 - **shapes the figure for the ball**: legs or a tail lying straight out past the washer are bent up along the
   sphere so it fits larger (automatic for limbs, more for wide, low figures, only when it helps), and the base is
   made flat over the washer (18 mm, or any diameter): low bumps pressed flat (≤ 1.2 mm), gaps under the body up to
-  2.5 mm filled with a solid flat base, so magnets have room and the belly needs no support. Paint and texture
-  colour are kept (only vertices move; the flat base is its own part);
+  2.5 mm filled with a solid flat base (round the washer, or only inside a circle you place under the body), so
+  magnets have room and the belly needs no support. Paint and texture colour are kept (only vertices move; the
+  flat base is its own part);
+- **strengthens thin parts** (optional): ears, tail tips and flames get a minimum thickness where they join the
+  figure, tapering toward their tips; a thin neck between two bigger parts (a small tail tip under a big flame)
+  gets it all along;
 - **colours single-colour models**: tap the 3D view and each tap fills a part found from the shape (ears, tail,
-  eyes, bib…), a separate piece or a brush patch, exported as Bambu paint;
+  eyes, bib…), a separate piece or a brush patch; drag the brush to draw outlines, and a fill stops at a painted
+  outline, so eyes or a belly with no crease round them can be painted too. Exported as Bambu paint;
+- **remembers your settings** (ball, washer, magnets, height, shape) in your browser, and lets you set them before
+  opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
   filament slots for *Import geometry only*;

@@ -192,6 +192,15 @@ export async function pick(session: string, params: Params, req: PickRequest): P
   return json<PickResult>(await call("pick", [session, JSON.stringify(params), JSON.stringify(req)]));
 }
 
+/** Build what taps need (pick trees, edge topology, the mode's regions) before the first tap. */
+export async function preparePaint(session: string, params: Params, req: { mode: string; angle: number }): Promise<void> {
+  if (mode === "local") {
+    await postJson<unknown>("/api/paint_prepare", { session, params, ...req });
+    return;
+  }
+  await call("paintPrepare", [session, JSON.stringify(params), JSON.stringify(req)]);
+}
+
 export async function exportFiles(session: string, params: Params): Promise<ExportResponse> {
   if (mode === "local") return postJson<ExportResponse>("/api/export", { session, params });
   const [resJson, files] = await call<[string, [string, Uint8Array][]]>("export", [session, JSON.stringify(params)]);

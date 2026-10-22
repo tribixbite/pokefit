@@ -52,15 +52,27 @@ exist only on the original Windows machine (ask the user for the files).
    vertical (a pedestal between the legs).
 9. **Big meshes** (2026-10-22, 303k-triangle `printed/obj_2_Charmander mini.stl`). Measure with
    `cd web && node scripts/engine-bench.ts <figure>` (Pyodide, the site's engine) or the local server + browser.
-   - Now (Pyodide): boot 10.7 s; open + first analysis 18.6 s (local 11.5 s); tap 1.1 s first (topology), then
-     ~0.05 s local; recolour 0.02-0.3 s (no glTF: `preview_faces`); analysis after painting 1.0 s local / ~5 s
-     Pyodide first, 0.5 s after; palette edit 0.6 s. Before: every tap re-sent a 6 MB glTF (2.4 s) and the
-     analysis after painting took 10-13 s local.
+   - Now (Pyodide): boot 10.7 s; open + first analysis 18.6 s (local 11.5 s; ~6.5 s at a set 25.4 mm height);
+     taps prepared when Paint is pressed (`prepare_paint`, local 1.0 s), then ~0.05-0.25 s local per tap; recolour
+     0.02-0.3 s (`preview_faces`); analysis after painting 1.0 s local / ~5 s Pyodide first, 0.5 s after.
    - Left in the first analysis (local 11.5 s): conform ~3.6 s (4 fits + 3 height fields), islands 1.8 s,
-     thickness 0.9 s, `_auto_fill` + `_solve` ~1.5 s. Next candidates: compute topology / pick trees when
-     painting starts (first tap 1 s), cache `_conformed` results on disk per file (reopening the same file),
-     islands check on fewer section planes.
-10. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+     thickness 0.9 s, `_auto_fill` + `_solve` ~1.5 s. Next candidates: cache `_conformed` results on disk per file
+     (reopening the same file), islands check on fewer section planes.
+10. **Strengthen thin parts** (`pokefit/strengthen.py`, `Params.strengthen`, UI "Strengthen thin parts", off by default).
+   Charmander at 26.9 mm, 1.6 mm: 5-6 % of the surface thin (flame tips, flame/tail join, toes, claws), up to
+   0.37-0.45 mm out, +2.5 s local; smooth result (scratchpad renders `char_flame_zoom.png`). Synthetic checks
+   (tests/test_strengthen.py): a 0.7 mm neck between a tail and a flame ball -> ~1.6 mm all along; a 0.6 mm free
+   fin -> 1.3-1.45 mm near its join tapering to ~0.8 mm at the tip. Open: (a) never printed: needs a physical
+   test (does 1.6 mm at the join stop the flame snapping off? PETG at 0.16 mm layers); (b) a sharp 90-degree join
+   (a flat fin on a box) is under-thickened in its first ~half target (smoothed normals tilt into the box; TODO in
+   `strengthen()`); (c) low-poly meshes move only their few vertices (the smoke critter reads 33 % "thin": box
+   corners), so it suits dense sculpts; (d) measured at the asked height or the largest, not at a slider scale.
+11. **Paint on smooth sculpts**: generated/smoothed figures (this Charmander) have eyes whose rim is creased only
+   part way round and a belly with no crease at all, so no angle isolates them (measured: per-edge creases 2-15 deg
+   never close the eye ring). Fix shipped: brush strokes (drag) + part/region fills that stop at a colour change.
+   Verified on the Charmander locally (outline 1,210 triangles, fill inside 352) and in tests. A stroke's samples
+   more than 8 brush radii apart are not joined (taken as a jump across a silhouette).
+12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)

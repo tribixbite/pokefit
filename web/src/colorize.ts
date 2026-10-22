@@ -17,10 +17,14 @@ export interface ColorizeHost {
   report(): Report | null;
   /** Reload the 3D preview; `regions` colours it by what a tap would paint. */
   refresh(regions: RegionView | null): Promise<void>;
-  /** The triangle under a tap and the size of its region. */
-  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number): Promise<PickResult>;
+  /** The triangle under a tap and the size of its region; `stroke`: the rest of a brush drag. */
+  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number, stroke?: FigureHit[]): Promise<PickResult>;
+  /** Build the engine's tap structures now (painting started), so the first tap is as quick as the rest. */
+  prepare(mode: PaintMode, angle: number): Promise<void>;
   /** Turn tap-to-pick on the 3D view on or off. */
   setPicking(fn: ((hit: FigureHit) => void) | null): void;
+  /** Brush: a drag that starts on the figure paints a stroke (null = drags turn the view). */
+  setStroking(fn: ((hits: FigureHit[]) => void) | null): void;
   /** Called after paint or colours changed (the import-file colour map is stale until re-analysed). */
   changed(): void;
   /** Painting stopped: a good moment to re-analyse if anything changed. */
@@ -53,6 +57,7 @@ export class ColorizePanel {
     document.querySelectorAll<HTMLButtonElement>("#paintMode button").forEach((b) =>
       b.addEventListener("click", () => {
         this.mode = (b.dataset.mode as PaintMode) ?? "part";
+        if (this.painting) this.setPainting(true);     // brush: drags paint strokes
         this.render();
         if (this.regions) void this.reload();
       }));
@@ -186,7 +191,10 @@ export class ColorizePanel {
     ($("paintUndo") as HTMLButtonElement).disabled = n === 0;
     ($("paintClear") as HTMLButtonElement).disabled = n === 0;
     if (!this.busy && !$("paintInfo").dataset.sticky) {
-      $("paintInfo").textContent = this.painting ? "Tap the figure to paint." : n ? `${n} paint step${n > 1 ? "s" : ""}` : "";
+      $("paintInfo").textContent = !this.painting ? (n ? `${n} paint step${n > 1 ? "s" : ""}` : "")
+        : this.mode === "brush"
+          ? "Tap or drag on the figure to paint. Turn the view by dragging beside it, with two fingers or the right mouse button."
+          : "Tap the figure to paint.";
     }
   }
 
@@ -239,28 +247,37 @@ export class ColorizePanel {
 
   private setPainting(on: boolean): void {
     this.painting = on;
-    this.host.setPicking(on ? (hit) => void this.paintAt(hit) : null);
+    this.host.setPicking(on ? (hit) => void this.paintAt([hit]) : null);
+    this.host.setStroking(on && this.mode === "brush" ? (hits) => void this.paintAt(hits) : null);
+    // The engine caches these per figure and orientation, so asking again is cheap; failures surface on the tap.
+    if (on) void this.host.prepare(this.mode, this.angle).catch(() => undefined);
     if (!on && this.regions) { this.regions = false; void this.reload(); }
     if (!on) this.host.settled();
     this.render();
   }
 
-  private async paintAt(hit: FigureHit): Promise<void> {
-    if (this.busy) return;
+  /** Paint at a tap, or along a brush stroke (`hits` = the drag's samples, first = where it started). */
+  private async paintAt(hits: FigureHit[]): Promise<void> {
+    if (this.busy || !hits.length) return;
     this.busy = true;
     $("paintInfo").textContent = "Finding the region…";
     try {
       const radius = this.radiusFile();
-      const res = await this.host.pick(hit, this.mode, this.angle, radius);
+      const stroke = this.mode === "brush" ? hits.slice(1) : [];
+      const res = await this.host.pick(hits[0], this.mode, this.angle, radius, stroke);
       const p = this.host.params();
       if (!p.colours) p.colours = this.colours();      // pin the palette the paint refers to
       p.paint = [...(p.paint ?? []), {
         part: res.part, face: res.face, filament: this.filament, mode: this.mode, angle: this.angle, radius,
+        ...(res.path?.length ? { path: res.path } : {}),
       }];
       const what = this.mode === "face" ? "1 triangle" : `${res.faces.toLocaleString()} triangles`;
       const angled = this.mode === "part" || this.mode === "region";
       $("paintInfo").textContent = `${this.filament ? "Painted" : "Erased"} ${what}` +
-        (res.share > 0.9 && angled ? " — nearly everything: lower the angle to stop sooner, or use the brush" : "");
+        (res.share > 0.9 && angled
+          ? " — nearly everything. No crease goes all the way round here: outline it with the brush (drag), " +
+            "then tap inside"
+          : "");
       $("paintInfo").dataset.sticky = "1";
       this.host.changed();
       await this.reload();

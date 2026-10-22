@@ -80,6 +80,38 @@ def test_brush_paints_a_disc_of_connected_surface() -> None:
         PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "brush"})
 
 
+def _ring_stroke(part: Part, r: float, n: int) -> list[int]:
+    """Faces under n points on a circle of radius r around the top of a sphere (a drawn outline)."""
+    a = np.linspace(0, 2 * np.pi, n + 1)
+    pts = np.c_[r * np.cos(a), r * np.sin(a), np.sqrt(100 - r * r) * np.ones_like(a)]
+    return [pick_face([part], p, p / 10)[1] for p in pts]
+
+
+def test_a_fill_stops_at_a_painted_outline_and_a_stroke_has_no_gaps() -> None:
+    """A smooth sphere has no crease, so a part fill takes all of it; outlined by a brush stroke whose samples
+    are 2.6 radii apart (a fast drag), the fill takes only the cap inside, and erasing it again works the same way."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    assert len(region_faces(topo, 0, top, "part", 15)) == len(ball.faces)
+    stroke = _ring_stroke(part, 5, 24)                     # steps of ~1.3 mm, brush radius 0.5 mm
+    outline = PaintOp(0, stroke[0], 2, "brush", radius=0.5, path=tuple(stroke[1:]))
+    fill = PaintOp(0, top, 3, "part")
+    (out,) = apply_paint([part], [outline, fill], topo)
+    states = {i: decode_majority(a.split('paint_color="')[1].split('"')[0]) for i, a in out.tri_extra.items()}
+    c = ball.triangles_center
+    filled = np.array([f for f, s in states.items() if s == 3])
+    assert len(filled) and np.hypot(c[filled, 0], c[filled, 1]).max() < 5 and c[filled, 2].min() > 0
+    assert sum(1 for s in states.values() if s == 2) > 0       # the outline keeps its own colour
+    (erased,) = apply_paint([part], [outline, fill, PaintOp(0, top, 0, "part")], topo)
+    assert sum(1 for a in erased.tri_extra.values() if "paint_color" in a) == sum(1 for s in states.values() if s == 2)
+    # Without the joins a 24-point stroke leaves gaps and the fill leaks over the whole sphere.
+    assert PaintOp.from_dict(outline.to_dict()) == outline
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "part", "path": [1, 2]})
+
+
 def test_topology_merges_stl_soup() -> None:
     """An STL soup (no shared vertices) still has edge neighbours."""
     m = trimesh.creation.box([10, 10, 10])

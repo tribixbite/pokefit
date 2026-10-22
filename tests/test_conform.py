@@ -146,3 +146,45 @@ def test_the_flat_base_cannot_be_painted_and_shows_as_its_own_region(tmp_path: P
     import base64
     base = np.frombuffer(base64.b64decode(faces["parts"][-1]), np.uint8)
     assert len(base) == len(fb.faces) and set(base.tolist()) == {len(faces["colours"]) - 1}
+
+
+def _four_legs(tmp_path: Path) -> Path:
+    """A block body on four thin legs (an Eevee): 2.5 mm of air under the belly between the legs."""
+    parts = [trimesh.creation.box((14, 9, 10)).apply_translation([0, 0, 7.0])]
+    for x in (-5.5, 5.5):
+        for y in (-3, 3):
+            parts.append(trimesh.creation.box((2.4, 2.4, 2.5)).apply_translation([x, y, 1.25]))
+    stl = tmp_path / "legs.stl"
+    trimesh.util.concatenate(parts).export(stl)
+    return stl
+
+
+def test_a_fill_circle_fills_only_inside_it_wherever_it_is_placed(tmp_path: Path) -> None:
+    s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
+    auto = [p for p in s.unit_parts(Params(magnets=0, flat_fill=8)) if p.name == FILL_NAME][0]
+    assert np.ptp(auto.vertices[:, 0]) > 10                         # round the washer: out to the legs
+    for cx in (0.0, 2.0):
+        params = Params(magnets=0, flat_fill=8, fill_circle={"x": cx, "y": 0.0, "d": 6.0})
+        base = [p for p in s.unit_parts(params) if p.name == FILL_NAME][0]
+        v = base.vertices
+        assert 4.5 < np.ptp(v[:, 0]) <= 6.2 and 4.5 < np.ptp(v[:, 1]) <= 6.2       # the circle, not the legs
+        assert abs((v[:, 0].min() + v[:, 0].max()) / 2 - cx) < 0.5
+        rep, _ = analyse(s, params)
+        assert rep.to_dict()["fit"]["conform"]["fill_mm2"] > 0
+    with pytest.raises(ValueError, match="fill_circle"):
+        Params(fill_circle={"x": 0, "y": 0, "d": 0})
+    with pytest.raises(ValueError, match="fill_circle"):
+        Params(fill_circle={"x": 0})
+
+
+def test_a_height_asked_for_is_printed_unless_it_does_not_fit(tmp_path: Path) -> None:
+    s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
+    largest = analyse(s, Params())[0].to_dict()["fit"]["height_mm"]
+    rep = analyse(s, Params(figure_height=round(largest * 0.8, 1)))[0].to_dict()
+    assert rep["fit"]["height_mm"] == pytest.approx(round(largest * 0.8, 1), abs=0.01)
+    assert not any(c["id"] == "size:height" for c in rep["checks"])
+    big = analyse(s, Params(figure_height=largest * 3))[0].to_dict()
+    assert big["fit"]["height_mm"] == pytest.approx(largest, abs=0.01) and big["status"] != "fail"
+    assert any(c["id"] == "size:height" for c in big["checks"])
+    with pytest.raises(ValueError, match="figure_height"):
+        Params(figure_height=0)

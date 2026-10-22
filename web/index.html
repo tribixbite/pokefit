@@ -198,6 +198,13 @@
             <span class="unit"><input id="flatDepth" type="number" min="0" max="5" step="0.1" value="1.2" inputmode="decimal" /> mm</span></label>
           <label title="Fill gaps up to this high between the base and the washer with a solid flat base (printed in the main colour): magnets get room, the belly needs no support. At 2.5 (the default) it is raised to 4 or 6 mm when no magnet would fit otherwise.">Fill gaps up to
             <span class="unit"><input id="flatFill" type="number" min="0" max="10" step="0.5" value="2.5" inputmode="decimal" /> mm</span></label>
+          <label title="Where the gaps are filled: round the washer (joined to where the figure already stands), or only inside a circle you place under the body (drag it in the Magnets card's underside view).">Fill where
+            <select id="fillWhere"><option value="auto">Round the washer</option><option value="circle">A circle I place</option></select></label>
+          <label id="fillCircleRow" hidden title="Diameter of the fill circle at the print size.">Circle Ø
+            <span class="unit"><input id="fillCircleD" type="number" min="1" max="60" step="0.5" inputmode="decimal" /> mm</span></label>
+          <label title="Thicken thin parts so they do not snap off: where an ear, a tail tip or a flame joins the figure it gets at least this thickness, tapering toward its tip; a thin neck between two bigger parts gets it all along. Only the surface moves, so colours stay. Measured at the height you set (else the largest).">Strengthen thin parts
+            <select id="strengthenSelect"><option value="0">Off</option><option value="1.2">1.2 mm</option>
+              <option value="1.6">1.6 mm</option><option value="2">2 mm</option></select></label>
         </div>
         <p id="conformInfo" class="hint" hidden></p>
         <div id="partsList" class="parts"></div>
@@ -369,7 +376,7 @@
         <p id="printerStatus" class="muted printer-status" aria-live="polite"></p>
         <img id="camView" class="cam-view" alt="Live view inside the printer" hidden />
       </section>
-      <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
+      <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <button id="resetPrefs" class="linkbtn" title="Settings you change (ball, washer, magnets, height, shape) are remembered in this browser for the next figure.">reset settings</button> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
     </aside>
   </main>
 

@@ -92,7 +92,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`; `--pose` adds an OpenPose skeleton (`pose_skeleton`, arms down) as the last reference. Weights listed in its module doc. |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`, plus `texture_details` high-contrast detail filaments). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
-| `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), `apply_paint`. |
+| `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), brush strokes (`PaintOp.path`, gaps joined), part/region fills bounded by paint (`PaintState`, bucket fill), `apply_paint`. |
+| `strengthen.py` | Strengthen thin parts (`Params.strengthen` mm): voxel parity fill + EDT local thickness at print size, taper from the join (full target) to the tip (`TIP`), necks get the full target; vertices move only. Runs in `Session._conformed` after conform. |
 | `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball, max-scale fit (Nelder–Mead with restarts), washer-seat shell. |
 | `magnets.py` | Height field of the underside, pocket maps, auto/manual placement, seat modes `washer` (default) / `raised`. |
 | `checks.py`, `planar.py` | Printability checks (watertight, thickness, overhangs, islands, bed contact, supports verdict); section regions without rtree. |
@@ -103,7 +104,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 |---|---|
 | `src/main.ts` | UI state (`state.params` mirrors `Params`), cards, analyse/export flow. |
 | `src/scene.ts` | three.js viewer, ball/figure/pockets, tap picking. |
-| `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, GLB "Filaments" slider. |
+| `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, brush strokes (scene.ts `setStrokeHandler`), GLB "Filaments" slider; `prepare` builds tap structures when painting starts. |
+| `src/prefs.ts` | Remembered settings (localStorage `pokefit.prefs.v1`): only changed, whitelisted, type-checked params; defaults before a file is open. |
 | `src/slotpicker.ts`, `src/colour.ts` | "Prints from" slot dropdown with swatches, closest first (ΔE = the engine's CIE76); colour helpers. |
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |

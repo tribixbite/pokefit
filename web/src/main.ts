@@ -10,6 +10,7 @@ import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import type {
   AmsSlot, Check, Config, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
 } from "./types";
+import { browserStore, clearPrefs, readPrefs, REMEMBERED_KEYS, writePrefs } from "./prefs";
 import { UndersideEditor } from "./underside";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -27,16 +28,23 @@ interface State {
   seq: number;
 }
 
+/** The engine's defaults (`pipeline.Params`); the washer becomes the config's default once it is known. */
+let defaults: Params = {
+  ball_scale: 0.6, ball_diameter: null, washer: "M6", clearance: 1, figure_scale: null, figure_height: null,
+  rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
+  pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
+  pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
+  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, paint_depth: null,
+  filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0, strengthen: 0,
+};
+/** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
+const prefStore = browserStore();
+const remembered = readPrefs(prefStore);
+
 const state: State = {
   config: null,
   session: null,
-  params: {
-    ball_scale: 0.6, ball_diameter: null, washer: "M6", clearance: 1, figure_scale: null,
-    rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
-    pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
-    pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-    process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, paint_depth: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
-  },
+  params: { ...defaults, ...remembered },
   report: null,
   focus: null,
   seq: 0,
@@ -45,6 +53,14 @@ const state: State = {
 const viewer = new Viewer($("viewport"));
 const underside = new UndersideEditor($("underside"), (pockets) => {
   state.params.pockets = pockets;
+  void runAnalyse();
+}, (c) => {
+  // The fill circle is kept at scale 1 (it moves with the figure when its size changes).
+  const s = state.report?.fit.scale;
+  const fc = state.params.fill_circle;
+  if (!fc || !s) return;
+  state.params.fill_circle = { ...fc, x: +(c.x / s).toFixed(4), y: +(c.y / s).toFixed(4) };
+  state.params.pockets = null;
   void runAnalyse();
 });
 /** Paint/colours changed since the last analysis (its import-file colour map is stale). */
@@ -56,9 +72,12 @@ const colorize = new ColorizePanel({
   refresh: async (regions) => {
     if (await refreshFigure(regions) && state.report) viewer.update(state.report, state.focus);
   },
-  pick: (hit, mode, angle, radius) =>
-    api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius }),
+  pick: (hit, mode, angle, radius, stroke) =>
+    api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius,
+      ...(stroke?.length ? { stroke } : {}) }),
+  prepare: (mode, angle) => api.preparePaint(state.session ?? "", state.params, { mode, angle }),
   setPicking: (fn) => viewer.setPickHandler(fn),
+  setStroking: (fn) => viewer.setStrokeHandler(fn),
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
   toast: (msg) => toast(msg),
@@ -103,7 +122,8 @@ async function init(): Promise<void> {
   }
   const cfg = state.config;
   if (cfg.engine === "local") engineStatus("local");
-  state.params.washer = cfg.default_washer;
+  defaults = { ...defaults, washer: cfg.default_washer };
+  if (!remembered.washer) state.params.washer = cfg.default_washer;
   state.params.slot = cfg.default_slot;
   const ballSel = $<HTMLSelectElement>("ballSelect");
   for (const s of cfg.ball_scales) {
@@ -114,7 +134,14 @@ async function init(): Promise<void> {
   const ws = $<HTMLSelectElement>("washerSelect");
   for (const w of cfg.washers) ws.append(h("option", { value: w.key, textContent: w.label }));
   ws.append(h("option", { value: "custom", textContent: "Custom size…" }));
-  ws.value = cfg.default_washer;
+  if (!cfg.washers.some((w) => w.key === state.params.washer)) {
+    const [od, id, t] = state.params.washer.split(",").map(Number);
+    if (od > id && id >= 0 && t > 0) {
+      ws.insertBefore(h("option", { value: state.params.washer, textContent: `custom ${od} × ${id} × ${t} mm` }), ws.lastElementChild);
+    } else state.params.washer = cfg.default_washer;     // a remembered washer this version no longer has
+  }
+  ws.value = state.params.washer;
+  syncControls();
   renderSlots(cfg);
   renderPrinter(cfg);
 
@@ -251,19 +278,18 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
     state.session = res.session;
     colorize.reset();
     state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0 };
+      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
+      fill_circle: null };
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
     $("exportOut").replaceChildren();
     $("washerTable").replaceChildren();
     // Initial analysis used server defaults; re-run if the UI's settings differ.
+    // The first analysis used the engine's defaults: run again with the user's settings (remembered or set
+    // before the file was opened) where any differ.
     const r = res.report;
-    const differs = r.params.washer !== state.params.washer || r.params.ball_scale !== state.params.ball_scale ||
-      r.params.ball_diameter !== state.params.ball_diameter ||
-      r.params.clearance !== state.params.clearance || r.params.magnets !== state.params.magnets ||
-      r.params.bend !== state.params.bend || r.params.flat_base !== state.params.flat_base ||
-      r.params.flat_depth !== state.params.flat_depth || r.params.flat_fill !== state.params.flat_fill;
+    const differs = REMEMBERED_KEYS.some((k) => r.params[k] !== state.params[k]);
     shownGeometry = geometryKey();
     await showFigure(res.session, null, false);
     if (differs) await runAnalyse();
@@ -324,7 +350,46 @@ function geometryKey(): string {
 }
 let shownGeometry = "";
 
+/** Remember the settings the user changed (the next figure, or the next visit, starts from them). */
+function remember(): void {
+  writePrefs(prefStore, state.params, defaults);
+}
+
+/** Show `state.params` in the controls that the report does not set (before a file, or after a reset). */
+function syncControls(): void {
+  const p = state.params;
+  const preset = !p.ball_diameter && (state.config?.ball_scales.includes(p.ball_scale) ?? false);
+  $<HTMLSelectElement>("ballSelect").value = preset ? String(p.ball_scale) : "custom";
+  $("ballCustomRow").hidden = preset;
+  if (!preset && p.ball_diameter) $<HTMLInputElement>("ballCustom").value = p.ball_diameter.toFixed(1);
+  $<HTMLSelectElement>("washerSelect").value = p.washer;
+  $<HTMLInputElement>("clearanceInput").value = String(p.clearance);
+  $<HTMLInputElement>("heightInput").value = p.figure_height ? String(p.figure_height) : "";
+  $<HTMLSelectElement>("bendSelect").value = p.bend === null ? "auto" : String(p.bend);
+  $<HTMLInputElement>("flatD").value = p.flat_base === null ? "" : String(p.flat_base);
+  $<HTMLInputElement>("flatDepth").value = String(p.flat_depth);
+  $<HTMLInputElement>("flatFill").value = String(p.flat_fill);
+  $<HTMLSelectElement>("paintDepth").value = p.paint_depth === null ? "" : String(p.paint_depth);
+  $<HTMLSelectElement>("strengthenSelect").value = String(p.strengthen);
+  document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
+    b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === p.magnets)));
+  document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
+    b.setAttribute("aria-checked", String(b.dataset.seat === p.pocket_seat)));
+  for (const [id, key] of POCKET_INPUTS) $<HTMLInputElement>(id).value = String(p[key]);
+  syncFillCircle();
+}
+
+/** The "Fill where" controls from `state.params.fill_circle` (its Ø shown at the print size). */
+function syncFillCircle(): void {
+  const fc = state.params.fill_circle;
+  $<HTMLSelectElement>("fillWhere").value = fc ? "circle" : "auto";
+  $("fillCircleRow").hidden = !fc;
+  const s = state.report?.fit.scale;
+  if (fc && s) $<HTMLInputElement>("fillCircleD").value = (fc.d * s).toFixed(1);
+}
+
 async function runAnalyse(): Promise<void> {
+  remember();
   if (!state.session) return;
   if (geometryKey() !== shownGeometry) await refreshFigure();
   const seq = ++state.seq;
@@ -448,8 +513,11 @@ function renderMagnets(rep: Report): void {
   $<HTMLInputElement>("pkMaxSeat").disabled = !raised;
   $("maxSeatLabel").classList.toggle("off", !raised);
   for (const e of [$("seatMode").closest<HTMLElement>(".seat-row"), $("seatHint")]) if (e) e.hidden = n === 0;
-  $("underside").hidden = n === 0;
-  underside.render(rep.underside, rep.pockets);
+  const fc = rep.params.fill_circle;
+  const s = rep.fit.scale;
+  $("underside").hidden = n === 0 && !fc;
+  underside.render(rep.underside, rep.pockets, fc && s ? { x: fc.x * s, y: fc.y * s, r: (fc.d / 2) * s } : null);
+  syncFillCircle();
   $("pocketInfo").textContent = !n ? "no magnets" : rep.params.pockets ? "placed by hand"
     : rep.pockets.length ? "automatic" : "";
   $("autoPockets").hidden = n === 0;
@@ -838,14 +906,18 @@ function bind(): void {
     state.params.figure_scale = +slider.value / 100;
     void runAnalyse();
   });
+  // A height typed here is remembered for the next figures too (it can be set before opening one).
   $<HTMLInputElement>("heightInput").addEventListener("change", (e) => {
     const mm = +(e.target as HTMLInputElement).value;
-    if (!state.report || !(mm > 0)) return;
-    state.params.figure_scale = mm / state.report.fit.unit_height;
+    if (!(mm >= 1 && mm <= 1000)) { toast("Height must be 1–1000 mm."); return; }
+    state.params.figure_height = mm;
+    state.params.figure_scale = null;
     void runAnalyse();
   });
   $("maxBtn").addEventListener("click", () => {
     state.params.figure_scale = null;
+    state.params.figure_height = null;
+    if (!state.report) $<HTMLInputElement>("heightInput").value = "";
     state.params.pockets = null;
     void runAnalyse();
   });
@@ -918,6 +990,59 @@ function bind(): void {
   $<HTMLSelectElement>("paintDepth").addEventListener("change", (e) => {
     const v = (e.target as HTMLSelectElement).value;
     state.params.paint_depth = v === "" ? null : +v;
+    remember();
+  });
+  // Strengthen thin parts: reshapes the figure (like the conform step), so size and pockets are found again.
+  $<HTMLSelectElement>("strengthenSelect").addEventListener("change", (e) => {
+    state.params.strengthen = +(e.target as HTMLSelectElement).value;
+    state.params.figure_scale = null;
+    state.params.pockets = null;
+    void runAnalyse();
+  });
+  // Fill where: round the washer (automatic) or a circle the user places under the body.
+  $<HTMLSelectElement>("fillWhere").addEventListener("change", (e) => {
+    const circle = (e.target as HTMLSelectElement).value === "circle";
+    const rep = state.report;
+    if (circle && !rep) {
+      toast("Open a figure first: the circle is placed under it.");
+      syncFillCircle();
+      return;
+    }
+    if (circle && rep) {
+      const s = rep.fit.scale || rep.fit.max_scale;
+      const d = state.params.flat_base ?? rep.ball.washer.od;
+      // Starts centred on the washer, as wide as the flat base.
+      state.params.fill_circle = { x: +(rep.underside.ring.x / s).toFixed(4), y: +(rep.underside.ring.y / s).toFixed(4),
+        d: +(d / s).toFixed(4) };
+      if (state.params.flat_fill <= 0) {
+        state.params.flat_fill = 2.5;
+        $<HTMLInputElement>("flatFill").value = "2.5";
+        toast("Fill gaps up to was 0 mm (nothing filled): set to 2.5 mm.");
+      }
+    } else state.params.fill_circle = null;
+    state.params.pockets = null;
+    syncFillCircle();
+    void runAnalyse();
+  });
+  $<HTMLInputElement>("fillCircleD").addEventListener("change", (e) => {
+    const mm = +(e.target as HTMLInputElement).value;
+    const fc = state.params.fill_circle;
+    const s = state.report?.fit.scale;
+    if (!fc || !s) return;
+    if (!(mm >= 1 && mm <= 60)) { toast("Circle Ø must be 1–60 mm."); return; }
+    state.params.fill_circle = { ...fc, d: +(mm / s).toFixed(4) };
+    state.params.pockets = null;
+    void runAnalyse();
+  });
+  $("resetPrefs").addEventListener("click", () => {
+    clearPrefs(prefStore);
+    const keep = state.params;
+    state.params = { ...defaults, object_id: keep.object_id, slot: keep.slot, process: keep.process, rotate_x: keep.rotate_x,
+      rotate_y: keep.rotate_y, rotate_z: keep.rotate_z, filament_map: keep.filament_map, colours: keep.colours,
+      paint: keep.paint, texture_colours: keep.texture_colours, texture_details: keep.texture_details };
+    syncControls();
+    toast("Settings reset to the defaults.");
+    void runAnalyse();
   });
   $<HTMLInputElement>("flatD").addEventListener("change", (e) => {
     const raw = (e.target as HTMLInputElement).value.trim();
