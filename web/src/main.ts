@@ -7,7 +7,7 @@ import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
-import type { AmsSlot, Check, Config, Params, Report, SliceResult, SliceVariants, WasherRow } from "./types";
+import type { AmsSlot, Check, Config, Params, PrintPlan, Report, SliceResult, SliceVariants, WasherRow } from "./types";
 import { UndersideEditor } from "./underside";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -674,11 +674,29 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
       h("div", { cls: "print-plan" },
         h("div", { textContent: `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C):` }),
         h("table", { cls: "tbl" }, h("tbody", {}, ...rows)),
+        printCheckView(plan),
         h("div", { cls: "muted", textContent: "Check the plate is clean and the spools are right: this starts the printer." }),
         h("div", { cls: "row" }, start, cancel), status));
   } catch (e) {
     box.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   }
+}
+
+/** beambam's check of the G-code before "Start print": time, weight, purge, nozzle swaps, its warnings. */
+function printCheckView(plan: PrintPlan): HTMLElement {
+  const c = plan.check;
+  if (!c) return h("div", { cls: "muted", textContent: `File check unavailable: ${plan.check_error}` });
+  const parts = [
+    c.seconds != null ? formatDuration(c.seconds) : "",
+    c.grams != null ? `${c.grams.toFixed(1)} g` : "",
+    c.tool_changes != null ? `${c.tool_changes} tool changes` : "",
+    c.purge_g != null ? `purge ${c.purge_g.toFixed(1)} g` : "",
+    c.nozzle_swaps != null ? `${c.nozzle_swaps} nozzle swaps` : "",
+  ].filter(Boolean);
+  const notes = [...c.warnings.map((w) => h("div", { cls: "warn-text", textContent: `⚠ ${w}` })),
+    ...c.hints.map((t) => h("div", { cls: "muted", textContent: t }))];
+  return h("div", { cls: "print-check" },
+    h("div", { textContent: `File check (beambam, reads the file only): ${parts.join(" · ")}` }), ...notes);
 }
 
 /** The slicer has the final word on supports: replace the geometric estimate in the checklist. */

@@ -13,7 +13,8 @@ import pytest
 import trimesh
 
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, open_session
-from pokefit.printer import (CameraProxy, PrinterError, ams_slots, beambam_command, print_file_summary,
+from pokefit.printer import (CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
+                             print_file_summary,
                              print_progress, read_state, send_print, track_switch)
 
 STATE = {"print": {
@@ -189,3 +190,28 @@ def test_send_print_passes_one_slot_per_filament(tmp_path: Path, monkeypatch: py
     monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{fail}"')
     with pytest.raises(PrinterError, match="slot 10 is empty"):
         send_print(f, [8, 10])
+
+
+def test_print_file_check_reads_beambams_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fake `beambam analyze --json` (the real one reads only the file; nothing here touches a printer).
+    log = tmp_path / "args.json"
+    report = {"plate": {"predicted_seconds": 6030, "weight_g": 19.62},
+              "filaments": [{"id": 1, "nozzle": 0}, {"id": 2, "nozzle": 1}],
+              "totals": {"nozzle_swaps": 0, "tool_calls_total": 150, "flush_volume_g": 0.0},
+              "warnings": ["purge over 10 g"], "hints": ["put filament 2 on the other nozzle"]}
+    script = tmp_path / "fake_analyze.py"
+    script.write_text("import json, sys\n"
+                      f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                      f"print({json.dumps(json.dumps(report))})\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{script}"')
+    f = _print_file(tmp_path / "f.gcode.3mf")
+    got = print_file_check(f)
+    assert json.loads(log.read_text()) == ["analyze", "--json", str(f)]
+    assert got == {"seconds": 6030, "grams": 19.62, "purge_g": 0.0, "nozzle_swaps": 0, "tool_changes": 150,
+                   "nozzles": {"1": 0, "2": 1}, "warnings": ["purge over 10 g"],
+                   "hints": ["put filament 2 on the other nozzle"]}
+    fail = tmp_path / "fake_fail.py"
+    fail.write_text("import sys\nsys.exit('not a .gcode.3mf')\n", encoding="utf-8")
+    monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{fail}"')
+    with pytest.raises(PrinterError, match="not a .gcode.3mf"):
+        print_file_check(f)

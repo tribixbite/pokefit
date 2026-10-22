@@ -267,6 +267,22 @@ export interface PrintPlan {
   file: string;
   filaments: { filament: number; preset: string; type: string; colour: string; bed_temp: string; slot: number;
     spool: AmsSlot | null }[];
+  /** beambam's reading of the G-code (`beambam analyze`, file only); null with `check_error` when it failed. */
+  check: PrintCheck | null;
+  check_error: string;
+}
+
+/** `printer.print_file_check`: what the sliced G-code does, as beambam reads it. */
+export interface PrintCheck {
+  seconds: number | null;
+  grams: number | null;
+  purge_g: number | null;
+  nozzle_swaps: number | null;
+  tool_changes: number | null;
+  /** Filament id -> nozzle index (0 / 1). */
+  nozzles: Record<string, number | null>;
+  warnings: string[];
+  hints: string[];
 }
 
 /** What became of one imported Bambu preset. */

@@ -84,6 +84,8 @@
 
 - Licence: GNU AGPL v3.0 or later (source: https://github.com/tribixbite/pokefit).
 - Local version with beambam: reads the printer's AMS spools and matches the figure's colours to them; the
-  Printer card shows the printer's live camera and progress (read-only).
+  Printer card shows the printer's live camera and progress (read-only). "Send to printer" on a sliced file shows
+  which spool feeds each filament plus beambam's check of the G-code (time, grams, tool changes, purge, nozzle
+  swaps, warnings; it reads the file only) before an explicit "Start print".
 - Not affiliated with Nintendo, Game Freak, Creatures or The Pokémon Company.
 - Contact / issues: https://github.com/tribixbite/pokefit/issues

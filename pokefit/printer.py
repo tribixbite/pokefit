@@ -277,6 +277,37 @@ def print_file_summary(path: Path) -> dict[str, Any]:
         for i in range(len(types))]}
 
 
+ANALYZE_TIMEOUT_S = 60.0
+
+
+def print_file_check(path: Path, timeout: float = ANALYZE_TIMEOUT_S) -> dict[str, Any]:
+    """beambam's own reading of a sliced print file (`beambam analyze --json`: the G-code's tool changes, purge,
+    nozzle swaps, its warnings and hints). Reads only the file: it never contacts the printer. The same
+    analysis `beambam print --dry-run` gates on."""
+    cmd = beambam_command()
+    if cmd is None:
+        raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
+    try:
+        out = subprocess.run([*cmd, "analyze", "--json", str(path)], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=timeout,
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PrinterError(f"beambam analyze failed: {exc}") from exc
+    if out.returncode != 0:
+        raise PrinterError(f"beambam analyze failed ({out.returncode}): {(out.stderr or out.stdout).strip()[-400:]}")
+    try:
+        d = json.loads(out.stdout)
+    except json.JSONDecodeError as exc:
+        raise PrinterError(f"beambam analyze printed no JSON: {exc}") from exc
+    plate, totals = d.get("plate") or {}, d.get("totals") or {}
+    return {"seconds": plate.get("predicted_seconds"), "grams": plate.get("weight_g"),
+            "purge_g": totals.get("flush_volume_g"), "nozzle_swaps": totals.get("nozzle_swaps"),
+            "tool_changes": totals.get("tool_calls_total"),
+            "nozzles": {str(f.get("id")): f.get("nozzle") for f in d.get("filaments") or []},
+            "warnings": [str(w) for w in d.get("warnings") or []], "hints": [str(h) for h in d.get("hints") or []]}
+
+
 def send_print(path: Path, slots: list[int], timeout: float = PRINT_TIMEOUT_S) -> str:
     """Upload `path` (a sliced .gcode.3mf) to the printer and start it, filament i from AMS slot slots[i]:
     `beambam print <file> --slot a,b,...`. CHANGES THE PRINTER: call only on the user's explicit action.

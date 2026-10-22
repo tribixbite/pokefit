@@ -6,9 +6,10 @@ them with **Qwen-Image-Edit-2511** (Alibaba Qwen, Apache-2.0; ComfyUI's native `
 nodes and the `image_qwen_image_edit_2511_int8` template's settings):
 
 1. Clean front: one edit of up to three of the photos together ("Picture 1..3" references): the figure
-   alone, facing the camera, on plain white, even light. `pose=True` also asks it to sit flat on its base
-   with limbs and tail tucked close to the body (a better fit in a ball; edit models follow pose requests
-   only loosely, so check the result).
+   alone, facing the camera, on plain white, even light. `pose=True` re-poses it with arms down at its sides
+   (a better fit in a ball): the last reference is then an OpenPose keypoint map (`pose_skeleton`), which
+   2509+ reads natively. Words alone ("arms tucked in") did not move a Charmander's raised arms; the skeleton
+   did, though it also stood the figure up, so check the result.
 2. Other views: one edit per view from the clean front with fal's Multiple-Angles LoRA (Apache-2.0, trained
    on 2511; its prompt grammar is "<sks> <azimuth> <elevation> <distance>"), same seed for every view.
    Separate calls, not one turnaround sheet: sheet LoRAs make characters narrower.
@@ -47,9 +48,57 @@ CLEAN_PROMPT = (
     "no shadows, a matte finish with no shiny highlights, reflections or glare. Remove everything that is not part of the figure: the ball, the stand, "
     "the base and any loose effect pieces around it. Keep the figure's exact shape, proportions, colours, "
     "eyes and markings.")
-POSE_PROMPT = (
-    " Pose it sitting flat on its bottom, compact: legs, arms and tail tucked close to the body instead of "
-    "sticking out.")
+# With a pose skeleton as the last reference picture (`pose_skeleton`): Qwen-Image-Edit 2509+ reads OpenPose
+# keypoint maps natively, so the pose is drawn rather than described.
+POSE_SKELETON_PROMPT = (
+    " The last picture is a stick-figure pose skeleton, not part of the figure: pose the figure like it, sitting "
+    "flat on its bottom with both arms down at its sides, close to the body, and the legs forward.")
+
+# OpenPose COCO-18 skeleton (controlnet_aux's drawing: limb pairs, one colour per limb and joint).
+_LIMBS = ((1, 2), (1, 5), (2, 3), (3, 4), (5, 6), (6, 7), (1, 8), (8, 9), (9, 10), (1, 11), (11, 12), (12, 13),
+          (1, 0), (0, 14), (14, 16), (0, 15), (15, 17))
+_POSE_COLOURS = ((255, 0, 0), (255, 85, 0), (255, 170, 0), (255, 255, 0), (170, 255, 0), (85, 255, 0),
+                 (0, 255, 0), (0, 255, 85), (0, 255, 170), (0, 255, 255), (0, 170, 255), (0, 85, 255),
+                 (0, 0, 255), (85, 0, 255), (170, 0, 255), (255, 0, 255), (255, 0, 170), (255, 0, 85))
+# A chibi figure (head ~40 % of the height) sitting, facing the camera, arms down at its sides, legs forward:
+# (x, y) as shares of the figure's box. Index order: nose, neck, R shoulder/elbow/wrist, L shoulder/elbow/wrist,
+# R hip/knee/ankle, L hip/knee/ankle, R eye, L eye, R ear, L ear (R = the figure's right = image left).
+_SITTING = ((0.50, 0.27), (0.50, 0.45), (0.36, 0.49), (0.31, 0.60), (0.30, 0.70), (0.64, 0.49), (0.69, 0.60),
+            (0.70, 0.70), (0.42, 0.76), (0.29, 0.86), (0.24, 0.93), (0.58, 0.76), (0.71, 0.86), (0.76, 0.93),
+            (0.43, 0.21), (0.57, 0.21), (0.30, 0.23), (0.70, 0.23))
+
+
+def pose_skeleton(width: int, height: int, box: tuple[float, float, float, float] = (0.2, 0.08, 0.8, 0.95),
+                  points: tuple[tuple[float, float], ...] = _SITTING) -> Image.Image:
+    """An OpenPose-style keypoint map (black background, coloured limbs and joints) of `points` placed in
+    `box` = (left, top, right, bottom) as shares of the image."""
+    import math
+
+    from PIL import ImageDraw
+
+    l, t, r, b = box
+    pts = [((l + x * (r - l)) * width, (t + y * (b - t)) * height) for x, y in points]
+    img = Image.new("RGB", (width, height), (0, 0, 0))
+    stick = max(2.0, 4.0 * min(width, height) / 512)
+    layer = Image.new("RGB", (width, height), (0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    for (a, c), colour in zip(_LIMBS, _POSE_COLOURS):
+        (x0, y0), (x1, y1) = pts[a], pts[c]
+        length, angle = math.hypot(x1 - x0, y1 - y0), math.atan2(y1 - y0, x1 - x0)
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        # The limb as a polygon approximating controlnet_aux's ellipse (cv2.ellipse2Poly).
+        poly = [(mx + math.cos(angle) * length / 2 * math.cos(s) - math.sin(angle) * stick * math.sin(s),
+                 my + math.sin(angle) * length / 2 * math.cos(s) + math.cos(angle) * stick * math.sin(s))
+                for s in (k * math.pi / 18 for k in range(36))]
+        draw.polygon(poly, fill=tuple(int(v * 0.6) for v in colour))
+    img = Image.blend(img, layer, 1.0)
+    draw = ImageDraw.Draw(img)
+    rad = stick
+    for (x, y), colour in zip(pts, _POSE_COLOURS):
+        draw.ellipse((x - rad, y - rad, x + rad, y + rad), fill=colour)
+    return img
+
+
 # The figure's own left = the view where it faces the image's left (imageto3d's convention). fal's LoRA names
 # them the other way round: on the Charmander photos "<sks> left side view" turned it to face the image's
 # RIGHT (tail on the left), i.e. its own right side; so the rig's left view asks for "right side view".
@@ -66,7 +115,7 @@ class CleanOptions:
     """Settings of the clean-up edits."""
     seed: int = 0
     steps: int = 8                  # Lightning 8-step LoRA
-    pose: bool = False              # also re-pose: sit flat, limbs and tail tucked in
+    pose: bool = False              # also re-pose: arms down at the sides (an OpenPose skeleton reference)
     angle_strength: float = 0.9     # Multiple-Angles LoRA strength (fal: 0.8-1.0)
     views: tuple[str, ...] = ("left", "back")   # generated from the clean front; "right" too for lopsided figures
     view_refs: bool = True          # also give each view edit the original photos (after the clean front), so
@@ -153,11 +202,17 @@ def clean_photos(photos: list[Path], out_dir: Path, url: str = DEFAULT_URL, opts
         log(f"cleaned the {view} view in {time.time() - t:.0f} s")
         return path
 
+    n_photos = MAX_REFS - 1 if opts.pose else MAX_REFS       # the pose skeleton takes the last reference
     refs = [comfy.upload(f"pokefit_{tag}_ref{i}.png", _png(Image.open(p).convert("RGB")))
-            for i, p in enumerate(photos[:MAX_REFS])]
-    if len(photos) > MAX_REFS:
-        log(f"cleaning photos: using the first {MAX_REFS} of {len(photos)} photos")
-    views = {"front": edit(refs, CLEAN_PROMPT + (POSE_PROMPT if opts.pose else ""), False, "front")}
+            for i, p in enumerate(photos[:n_photos])]
+    if len(photos) > n_photos:
+        log(f"cleaning photos: using the first {n_photos} of {len(photos)} photos")
+    front_refs, prompt = refs, CLEAN_PROMPT
+    if opts.pose:
+        size = Image.open(photos[0]).size
+        front_refs = [*refs, comfy.upload(f"pokefit_{tag}_pose.png", _png(pose_skeleton(*size)))]
+        prompt += POSE_SKELETON_PROMPT
+    views = {"front": edit(front_refs, prompt, False, "front")}
     front = comfy.upload(f"pokefit_{tag}_clean_front.png", views["front"].read_bytes())
     extra = refs[:MAX_REFS - 1] if opts.view_refs else []
     for v in opts.views:

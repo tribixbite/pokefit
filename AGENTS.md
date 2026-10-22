@@ -87,9 +87,9 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
 | `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`), `best_value_count` = a glTF's "auto" palette size (`Session.auto_texture_count`). Calibrated on Bambu slices. |
-| `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
+| `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `print_file_check` (`beambam analyze`, reads the file only), `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
 | `imageto3d.py` | Photos (front/left/back[/right]) -> coloured GLB via a local ComfyUI running Pixal3D (`python -m pokefit photos`, UI "Make one from photos", `POST /api/photos`). |
-| `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`. Weights listed in its module doc. |
+| `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`; `--pose` adds an OpenPose skeleton (`pose_skeleton`, arms down) as the last reference. Weights listed in its module doc. |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`, plus `texture_details` high-contrast detail filaments). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
 | `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/brush/face), `apply_paint`. |
@@ -167,7 +167,9 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
   `--no-mirror-right` / untick in the dialog for lopsided figures).
 - Colours: by default the photos' own colours are projected back onto the mesh (`photo_colours`: the mesh
   sits in the rig frame, silhouette IoU 0.94–0.98; z-buffered, masks eroded 4 px, cos² weights); vertices no
-  view sees keep the model colour, gain-corrected. Fixes the model's dark albedo and blurred eyes.
+  view sees keep the model colour, gain-corrected. Fixes the model's dark albedo and blurred eyes. Gloss: per view a
+  sample much lighter AND paler than the model's (lighting-free) colour mapped into that photo is a reflection and
+  takes that prediction (`gloss_free`, `GLOSS_*`); dark model colours (pupils) never count as gloss.
   `--model-colours` keeps the model's own (also saved as `<name>_model_colours.glb`).
 - One photo from any angle: `--photo P` (or the dialog's "Or one photo, any angle"): BiRefNet crop, MoGe-2
   FOV, single-view Pixal3D (`pixal3d_int8_convrot` + `models/geometry_estimation/moge_2_vitl_normal_fp16`).

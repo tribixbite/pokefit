@@ -17,7 +17,7 @@ from PIL import Image
 
 from pokefit.imageto3d import (FRAME, PAD, ComfyError, Framed, frame_views, generate_prompt, mask_prompt,
                                single_prompt,
-                               photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera,
+                               gloss_free, photo_colours, photos_to_glb, project, recolour_glb, vertex_colour_glb, Camera,
                                TO_RIG, GenOptions, _glb_vertex_colours, facing_front, turn_glb)
 from pokefit.model3mf import read_project
 
@@ -210,6 +210,23 @@ def test_photo_colours_land_where_the_views_see(cam: Camera | None) -> None:
     assert np.all(out[right, 2] > 180) and np.all(out[right, 0] < 80)
     away = n[:, 1] > 0.5
     assert 0.15 < share < 0.6 and not np.any(np.all(out[away] == img[0, 0], axis=1))
+
+
+def test_gloss_takes_the_model_colour() -> None:
+    """A light-blue model photographed with a white reflection and a red-brown eye: the reflection (lighter and
+    paler than the model predicts) takes the model's colour mapped into the photo's; the eye (more saturated)
+    and dark features (pupils the model blurs) keep the photo's colour."""
+    rng = np.random.default_rng(0)
+    model = np.tile([120.0, 190.0, 210.0], (400, 1)) + rng.normal(0, 4, (400, 3))
+    model[350:] = (20, 20, 20)                           # a dark pupil in the model
+    photo = model * 0.9 + 10                             # the photo's own exposure
+    photo[:30] = (245, 248, 250)                         # a reflection on the light blue
+    photo[30:40] = (150, 60, 40)                         # a red-brown iris the model blurred to blue
+    photo[350:360] = (250, 250, 250)                     # an eye highlight on the pupil
+    out, gloss = gloss_free(photo, model)
+    assert gloss[:30].all() and not gloss[30:].any()
+    assert np.allclose(out[:30], model[:30] * 0.9 + 10, atol=8)
+    assert np.array_equal(out[30:], photo[30:])
 
 
 def test_vertex_colour_glb_round_trips(tmp_path: Path) -> None:

@@ -184,6 +184,15 @@ FOV_DEG = 20.0
 MIN_COS = 0.45          # a view must face the surface at least this squarely (cos of the angle)
 EDGE_PX = 4             # photo pixels this close to the silhouette are not sampled (the mesh is a few px off)
 DEPTH_TOL = 0.012       # rig units (the figure spans ~1): how far behind the nearest surface still counts as seen
+# Gloss: a toy's shiny plastic shows light streaks that are the lamp, not paint; the generated model's own colour
+# has none (it is lighting-free, if blurred). Per view, the model's colours are mapped into the photo's (a robust
+# per-channel line, refitted without the worst GLOSS_TRIM share), and a sample at least GLOSS_DL lighter AND
+# GLOSS_DC paler (CIELAB) than that prediction is a reflection: it takes the prediction instead. Where the
+# prediction is dark (L < GLOSS_MIN_L: pupils, outlines) the photo always wins, since the model blurs those.
+GLOSS_DL = 10.0
+GLOSS_DC = 3.0
+GLOSS_MIN_L = 35.0
+GLOSS_TRIM = 0.2
 
 
 @dataclass(frozen=True)
@@ -218,14 +227,36 @@ def project(points: np.ndarray, name: str, cam: Camera = RIG) -> tuple[np.ndarra
     return FRAME / 2 + (rel @ right) * k, FRAME / 2 - (rel @ up) * k, depth
 
 
+def gloss_free(sample: np.ndarray, model: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """One view's photo samples (sRGB 0..255) with reflections replaced by the model's colour mapped into the
+    photo's (see GLOSS_*); (samples, which were reflections)."""
+    from .gltf import L_WEIGHT, _lab
+
+    pred = np.empty_like(sample)
+    keep = np.ones(len(sample), bool)
+    for _ in range(2):                         # fit, drop the worst GLOSS_TRIM share (gloss, eyes), refit
+        for c in range(3):
+            a, b = np.polyfit(model[keep, c], sample[keep, c], 1)
+            pred[:, c] = a * model[:, c] + b
+        err = np.linalg.norm(sample - pred, axis=1)
+        keep = err <= np.quantile(err, 1 - GLOSS_TRIM)
+    pred = np.clip(pred, 0, 255)
+    ls, lp = _lab(np.clip(sample, 0, 255)), _lab(pred)
+    lighter = (ls[:, 0] - lp[:, 0]) / L_WEIGHT
+    paler = np.hypot(lp[:, 1], lp[:, 2]) - np.hypot(ls[:, 1], ls[:, 2])
+    gloss = (lighter >= GLOSS_DL) & (paler >= GLOSS_DC) & (lp[:, 0] / L_WEIGHT >= GLOSS_MIN_L)
+    return np.where(gloss[:, None], pred, sample), gloss
+
+
 def photo_colours(vertices: np.ndarray, normals: np.ndarray, base: np.ndarray,
-                  views: dict[str, Framed], cam: Camera = RIG) -> tuple[np.ndarray, float]:
+                  views: dict[str, Framed], cam: Camera = RIG, gloss: bool = True) -> tuple[np.ndarray, float]:
     """Vertex colours (sRGB 0..255) from the framed photos; (colours, share of vertices a photo saw).
 
     Per view: vertices facing it (cos > MIN_COS) and not behind the nearest surface (a z-buffer of vertex
     splats, min-filtered to close the gaps between them) sample the photo bilinearly inside its mask
     (eroded by EDGE_PX: along the silhouette the mesh and photo disagree by a few pixels), weighted by cos². Vertices no view sees keep the model's colour, corrected by the per-channel gain and
-    offset that maps the model's colours to the photos' on the vertices that were seen.
+    offset that maps the model's colours to the photos' on the vertices that were seen. `gloss`: reflections
+    in a photo take the model's colour instead (`gloss_free`).
     """
     from scipy import ndimage
 
@@ -256,6 +287,8 @@ def photo_colours(vertices: np.ndarray, normals: np.ndarray, base: np.ndarray,
         fx, fy = (x - x0)[:, None], (y - y0)[:, None]
         sample = (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
                   + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
+        if gloss and seen.sum() > 10:
+            sample, _ = gloss_free(sample, np.asarray(base, np.float64)[seen])
         w = cos[seen] ** 2
         acc[seen] += sample * w[:, None]
         wsum[seen] += w

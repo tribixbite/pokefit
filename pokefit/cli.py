@@ -211,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
     ph.add_argument("--photo-colours", action="store_true",
                     help="with --clean: project the redrawn views' colours onto the model (default: the model's own)")
     ph.add_argument("--pose", action="store_true",
-                    help="with --clean: also re-pose it sitting flat, limbs and tail tucked in (fits a ball better)")
+                    help="with --clean: also re-pose it with its arms down at its sides (an OpenPose skeleton reference; "
+                         "fits a ball better, check the result)")
     ph.add_argument("--no-mirror-right", action="store_true",
                     help="without a right photo, do NOT use the left one mirrored as the right view (default: mirror; "
                          "turn it off for clearly asymmetric figures)")

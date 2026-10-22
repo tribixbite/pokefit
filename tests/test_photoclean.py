@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import numpy as np
 import pytest
 from PIL import Image
 
-from pokefit.photoclean import (ANGLES_LORA, LIGHTNING_LORA, POSE_PROMPT, CleanOptions, clean_photos, edit_prompt,
+from pokefit.photoclean import (ANGLES_LORA, LIGHTNING_LORA, POSE_SKELETON_PROMPT, CleanOptions, clean_photos, edit_prompt,
                                 view_prompt)
 
 
@@ -114,9 +115,22 @@ def test_clean_photos_runs_front_then_views(tmp_path: Path) -> None:
         srv.shutdown()
     assert sorted(views) == ["back", "front", "left"] and all(p.exists() for p in views.values())
     front, left, back = _FakeComfy.prompts
-    assert "angles" not in front and front["enc_pos"]["inputs"]["prompt"].endswith(POSE_PROMPT)
+    assert "angles" not in front and front["enc_pos"]["inputs"]["prompt"].endswith(POSE_SKELETON_PROMPT)
+    # pose: two photos, then the OpenPose skeleton as the last reference
     assert [front[f"load{i}"]["inputs"]["image"] for i in (1, 2, 3)] == ["up0.png", "up1.png", "up2.png"]
     # views: the clean front (upload 3) first, then the first two original photos
     assert [left[f"load{i}"]["inputs"]["image"] for i in (1, 2, 3)] == ["up3.png", "up0.png", "up1.png"]
     assert back["enc_pos"]["inputs"]["prompt"] == view_prompt("back") and "angles" in back
     assert _FakeComfy.freed == 1
+
+
+def test_pose_skeleton_draws_coloured_limbs_on_black() -> None:
+    from pokefit.photoclean import pose_skeleton
+    img = np.asarray(pose_skeleton(512, 640))
+    assert img.shape == (640, 512, 3) and (img[0, 0] == 0).all()
+    lit = img.max(axis=2) > 0
+    ys, xs = np.nonzero(lit)
+    # inside the default box (x 20-80 %, y 8-95 %), symmetric about the centre, arms below the shoulders
+    assert 0.2 * 512 <= xs.min() and xs.max() <= 0.8 * 512 and abs((xs.min() + xs.max()) / 2 - 256) < 6
+    assert 0.08 * 640 - 8 <= ys.min() and ys.max() <= 0.95 * 640 + 8
+    assert len({tuple(c) for c in img[lit][::7]}) > 10          # one colour per limb / joint

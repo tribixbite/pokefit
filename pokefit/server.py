@@ -42,7 +42,8 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
-from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_summary,
+from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
+                      print_file_summary,
                       print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe
 from .washer import CATALOGUE, DEFAULT_WASHER
@@ -375,7 +376,14 @@ class Handler(BaseHTTPRequestHandler):
             fil["slot"] = slot
             fil["spool"] = a.to_dict() if a else None
         if not body.get("confirm"):
-            self._json({**summary, "file": body.get("file"), "name": f.name})
+            # beambam's reading of the G-code (reads the file only): shown before "Start print".
+            try:
+                check: dict[str, Any] | None = print_file_check(f)
+                check_error = ""
+            except PrinterError as exc:
+                check, check_error = None, str(exc)
+            self._json({**summary, "file": body.get("file"), "name": f.name, "check": check,
+                        "check_error": check_error})
             return
         jid = uuid.uuid4().hex[:10]
         _jobs[jid] = {"state": "running", "progress": "uploading to the printer and starting"}

@@ -361,3 +361,5 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .print-plan { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 8px; }
 .print-plan .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px;
   border: 1px solid rgba(255, 255, 255, 0.25); }
+.print-check { font-size: 13px; display: grid; gap: 4px; }
+.print-check .warn-text { color: var(--warn); }
