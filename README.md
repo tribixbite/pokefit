@@ -22,7 +22,8 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   gets it all along;
 - **colours single-colour models**: tap the 3D view and each tap fills a part found from the shape (ears, tail,
   eyes, bib…), a separate piece or a brush patch; drag the brush to draw outlines, and a fill stops at a painted
-  outline, so eyes or a belly with no crease round them can be painted too. Mirror paints both sides at once
+  outline, so eyes or a belly with no crease round them can be painted too. The magic wand (the default) takes the
+  feature you tap - an eye, a flame, a toe pad - from the shape alone. Mirror paints both sides at once
   (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
   are dropped. Exported as Bambu paint;
 - **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: a 1.45M-triangle sculpt

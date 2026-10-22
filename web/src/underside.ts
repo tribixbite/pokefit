@@ -73,6 +73,8 @@ export class UndersideEditor {
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: (ring.inner + ring.outer) / 2, class: "u-band",
       "stroke-width": ring.outer - ring.inner }));
     g.appendChild(el("path", { d: ringsPath(data.feet), class: "u-feet", "fill-rule": "evenodd" }));
+    // What the gap fill added: its own colour, so a fill or circle change is visible here at once.
+    if (data.fill?.length) g.appendChild(el("path", { d: ringsPath(data.fill), class: "u-base", "fill-rule": "evenodd" }));
     if (data.valid.length) g.appendChild(el("path", { d: ringsPath(data.valid), class: "u-valid", "fill-rule": "evenodd" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: 0.6, class: "u-centre" }));
     if (this.circle) {

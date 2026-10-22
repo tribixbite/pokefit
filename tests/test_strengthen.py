@@ -90,4 +90,4 @@ def test_the_pipeline_strengthens_on_request(tmp_path: Path) -> None:
     assert d["fit"]["strengthen"]["target_mm"] == 1.6
     assert any(c["id"] == "strengthen" for c in d["checks"])
     with pytest.raises(ValueError, match="strengthen"):
-        Params(strengthen=5)
+        Params(strengthen=6)          # 0..5 mm

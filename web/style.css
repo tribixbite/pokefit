@@ -135,7 +135,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 
 .underside-host { background: #0f151e; border: 1px solid var(--line); border-radius: 10px; aspect-ratio: 1 / 1; max-height: 320px; display: grid; }
 .underside { width: 100%; height: 100%; touch-action: none; }
-.u-washer { fill: rgba(154, 163, 173, .16); stroke: rgba(154, 163, 173, .5); stroke-width: .1; }
+.u-washer { fill: none; stroke: rgba(154, 163, 173, .55); stroke-width: .1; }
+.u-base { fill: rgba(255, 179, 71, .42); stroke: #ffb347; stroke-width: .1; }
 .u-hole { fill: none; stroke: rgba(154, 163, 173, .7); stroke-width: .12; stroke-dasharray: .5 .3; }
 .u-band { fill: none; stroke: rgba(154, 163, 173, .28); }
 .u-feet { fill: rgba(229, 72, 77, .12); stroke: #e5484d; stroke-width: .12; }
@@ -144,7 +145,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .u-valid { fill: rgba(76, 211, 138, .22); stroke: var(--ok); stroke-width: .08; stroke-dasharray: .4 .3; }
 .u-centre { fill: var(--steel); }
 .u-pocket { stroke-width: .25; cursor: grab; }
-.u-fill { fill: rgba(255, 179, 71, .18); stroke: #ffb347; stroke-width: .25; stroke-dasharray: .8 .5; cursor: grab; }
+/* The fill circle: an outline (filled, it read as a shadow over the map); the transparent fill keeps it draggable. */
+.u-fill { fill: rgba(255, 179, 71, 0); stroke: #ffb347; stroke-width: .25; stroke-dasharray: .8 .5; cursor: grab; }
 .u-fill:focus { outline: none; stroke: #6aa8ff; }
 .u-pocket.ok { fill: rgba(255, 255, 255, .85); stroke: #fff; }
 .u-pocket.bad { fill: rgba(255, 77, 94, .85); stroke: #fff; }
@@ -152,6 +154,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 .lg.feet { background: transparent; border: 1.5px solid #e5484d; }
+.lg.base { background: rgba(255, 179, 71, .6); border: 1px solid #ffb347; }
 .lg.height { width: 28px; background: linear-gradient(90deg, rgb(40, 50, 70), rgb(190, 200, 230)); }
 .lg.valid { background: rgba(76, 211, 138, .6); }
 .lg.steel { background: rgba(154, 163, 173, .6); }
@@ -256,6 +259,7 @@ label.seat-row select { width: auto; flex: 1; min-width: 0; max-width: 220px; }
 .slot-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .slot-row .arrow { color: var(--muted); }
 .slot-row.sel .fig-sw { outline: 2px solid #fff; outline-offset: 1px; }
+.slot-row.unused { opacity: .6; }
 .fig-sw {
   flex: none; width: 32px; height: 32px; border-radius: 9px; border: 2px solid #ffffff22;
   display: grid; place-items: center; font: 700 12px/1 inherit;

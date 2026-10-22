@@ -68,16 +68,28 @@ exist only on the original Windows machine (ask the user for the files).
    (a flat fin on a box) is under-thickened in its first ~half target (smoothed normals tilt into the box; TODO in
    `strengthen()`); (c) low-poly meshes move only their few vertices (the smoke critter reads 33 % "thin": box
    corners), so it suits dense sculpts; (d) measured at the asked height or the largest, not at a slider scale.
-11. **Paint tools** (colorize): Fill (bucket, colour-bounded only), Mirror, Grow/Shrink, Pick colour, Undo/Redo,
-   keys, "Drop specks under" (`Params.despeckle`, default 0.5 mm² at print size). Verified in the local UI on the
-   Eevee at 100k: one tap at 6 degrees painted both eyes (1,004 triangles), Grow x2 = 0.4 mm smooth, Pick colour
-   picked the eye's filament, no console errors, Colours card fits 390 px. Mirror plane (distance field, ~1 s):
-   x-plane found on both Eevees and both Charmanders, fit 0.08-0.26 mm; ~15 % of random spots have no twin (tail,
-   paws in pose). Open: (a) grow/shrink distance is centre-to-centre path length, up to ~15 % short of the asked
-   mm; (b) mirror on a figure with two symmetry planes (a box-like body) can pick the wrong one (real figures have
-   a face/tail, so one plane wins; the test critter had two); (c) the Squirtle palette offer from 2026-10-22
-   stands (6 colours = 7.5 h purge; 3-4 + pupils is cheaper) - not made; (d) redo the Eevee/Charmander paint jobs
-   with the new tools? Grow addresses the Eevee's light wall round the dark eyes, specks the Charmander's claw dot.
+11. **Paint tools** (colorize). Wand (default mode, `Topology.wand`): candidates = closed minimal loops round the
+   tap (polar DP on the tangent plane over a bend field = one-ring-smoothed normals; 9 max radii) + "part" regions
+   at 6 angles; scored by the low quartile of the wall along the edge; edge snapped to the ridge (marker watershed)
+   then one majority pass; Smaller/Larger step through candidates (`PaintOp.level`); a mirrored wand step's twin
+   takes the candidate nearest the tapped side's area. ~0.37 s a tap local on 100k triangles. Also Fill, Mirror,
+   Grow/Shrink, Pick colour, Undo/Redo, keys, "Drop specks under" (`Params.despeckle`, 0.5 mm²).
+   - 303k print-folder Charmander (`printed/obj_2_Charmander mini.stl`) at 100k: wand gives the flame, both eye
+     ovals (one tap + mirror), toe pads; the inner white disc is one or two "Smaller" steps away (its crease is on
+     one side only); the belly comes out but runs over both claws (left off). Export `pokefit_out/charmander_wand4/`
+     (orange, red flame, blue eyes, white discs): 1.99 h, 29.8 g, 25 colour changes. Verified in the local UI: one
+     wand tap with Mirror painted both eyes, Smaller/Larger round-trips, no console errors.
+   - The user's `~/Downloads/Charmander mini.stl` (6,762 triangles, decimated) has NO eye geometry left (only a
+     sliver on each eye's outer edge; normals render showed it): no shape tool can outline its eyes. Its flame
+     separates only partly. TODO: a shape stamp (drag an ellipse) for such files.
+   - Open: (a) wand edges are still slightly rough near the brows; (b) mirror on a shape with two symmetry planes
+     (a sphere-like body without a face) can pick the wrong one; (c) grow/shrink is up to ~15 % short of the asked
+     mm; (d) the Eevee job from 2026-10-22 was not redone with the new tools.
+   - Squirtle in 4 filaments (`pokefit_out/squirtle_4col/`, photo GLB `texture_colours=4`, blue/brown/white/yellow):
+     7.76 h, 117.3 g, 193 colour changes (6.75 h purge; all 4 colours on nearly every layer). Brown flecks on the hand
+     tips and white flecks on the sides come from the texture.
+   - Exports are checked with `scripts/render_export.py` (exact z-buffer). The old splat render in the scratchpad
+     showed speckles that were not in the files.
 12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

@@ -27,6 +27,7 @@ class SlotMatch:
     delta_e: float          # colour difference (CIE76); large = not really the same colour
     new: bool = False       # beyond the project's slots: Bambu adds a filament, set its colour by hand
     manual: bool = False    # chosen by the user
+    used: bool = True       # the figure prints with it (a palette colour not painted yet is listed too)
 
     def to_dict(self) -> dict:
         return asdict(self)

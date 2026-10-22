@@ -59,6 +59,12 @@
   crease (like Bambu's smart fill), a separate shell, or a brush disc; dragging the brush paints a stroke, and a
   part or crease fill stops where the colour changes (outline an eye or a belly that has no crease round it, then
   tap inside), or "Fill" (a bucket fill that crosses every crease and stops only where the colour changes).
+  The default "Wand" (magic wand) takes the feature tapped - an eye, a flame, a toe pad - from the shape alone: closed
+  loops round the tap that follow the surface's bends, and limb-like regions, scored by how strong their edge is all
+  the way round; Smaller / Larger step through the other sizes it found. It needs the feature in the geometry (a
+  decimated mesh whose eyes were flattened away has nothing to find). "Prints from" lists every palette colour,
+  including ones not painted yet. "Thicken thin parts to" goes up to 4 mm; the underside view shows the gap fill
+  (flat base) in its own colour.
   Mirror paints the same spot on the other side too (the figure's mirror plane, found from its shape; asymmetric
   spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
   0.2 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop

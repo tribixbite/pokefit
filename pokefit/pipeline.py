@@ -29,8 +29,8 @@ from .checks import (bed_contact_check, merged, islands_check, mesh_checks, over
                      supports_verdict, thickness_check)
 from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
 from .strengthen import StrengthenInfo, strengthen
-from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, PaintOp, PaintState, TopologyCache, apply_paint,
-                       centroid_trees, op_faces, pick_face, region_colours)
+from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
+                       apply_paint, centroid_trees, op_faces, pick_face, region_colours)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
@@ -166,8 +166,8 @@ class Params:
         if not 0 <= float(self.flat_fill) <= 10:
             raise ValueError("flat_fill must be 0..10 mm")
         self.strengthen = float(self.strengthen)
-        if not 0 <= self.strengthen <= 3:
-            raise ValueError("strengthen must be 0..3 mm (0 = off)")
+        if not 0 <= self.strengthen <= 5:
+            raise ValueError("strengthen must be 0..5 mm (0 = off)")
         if self.figure_height is not None:
             self.figure_height = float(self.figure_height)
             if not 1 <= self.figure_height <= 1000:
@@ -539,7 +539,19 @@ class Session:
             parts = self.figure_parts(params)
             self._used[ukey] = used_filaments(parts, obj.extruder)
         manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
-        return match_slots(self._used[ukey], self.colours(params), targets, manual)
+        used = self._used[ukey]
+        colours = self.colours(params)
+        # Every palette colour gets a row (a colour added but not painted yet can be given its slot first); the used
+        # ones are matched first, so new slots the import file adds are numbered as before.
+        spare = [k for k in range(1, len(colours) + 1) if k not in used]
+        out = match_slots(used, colours, targets, manual)
+        extra = max([len(targets)] + [m.target for m in out if m.new])
+        for m in match_slots(spare, colours, targets, manual):
+            if m.new and not m.manual:
+                extra += 1
+                m = replace(m, target=extra)
+            out.append(replace(m, used=False))
+        return sorted(out, key=lambda m: m.source)
 
     def slot(self, params: Params) -> int:
         if params.slot is not None:
@@ -938,7 +950,8 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     meshes = [p.mesh() for p in final]
     if skey not in session._undersides:
         _evict(session._undersides)
-        session._undersides[skey] = _underside(session, params, meshes, scale, washer, off)
+        fill = [m for p, m in zip(final, meshes) if p.name == FILL_NAME]
+        session._undersides[skey] = _underside(session, params, meshes, scale, washer, off, fill)
     underside = session._undersides[skey]
     if params.magnets:
         checks.extend(pchecks)
@@ -1106,18 +1119,20 @@ def _rings(geom: Any) -> list[list[list[float]]]:
 
 
 def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], scale: float, washer: Washer,
-               off: tuple[float, float]) -> dict[str, Any]:
+               off: tuple[float, float], fill: list[trimesh.Trimesh] | None = None) -> dict[str, Any]:
     """Figure-frame 2D data for the pocket editor.
 
-    feet: outline of what touches the bed; valid: outline of where a pocket
-    centre satisfies every rule; height: the underside as an image (darker =
-    lower, transparent = no material) over `extent` [x0, y0, x1, y1]; ring: the
-    washer's steel ring as the ball holds it.
+    feet: outline of what touches the bed; fill: outline of the flat base the conform step added (the gap fill:
+    what "Fill gaps" changed); valid: outline of where a pocket centre satisfies every rule; height: the underside
+    as an image (darker = lower, transparent = no material) over `extent` [x0, y0, x1, y1]; ring: the washer's
+    steel ring as the ball holds it.
     """
     lo, hi = washer.annulus(params.pocket_diameter)
     feet = find_feet(meshes)
+    base = find_feet(fill) if fill else []
     f = session.underside(params, scale)
-    out: dict[str, Any] = {"feet": _rings(unary_union(feet) if feet else None), "valid": [],
+    out: dict[str, Any] = {"feet": _rings(unary_union(feet) if feet else None),
+                           "fill": _rings(unary_union(base) if base else None), "valid": [],
                            "ring": {"x": -off[0], "y": -off[1], "inner": lo, "outer": hi,
                                     "washer_od": washer.od, "washer_id": washer.id},
                            "pocket_d": params.pocket_diameter}
@@ -1432,7 +1447,16 @@ def prepare_paint(session: Session, params: Params, mode: str = "part", angle: f
     _pick_trees_for(session, params)
     topo = session.topology(params)
     for i in range(len(topo)):
-        topo.labels(i, mode, angle) if mode not in ("brush", "face") else topo.part(i)
+        if mode == "wand":                     # its bend field, KD-tree and the "part" regions it also offers
+            t = topo.part(i)
+            t.wall()
+            _ = t.tree
+            for a in WAND_ANGLES:
+                topo.labels(i, "part", a)
+        elif mode not in ("brush", "face"):
+            topo.labels(i, mode, angle)
+        else:
+            topo.part(i)
     out: dict[str, Any] = {"parts": len(topo)}
     if mirror:
         out["mirror"] = _mirror_info(topo)
@@ -1447,7 +1471,8 @@ def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
 
 def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
          mode: str = "part", angle: float = 15.0, radius: float = 0.0,
-         stroke: list[dict[str, Any]] | None = None, mirror: bool = False, grow: float = 0.0) -> dict[str, Any]:
+         stroke: list[dict[str, Any]] | None = None, mirror: bool = False, grow: float = 0.0,
+         level: int = 0) -> dict[str, Any]:
     """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
 
     The answer's part/face go into a colorize paint operation, which then
@@ -1460,7 +1485,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     """
     session.use_simplify(params.simplify)
     PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius,
-                       "grow": grow})
+                       "grow": grow, "level": level})
     if stroke and mode != "brush":
         raise ValueError("only the brush paints strokes")
     parts = session.unit_parts(params)
@@ -1489,7 +1514,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
             return None
         return states.setdefault(i, PaintState(figure[i]))
 
-    op = PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow)
+    op = PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow, level)
     sides = op_faces(topo, op, state)
     n = sum(len(f) for _, f in sides)
     area = 0.0
@@ -1554,7 +1579,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
         shell_path, shell_note = None, f"washer-seat shell not written: {exc}"  # type: ignore[assignment]
     # For "Import geometry only" into the user's own project: filaments renumbered to its slots.
     imp = None
-    matches = session.slot_matches(params)
+    matches = [m for m in session.slot_matches(params) if m.used]
     if matches and session.reference:
         parts, ext = remap_parts(final, obj.extruder, matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",

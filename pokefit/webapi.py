@@ -128,7 +128,8 @@ def pick_face(sid: str, params_json: str, req_json: str) -> str:
     req = json.loads(req_json)
     return _dump(pick(_session(sid), Params.from_dict(json.loads(params_json)), req["point"], req.get("normal"),
                       str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0)),
-                      req.get("stroke"), bool(req.get("mirror", False)), float(req.get("grow", 0.0))))
+                      req.get("stroke"), bool(req.get("mirror", False)), float(req.get("grow", 0.0)),
+                      int(req.get("level", 0))))
 
 
 def paint_prepare(sid: str, params_json: str, req_json: str) -> str:

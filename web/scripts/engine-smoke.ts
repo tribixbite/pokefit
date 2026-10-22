@@ -174,13 +174,16 @@ const dense = JSON.parse(api.load("dense.stl", pyodide.FS.readFile("/tmp/dense.s
 const simp = dense.report.object.simplified;
 const mirror = JSON.parse(api.paint_prepare(dense.session, JSON.stringify(dense.report.params),
   JSON.stringify({ mode: "fill", angle: 15, mirror: true }))).mirror;
-console.log(`[${secs()} s] simplify: ${JSON.stringify(simp)}; mirror ${JSON.stringify(mirror)}`);
+const wand = JSON.parse(api.pick_face(dense.session, JSON.stringify(dense.report.params),
+  JSON.stringify({ point: [0, 0, 20], normal: [0, 0, 1], mode: "wand", angle: 15, radius: 0 })));
+console.log(`[${secs()} s] simplify: ${JSON.stringify(simp)}; mirror ${JSON.stringify(mirror)}; wand ${wand.faces} faces`);
 
 const problems: string[] = [];
 if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense.report.object.parts[0].faces !== simp.faces_after) {
   problems.push("simplify at load");
 }
 if (!mirror?.ok) problems.push("mirror plane of a sphere");
+if (!(wand.faces >= 1)) problems.push("wand tap");
 if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
   problems.push("conform (bend + flat base)");
 }

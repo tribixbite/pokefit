@@ -92,7 +92,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `photoclean.py` | Ordinary photos (stock, off-angle, in a ball) -> clean front/left/back views with Qwen-Image-Edit-2511 in ComfyUI (`photos --clean`, dialog "Or ordinary photos"), then `imageto3d`; `--pose` adds an OpenPose skeleton (`pose_skeleton`, arms down) as the last reference. Weights listed in its module doc. |
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`, plus `texture_details` high-contrast detail filaments). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
-| `colorize.py` | Tap-to-paint: topology (convex/concave edges), regions by mode (part/region/piece/fill/brush/face), brush strokes (`PaintOp.path`, gaps joined), fills bounded by paint (`PaintState`, bucket fill), `PaintOp.mirror` (`mirror_plane`: distance field of the surface + Fibonacci scan + refine), `PaintOp.grow` (Dijkstra band + majority smoothing), `Topology.specks` (`Params.despeckle` mm² at print size), `apply_paint` / `op_faces`. |
+| `colorize.py` | Tap-to-paint: magic wand (`Topology.wand`: loop + part candidates on a bend field, watershed-snapped edge, `PaintOp.level`), topology (convex/concave edges), regions by mode (wand/part/region/piece/fill/brush/face), brush strokes (`PaintOp.path`, gaps joined), fills bounded by paint (`PaintState`, bucket fill), `PaintOp.mirror` (`mirror_plane`: distance field of the surface + Fibonacci scan + refine), `PaintOp.grow` (Dijkstra band + majority smoothing), `Topology.specks` (`Params.despeckle` mm² at print size), `apply_paint` / `op_faces`. |
 | `simplify.py` | Import-time simplification (`Params.simplify` triangles): meshoptimizer's WASM (`vendor/`, npm 1.3.0) via wasmtime locally and the worker's WebAssembly in Pyodide (identical output); `meshopt_SimplifyRegularizeLight`, 0.1 % error cap, fold cleanup; paint carried per nearest triangle, glTF colour sampled after (`read_gltf(path, simplify)`). `Session.use_simplify` reloads the file when the setting changes. |
 | `strengthen.py` | Strengthen thin parts (`Params.strengthen` mm): voxel parity fill + EDT local thickness at print size, taper from the join (full target) to the tip (`TIP`), necks get the full target; vertices move only. Runs in `Session._conformed` after conform. |
 | `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball, max-scale fit (Nelder–Mead with restarts), washer-seat shell. |
@@ -136,6 +136,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
   heredocs with apostrophes/backslashes break in the Bash tool — write scripts to files. The repo is LF
   (`.gitattributes`).
 - **Dark Reader** in the user's Chrome re-tints pages; `index.html` has `<meta name="darkreader-lock">`.
+- Check a paint job with `scripts/render_export.py` (exact z-buffer of the exported 3MF). A splat render (a few points
+  per triangle) shows the far side through as speckles that are not in the file; one was sent to the user as a result.
 - Real figures are messy (non-manifold, floating parts). Checks report, they don't block; `planar._xor`
   repairs section loops GEOS rejects.
 

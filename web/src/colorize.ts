@@ -49,12 +49,14 @@ const NEW_COLOURS = ["#161616", "#FFFFFF", "#E05028", "#2850E0", "#0ACC38", "#FF
 const GROW_STEP = 0.2;
 /** The engine's limit on an operation's grow, file mm (colorize.MAX_GROW). */
 const MAX_GROW = 20;
+/** Wand: the furthest step from its first answer (colorize.MAX_LEVEL). */
+const MAX_LEVEL = 8;
 /** Modes whose angle slider applies. */
 const ANGLED: readonly PaintMode[] = ["part", "region"];
 
 export class ColorizePanel {
   private filament = 1;            // selected filament (1-based; 0 = erase)
-  private mode: PaintMode = "part";
+  private mode: PaintMode = "wand";
   /** Crease angle per mode: valleys separate parts at a lower angle than Bambu's 30° smart fill. */
   private angles: Partial<Record<PaintMode, number>> = { part: 15, region: 30 };
   private brushMm = 1.5;           // brush radius in print mm
@@ -79,6 +81,8 @@ export class ColorizePanel {
       this.edit(() => []);
     });
     $("paintGrow").addEventListener("click", () => this.growLast(GROW_STEP));
+    $("paintSmaller").addEventListener("click", () => this.stepLast(-1));
+    $("paintLarger").addEventListener("click", () => this.stepLast(1));
     $("paintShrink").addEventListener("click", () => this.growLast(-GROW_STEP));
     $("paintMirror").addEventListener("click", () => void this.setMirror(!this.mirror));
     $("paintSample").addEventListener("click", () => {
@@ -241,13 +245,16 @@ export class ColorizePanel {
     ($("paintRedo") as HTMLButtonElement).disabled = this.undone.length === 0;
     ($("paintClear") as HTMLButtonElement).disabled = n === 0;
     ($("paintGrow") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
+    $("levelGroup").hidden = !(n > 0 && ops[n - 1].mode === "wand");
     ($("paintShrink") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
     if (!this.busy && !$("paintInfo").dataset.sticky) {
       $("paintInfo").textContent = this.sampling ? "Tap the figure to pick its colour there."
         : !this.painting ? (n ? `${n} paint step${n > 1 ? "s" : ""}` : "")
           : this.mode === "brush"
             ? "Tap or drag on the figure to paint. Turn the view by dragging beside it, with two fingers or the right mouse button."
-            : this.mode === "fill" ? "Tap inside an outline to fill it." : "Tap the figure to paint.";
+            : this.mode === "fill" ? "Tap inside an outline to fill it."
+              : this.mode === "wand" ? "Tap a feature (an eye, a flame, a toe pad). Smaller / Larger if it is not quite it."
+                : "Tap the figure to paint.";
     }
   }
 
@@ -423,6 +430,17 @@ export class ColorizePanel {
     window.setTimeout(() => { delete $("paintInfo").dataset.sticky; }, 2500);
   }
 
+  /** Wand: replace the last step's region with the next smaller (-1) or larger (+1) one the wand found. */
+  private stepLast(dir: number): void {
+    const ops = this.host.params().paint ?? [];
+    const last = ops[ops.length - 1];
+    if (!last || last.mode !== "wand") return;
+    const level = Math.max(-MAX_LEVEL, Math.min(MAX_LEVEL, (last.level ?? 0) + dir));
+    const next: PaintOp = { ...last, level };
+    if (!level) delete next.level;
+    this.edit((p) => [...p.slice(0, -1), next]);
+  }
+
   private undo(): void {
     const ops = this.host.params().paint ?? [];
     if (!ops.length) return;
@@ -455,6 +473,7 @@ export class ColorizePanel {
     else if (k === "+" || k === "=") this.growLast(GROW_STEP);
     else if (k === "-" || k === "_") this.growLast(-GROW_STEP);
     else if (k === "[" || k === "]") this.nudge(k === "]" ? 1 : -1);
+    else if (k === "," || k === ".") this.stepLast(k === "." ? 1 : -1);
     else done = false;
     if (done) e.preventDefault();
   }

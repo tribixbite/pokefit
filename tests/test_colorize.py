@@ -346,3 +346,81 @@ def test_pick_reports_the_colour_under_the_tap_and_the_mirror(critter: Path, tmp
     both = pick(head, base, [*ear[:2].tolist(), top], [0.0, 0.0, 1.0], "brush", 15.0, 1.0, mirror=True)
     assert both["mirrored"] is True and one["mirrored"] is False
     assert 1.6 * one["faces"] <= both["faces"] <= 2.4 * one["faces"]
+
+
+def _dimpled_head() -> trimesh.Trimesh:
+    """A 10 mm sphere with two soft oval dimples ("eyes", 0.3 mm deep, edges smoothed over ~0.4 mm) and noise like a
+    sculpt's (0.01 mm), front at -y."""
+    m = trimesh.creation.icosphere(subdivisions=6, radius=10)
+    v = m.vertices.copy()
+    n = v / np.linalg.norm(v, axis=1, keepdims=True)
+    for sx in (-1, 1):
+        c = np.array([sx * 3.5, -9.0, 2.0])
+        c /= np.linalg.norm(c)
+        # elliptical distance on the sphere (taller than wide), smoothstep edge
+        d = n - c
+        e = np.sqrt((d[:, 0] / 0.17) ** 2 + (d[:, 2] / 0.24) ** 2 + (d[:, 1] / 0.2) ** 2)
+        depth = 0.3 * np.clip((1.2 - e) / 0.4, 0, 1) ** 2 * (3 - 2 * np.clip((1.2 - e) / 0.4, 0, 1))
+        v -= n * depth[:, None]
+    # A snout bump at the front: a bare sphere is mirror-symmetric front to back as well, and the mirror plane
+    # would be ambiguous (a figure's face settles it).
+    snout = np.exp(-np.sum((n - np.array([0.0, -0.94, -0.34])) ** 2, axis=1) / 0.05)
+    v += n * (1.5 * snout)[:, None]
+    v += np.random.default_rng(3).normal(0, 0.01, v.shape)
+    return trimesh.Trimesh(v, m.faces, process=False)
+
+
+def test_wand_finds_a_soft_eye_and_steps_through_sizes() -> None:
+    m = _dimpled_head()
+    part = _part(m)
+    topo = TopologyCache([part])
+    c = np.array([3.5, -9.0, 2.0]) / np.linalg.norm([3.5, -9.0, 2.0]) * 10
+    f = pick_face([part], c, c / 10)[1]
+    eye = topo.part(0).wand(f)
+    cen = m.triangles_center / np.linalg.norm(m.triangles_center, axis=1, keepdims=True)
+    cdir = c / 10
+    d = cen - cdir
+    e = np.sqrt((d[:, 0] / 0.17) ** 2 + (d[:, 2] / 0.24) ** 2 + (d[:, 1] / 0.2) ** 2)
+    truth = np.nonzero(e < 1.0)[0]                       # the dimple's floor up to its mid-slope
+    inter = len(np.intersect1d(eye, truth))
+    assert inter / len(np.union1d(eye, truth)) > 0.6, (len(eye), len(truth), inter)
+    sizes = [len(r) for _, _, r in topo.part(0).wand_candidates(f)]
+    assert sizes == sorted(sizes)
+    smaller = topo.part(0).wand(f, level=-1)
+    assert len(smaller) <= len(eye)
+    # Through the cache and paint ops: a wand op paints the eye; mirror paints the other one too.
+    (out,) = apply_paint([part], [PaintOp(0, f, 2, "wand", mirror=True)], topo)
+    s = _states(out)
+    xs = m.triangles_center[np.array(sorted(s))][:, 0]
+    assert (xs > 1).sum() > 0.3 * len(eye) and (xs < -1).sum() > 0.3 * len(eye)
+    assert PaintOp.from_dict(PaintOp(0, f, 2, "wand", level=-1).to_dict()).level == -1
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "wand", "level": 20})
+
+
+def test_wand_inside_a_painted_patch_does_not_return_the_whole_patch() -> None:
+    m = _dimpled_head()
+    part = _part(m)
+    topo = TopologyCache([part])
+    c = np.array([3.5, -9.0, 2.0]) / np.linalg.norm([3.5, -9.0, 2.0]) * 10
+    f = pick_face([part], c, c / 10)[1]
+    eye = topo.part(0).wand(f)
+    allowed = np.zeros(topo.n_faces(0), bool)
+    allowed[eye] = True
+    for _, _, reg in topo.part(0).wand_candidates(f, allowed):
+        assert topo.part(0).areas[reg].sum() < 0.85 * topo.part(0).areas[eye].sum()
+
+
+def test_wand_takes_a_flame_off_its_tail() -> None:
+    """A flame ball on a thin tail from a big body (a valley where flame and tail meet, as the Part mode sees
+    it): the wand's answer is the whole flame."""
+    tail = trimesh.creation.cylinder(radius=1.2, height=10, sections=48).subdivide().subdivide()
+    flame = trimesh.creation.icosphere(subdivisions=4, radius=3).apply_translation([0, 0, 7.5])
+    body = trimesh.creation.icosphere(subdivisions=4, radius=8).apply_translation([0, 0, -11])
+    m = trimesh.boolean.union([tail, flame, body], engine="manifold")
+    part = _part(m)
+    topo = TopologyCache([part])
+    f = pick_face([part], np.array([0, 0, 10.5]), np.array([0, 0, 1.0]))[1]
+    reg = topo.part(0).wand(f)
+    z = m.triangles_center[reg][:, 2]
+    assert z.min() > 4.0 and len(reg) > 0.5 * (m.triangles_center[:, 2] > 5.5).sum()

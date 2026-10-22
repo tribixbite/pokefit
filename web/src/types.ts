@@ -132,7 +132,7 @@ export interface ObjectInfo {
 }
 
 /** part: up to concave valleys; region: up to any crease; piece: connected shell; brush: a disc; face: one triangle. */
-export type PaintMode = "part" | "region" | "piece" | "fill" | "brush" | "face";
+export type PaintMode = "wand" | "part" | "region" | "piece" | "fill" | "brush" | "face";
 
 /** Paint the region (by `mode`, crease `angle` in degrees) of one source triangle with a filament (0 = erase). */
 export interface PaintOp {
@@ -149,6 +149,8 @@ export interface PaintOp {
   mirror?: boolean;
   /** Widen (> 0) or narrow (< 0) the painted area, file mm. */
   grow?: number;
+  /** Wand: 0 its best answer, -1 / +1 the next smaller / larger region. */
+  level?: number;
 }
 
 /** Colour the preview by what a tap would paint. */
@@ -204,6 +206,8 @@ export interface PickResult {
 
 export interface Underside {
   feet: number[][][];
+  /** The flat base the gap fill added (absent from older reports). */
+  fill?: number[][][];
   valid: number[][][];
   ring: { x: number; y: number; inner: number; outer: number; washer_od: number; washer_id: number };
   pocket_d: number;
@@ -417,5 +421,7 @@ export interface SlotMatch {
   delta_e: number;
   /** Beyond the project's slots: Bambu adds a filament on import; set its colour there. */
   new: boolean;
+  /** The figure prints with it (false: a palette colour not painted yet). */
+  used?: boolean;
   manual: boolean;
 }

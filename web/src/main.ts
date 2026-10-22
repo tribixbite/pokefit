@@ -652,7 +652,9 @@ function renderImportMap(rep: Report): void {
         void runAnalyse();
       },
     });
-    const row = h("div", { cls: `slot-row${m.manual ? " manual" : ""}` }, fig, h("span", { cls: "arrow", textContent: "→" }), picker);
+    const row = h("div", { cls: `slot-row${m.manual ? " manual" : ""}${m.used === false ? " unused" : ""}` }, fig,
+      h("span", { cls: "arrow", textContent: "→" }), picker);
+    if (m.used === false) row.title = "Not painted yet: choose its slot now, it is used once you paint with it.";
     row.setAttribute("role", "listitem");
     row.dataset.n = String(m.source);
     return row;
