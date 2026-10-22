@@ -104,3 +104,26 @@ def test_bad_values_are_rejected() -> None:
         Params(bend=2)
     with pytest.raises(ValueError, match="flat_fill"):
         Params(flat_fill=-1)
+
+
+def test_default_fill_is_raised_when_no_magnet_fits(tmp_path: Path) -> None:
+    # A body on four thin legs (an Eevee): the legs are too thin for a walled pocket and the belly is ~2.8 mm
+    # up at the fit size, so with the default 2.5 mm fill no magnet fits; the default is raised to 4 mm.
+    parts = [trimesh.creation.box((14, 9, 10)).apply_translation([0, 0, 7.0])]
+    for x in (-5.5, 5.5):
+        for y in (-3, 3):
+            parts.append(trimesh.creation.box((2.4, 2.4, 2.5)).apply_translation([x, y, 1.25]))
+    stl = tmp_path / "legs.stl"
+    trimesh.util.concatenate(parts).export(stl)
+    s = open_session(stl, work_dir=tmp_path / "w")
+    rep, _ = analyse(s, Params())
+    d = rep.to_dict()
+    assert d["fit"]["conform"]["fill_mm"] == 4.0 and len(d["pockets"]) == 2
+    assert "with less, no magnet pocket fits" in next(c["message"] for c in d["checks"] if c["id"] == "conform")
+    # a fill the user chose is kept, even when no pocket fits with it
+    rep2, _ = analyse(s, Params(flat_fill=2.4))
+    d2 = rep2.to_dict()
+    assert d2["fit"]["conform"]["fill_mm"] == 2.4 and not d2["pockets"]
+    # no magnets asked for: nothing to make room for
+    rep3, _ = analyse(s, Params(magnets=0))
+    assert rep3.to_dict()["fit"]["conform"]["fill_mm"] == 2.5

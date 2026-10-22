@@ -399,6 +399,25 @@ def _cluster(rgb: np.ndarray, weight: np.ndarray, seed: int = 1) -> tuple[np.nda
     return _nearest(_lab(rgb), centres), centres, False
 
 
+def two_sided(v: np.ndarray, f: np.ndarray) -> np.ndarray:
+    """Faces that come as a pair with the same three corners in opposite order: a two-sided sheet with no
+    volume, which only breaks the solid (a generated Snorlax had one 2-face sliver, so its body read as not
+    watertight). Corners are compared by position, so split vertices count as one."""
+    if not len(f):
+        return np.zeros(0, bool)
+    _, vid = np.unique(np.round(v, 9), axis=0, return_inverse=True)
+    c = vid.reshape(-1)[f]                                       # corners by position
+    key = np.sort(c, axis=1)
+    # The winding as a parity: the permutation sorting the corners is even or odd.
+    order = np.argsort(c, axis=1)
+    parity = ((order[:, 0] > order[:, 1]).astype(int) + (order[:, 0] > order[:, 2]) + (order[:, 1] > order[:, 2])) % 2
+    _, group, counts = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    group = group.reshape(-1)
+    pair = counts[group] == 2
+    odd = np.bincount(group, weights=parity, minlength=len(counts))
+    return pair & (odd[group] == 1)                             # exactly one of the two is reversed
+
+
 def read_gltf(path: Path) -> Project:
     """A glTF/GLB scene as one single-part figure whose colours are paint (module doc).
     The project's `texture` re-cuts the palette to another size (TextureColours.paint)."""
@@ -409,7 +428,7 @@ def read_gltf(path: Path) -> Project:
                          "and .gltf files with separate .bin/texture files are not supported; "
                          "export a plain .glb.") from e
     assert isinstance(scene, trimesh.Scene)        # force="scene" always returns one
-    meshes: list[tuple[np.ndarray, np.ndarray, Sampler, bool]] = []
+    meshes: list[tuple[np.ndarray, np.ndarray, Sampler, bool, np.ndarray]] = []
     for node in scene.graph.nodes_geometry:
         xf, gname = scene.graph[node]
         g = scene.geometry.get(gname)
@@ -417,19 +436,22 @@ def read_gltf(path: Path) -> Project:
             continue                                # points, lines, empty primitives
         v = np.asarray(g.vertices, np.float64) @ xf[:3, :3].T + xf[:3, 3]
         f = np.asarray(g.faces, np.int64)
+        kept = np.flatnonzero(~two_sided(v, f))             # the primitive's own face numbers, for the sampler
+        f = f[kept]
         sample, varies = _sampler(g)
         if np.linalg.det(xf[:3, :3]) < 0:           # mirrored node: keep normals outward
             # The sampler indexes the primitive's own faces; reversing a face's corners
             # reverses its barycentric order, so samples read the barycentrics back to front.
             f = f[:, ::-1]
             sample = (lambda s: (lambda fi, b: s(fi, b[:, ::-1])))(sample)
-        meshes.append((v, f, sample, varies))
+        if len(f):
+            meshes.append((v, f, sample, varies, kept))
     if not meshes:
         raise ValueError(f"{path.name}: no triangle meshes in this glTF")
 
-    n_faces = sum(len(f) for _, f, _, _ in meshes)
+    n_faces = sum(len(f) for _, f, _, _, _ in meshes)
     depth = 0
-    if any(varies for *_, varies in meshes):
+    if any(varies for _, _, _, varies, _ in meshes):
         while depth < MAX_DEPTH and n_faces * 4 ** (depth + 1) <= LEAF_BUDGET:
             depth += 1
     bary = leaf_barycentrics(depth).mean(axis=1)    # (L, 3) leaf centres
@@ -438,8 +460,7 @@ def read_gltf(path: Path) -> Project:
     rgb = np.empty((n_faces, n_leaf, 3), np.float64)
     area = np.empty(n_faces, np.float64)
     at = 0
-    for v, f, sample, varies in meshes:
-        fi = np.arange(len(f))
+    for v, f, sample, varies, fi in meshes:
         if varies:
             rgb[at:at + len(f)] = sample(np.repeat(fi, n_leaf), np.tile(bary, (len(f), 1))).reshape(-1, n_leaf, 3)
         else:
@@ -449,9 +470,9 @@ def read_gltf(path: Path) -> Project:
         at += len(f)
 
     # One part: all nodes concatenated (face order kept), then turned Z-up and scaled to mm.
-    offsets = np.cumsum([0] + [len(v) for v, _, _, _ in meshes[:-1]])
-    allv = np.vstack([v for v, _, _, _ in meshes])
-    allf = np.vstack([f + o for (_, f, _, _), o in zip(meshes, offsets)])
+    offsets = np.cumsum([0] + [len(v) for v, _, _, _, _ in meshes[:-1]])
+    allv = np.vstack([v for v, _, _, _, _ in meshes])
+    allf = np.vstack([f + o for (_, f, _, _, _), o in zip(meshes, offsets)])
     m = trimesh.Trimesh(allv, allf, process=False)
     m.merge_vertices()                              # glTF splits vertices at UV and normal seams
 

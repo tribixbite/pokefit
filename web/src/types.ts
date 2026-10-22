@@ -100,7 +100,9 @@ export interface FitInfo {
   limit_kind?: string;
   /** The conform step (pokefit/conform.py ConformInfo). */
   conform?: { bend: number; auto: boolean; lift_mm: number; flat_depth_mm: number; fill_mm2: number;
-    scale_before: number; scale_after: number; note: string };
+    scale_before: number; scale_after: number; note: string;
+    /** Largest gap the flat base fills: the setting, or more when no magnet fitted with the default. */
+    fill_mm: number };
   limit_point?: number[];
 }
 

@@ -170,7 +170,9 @@ def test_auto_count_is_the_best_value(tmp_path: Path, monkeypatch: pytest.Monkey
         seen.append(scale)
         rows = real(session, params, scale)
         assert [r["count"] for r in rows][:3] == [1, 2, 3]          # the real table is built
-        return [dict(r, changes=[0, 10, 200][i] if i < 3 else 200 + i) for i, r in enumerate(rows)]
+        # With details the table would put the knee at 1 colour: auto must not be decided from it.
+        knee = [0, 200, 210] if params.texture_details else [0, 10, 200]
+        return [dict(r, changes=knee[i] if i < 3 else 200 + i) for i, r in enumerate(rows)]
 
     monkeypatch.setattr(pl, "colour_rows", knee_at_two)
     rep, _ = analyse(s, Params())
@@ -186,6 +188,9 @@ def test_auto_count_is_the_best_value(tmp_path: Path, monkeypatch: pytest.Monkey
     # A chosen count still wins.
     rep3, _ = analyse(s, Params(texture_colours=3))
     assert len(rep3.to_dict()["object"]["colours"]) == 3
+    # "Keep details" adds on top of the automatic count; it does not re-decide it.
+    rep_d, _ = analyse(s, Params(texture_details=1))
+    assert rep_d.to_dict()["object"]["texture_colours"]["auto"] == 2
 
     # No jump in the table: the file's own palette (3 colours here).
     monkeypatch.setattr(pl, "colour_rows", lambda session, params, scale: [
@@ -267,3 +272,20 @@ def test_details_keep_small_contrasting_colours() -> None:
     assert [sorted(g) for g in tex.groups(3, details=3)][3:] == [[4, 5]]   # nothing else is a detail
     pal, _, _ = tex.paint(3, 1)
     assert len(pal) == 4 and pal[-1].startswith("#2")           # the detail's colour is the dark one
+
+
+def test_two_sided_slivers_are_dropped(tmp_path: Path) -> None:
+    # A generated Snorlax carried one triangle twice, in opposite orders (no volume): its body read as not
+    # watertight. Such pairs are dropped on reading; the solid and its colours stay.
+    from pokefit.gltf import two_sided
+    from pokefit.imageto3d import vertex_colour_glb
+    box = trimesh.creation.box((0.02, 0.02, 0.02))
+    v = np.vstack([box.vertices, [[0.05, 0, 0], [0.06, 0, 0], [0.05, 0.01, 0]]])
+    f = np.vstack([box.faces, [[8, 9, 10], [8, 10, 9]]])
+    assert two_sided(v, f).tolist() == [False] * 12 + [True, True]
+    # the same face twice in the SAME order is not a sheet pair
+    assert not two_sided(v, np.vstack([box.faces, [[8, 9, 10], [9, 10, 8]]])).any()
+    path = tmp_path / "s.glb"
+    path.write_bytes(vertex_colour_glb(v, f, np.tile([200.0, 40, 40], (len(v), 1))))
+    part = read_project(path).default_object().parts[0]
+    assert len(part.faces) == 12 and part.mesh().is_watertight

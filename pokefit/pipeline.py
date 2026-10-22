@@ -60,6 +60,7 @@ CACHE_DIR = ROOT / ".pokefit_cache"
 SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
+AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
 
 
 @dataclass
@@ -175,6 +176,7 @@ class Session:
     _frames: dict[tuple, list[Part]] = field(default_factory=dict)           # orientation + conform -> parts
     _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
     _conform: dict[tuple, ConformInfo] = field(default_factory=dict)
+    _fills: dict[tuple, float] = field(default_factory=dict)                 # `_auto_fill` decisions
     _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
     _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
     # Auto-placement results per configuration (the figure-scale-independent search).
@@ -199,19 +201,47 @@ class Session:
         """Cache key of the figure-frame geometry: the orientation, plus what the conform step
         depends on when it is on (its settings, the ball size and the clearance; the washer only
         through the flat disc's diameter, see `unit_parts`)."""
-        spec = self.conform_spec(params)
+        return self._spec_key(params, self.conform_spec(params))
+
+    def _spec_key(self, params: Params, spec: ConformSpec | None) -> tuple:
         if spec is None:
             return self._orientation(params)
         return self._orientation(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
                                              round(self.ball_scale(params), 6), params.clearance)
 
     def conform_spec(self, params: Params) -> ConformSpec | None:
-        """The conform step's settings, or None when bend and flat base are both off."""
+        """The conform step's settings, or None when bend and flat base are both off. The default flat-base
+        fill is raised (`AUTO_FILLS`) when no magnet pocket fits under the figure with it (`_auto_fill`)."""
         flat = get_washer(params.washer).od if params.flat_base is None else float(params.flat_base)
         bend = None if params.bend is None else float(params.bend)
         if bend == 0 and (flat <= 0 or (params.flat_depth <= 0 and params.flat_fill <= 0)):
             return None
-        return ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill))
+        spec = ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill))
+        if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None:
+            spec = replace(spec, fill=self._auto_fill(params, spec))
+        return spec
+
+    def _auto_fill(self, params: Params, spec: ConformSpec) -> float:
+        """The flat-base fill to use at the default setting: DEFAULT_FILL, or the first of AUTO_FILLS under
+        which a magnet pocket fits at the largest size (a figure on four thin legs, like an Eevee, has room
+        for none until the base fills the gap under its belly). Decided against the default washer, like the
+        conform shape itself, so every washer in the table sees the same figure."""
+        key = self._spec_key(params, spec) + (params.spec, params.magnets)
+        if key not in self._fills:
+            self._fills[key] = spec.fill
+            for fill in (spec.fill, *AUTO_FILLS):
+                parts = self._conformed(params, replace(spec, fill=fill))
+                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+                free = max_scale(self._points[self._spec_key(params, replace(spec, fill=fill))], cavity)
+                if free is None:
+                    break
+                field = height_field([p.mesh() for p in parts if p.subtype == "normal_part"])
+                pockets, _ = choose_pockets(pocket_map(field.scaled(free.max_scale), params.spec), params.spec,
+                                            params.magnets)
+                if pockets:
+                    self._fills[key] = fill
+                    break
+        return self._fills[key]
 
     def conform_info(self, params: Params) -> ConformInfo | None:
         self.unit_parts(params)
@@ -225,8 +255,12 @@ class Session:
 
     def unit_parts(self, params: Params) -> list[Part]:
         """Figure-frame parts at scale 1 (rotated, XY-centred, on z = 0)."""
+        return self._conformed(params, self.conform_spec(params))
+
+    def _conformed(self, params: Params, spec: ConformSpec | None) -> list[Part]:
+        """`unit_parts` with the conform step's settings given (cached under the same key)."""
         obj = self.obj(params)
-        key = self._key(params)
+        key = self._spec_key(params, spec)
         if key not in self._frames:
             okey = self._orientation(params)
             if okey not in self._oriented:
@@ -241,7 +275,6 @@ class Session:
                                                                     -mn[2]])
                 self._oriented[okey] = [p.transformed(shift) for p in parts]
             parts = self._oriented[okey]
-            spec = self.conform_spec(params)
             if spec is not None:
                 # Designed against the default washer's floor, so the shape (and every cache keyed
                 # on it) is the same whatever washer is compared; the lift itself depends only on the
@@ -279,8 +312,12 @@ class Session:
         so "auto" trades detail for hours of print time only where a colour is expensive. None (the file's
         own palette, by colour distance) when no added colour is a jump, or no settings / fit are known.
         At the fit limit rather than the chosen size, so resizing the figure does not change its palette."""
+        if params.texture_details:
+            # "Keep details" adds filaments on top of the automatic count; it never changes it (counted with
+            # the details, a Charmander's best value dropped from 3 colours to 2 and lost its yellow belly).
+            return self.auto_texture_count(replace(params, texture_details=0))
         key = (self._key(params), round(self.ball_scale(params), 6), params.washer, params.clearance, params.slot,
-               params.process, self.presets.version if self.presets else 0, params.texture_details)
+               params.process, self.presets.version if self.presets else 0)
         if key not in self._auto_count:
             if len(self._auto_count) > 16:
                 self._auto_count.clear()
@@ -732,7 +769,10 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     info = session.conform_info(params)
     if info is not None:
         fit_dict["conform"] = info.to_dict()
-        conform_check = _conform_check(info)
+        spec = session.conform_spec(params)
+        fit_dict["conform"]["fill_mm"] = spec.fill if spec else 0.0
+        raised = spec.fill if spec and spec.fill > params.flat_fill and info.fill_mm2 > 0 else None
+        conform_check = _conform_check(info, raised)
         if conform_check:
             checks.append(conform_check)
 
@@ -864,8 +904,9 @@ def colour_rows(session: Session, params: Params, scale: float) -> list[dict[str
 
 
 
-def _conform_check(info: ConformInfo) -> Check | None:
-    """One line on what the conform step did (bend, flat base), or None if it changed nothing."""
+def _conform_check(info: ConformInfo, raised_fill: float | None = None) -> Check | None:
+    """One line on what the conform step did (bend, flat base), or None if it changed nothing. `raised_fill`:
+    the default fill was raised to this (`Session._auto_fill`)."""
     said = []
     if info.bend > 0:
         gain = info.scale_after / info.scale_before - 1 if info.scale_before else 0.0
@@ -874,7 +915,8 @@ def _conform_check(info: ConformInfo) -> Check | None:
     if info.flat_depth_mm > 0:
         said.append(f"base pressed {info.flat_depth_mm:.1f} mm flat over the washer")
     if info.fill_mm2 > 0:
-        said.append(f"a {info.fill_mm2:.0f} mm² flat base fills the gap under it")
+        said.append(f"a {info.fill_mm2:.0f} mm² flat base fills the gap under it"
+                    + (f" (gaps up to {raised_fill:g} mm: with less, no magnet pocket fits)" if raised_fill else ""))
     if not said:
         return None
     text = "; ".join(said)
