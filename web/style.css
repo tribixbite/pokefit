@@ -252,6 +252,7 @@ label.seat-row select { width: auto; flex: 1; min-width: 0; max-width: 220px; }
 .slot-map { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .slot-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .slot-row .arrow { color: var(--muted); }
+.slot-row.sel .fig-sw { outline: 2px solid #fff; outline-offset: 1px; }
 .fig-sw {
   flex: none; width: 32px; height: 32px; border-radius: 9px; border: 2px solid #ffffff22;
   display: grid; place-items: center; font: 700 12px/1 inherit;

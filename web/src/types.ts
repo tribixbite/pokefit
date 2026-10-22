@@ -155,6 +155,8 @@ export interface PreviewFaces {
   colours: string[];
   /** Per mesh `p<i>`: base64, one colour index byte per face. */
   parts: string[];
+  /** Which slot each used figure colour prints from (absent for the regions view). */
+  import_map?: SlotMatch[];
 }
 
 export interface PickRequest {

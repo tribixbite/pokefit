@@ -9,7 +9,7 @@ from conftest import BALL_3MF, two_footed, write_inline_3mf
 from pokefit.colorize import PaintOp, TopologyCache, apply_paint, paint_code, pick_face, region_faces, topology
 from pokefit.model3mf import Part, read_project
 from pokefit.paint import decode_majority
-from pokefit.pipeline import Params, analyse, export, open_session, pick, preview_faces, preview_glb
+from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, export, open_session, pick, preview_faces, preview_glb
 from pokefit.slicer import resize_filaments
 
 
@@ -197,6 +197,13 @@ def test_pipeline_paint_survives_the_pocket_cut(critter: Path, tmp_path: Path) -
     glb = preview_glb(s, params, ("region", 30.0))
     assert glb[:4] == b"glTF"
     json.dumps(rep.to_dict())
+    # The face colours carry "Prints from" (the slot match of every used colour), as the analysis has it, so a paint
+    # step updates it without an analysis; the regions view leaves it out.
+    assert preview_faces(s, params)["import_map"] == rep.to_dict()["import_map"] == []     # no reference project
+    sr = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w2")
+    faces = preview_faces(sr, params)
+    assert faces["import_map"] == analyse(sr, params)[0].to_dict()["import_map"] and len(faces["import_map"]) == 2
+    assert "import_map" not in preview_faces(sr, params, ("region", 30.0))
 
 
 def test_a_paint_edit_recolours_the_same_preview_and_reuses_the_shape_work(critter: Path, tmp_path: Path) -> None:

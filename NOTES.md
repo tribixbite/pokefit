@@ -71,7 +71,21 @@ exist only on the original Windows machine (ask the user for the files).
    part way round and a belly with no crease at all, so no angle isolates them (measured: per-edge creases 2-15 deg
    never close the eye ring). Fix shipped: brush strokes (drag) + part/region fills that stop at a colour change.
    Verified on the Charmander locally (outline 1,210 triangles, fill inside 352) and in tests. A stroke's samples
-   more than 8 brush radii apart are not joined (taken as a jump across a silhouette).
+   more than 8 brush radii apart are not joined (taken as a jump across a silhouette). A fill after an outline
+   should use angle 180 (only the colour stops it): on a noisy sculpt the tapped face's 15-degree region can be a
+   fragment.
+   - Scripted paint jobs 2026-10-22 (all 25.4 mm, 2 magnets raised allowed, fill 0; outputs in `pokefit_out/<name>/`
+     with renders; scripts in the session scratchpad `paint_eevee.py`, `paint_charmander.py`, `paint_squirtle.py`
+     + helpers `groove.py` (valley/ridge band, tip past a zigzag line), `frontpaint.py` (front-view outlines ->
+     strokes), `paintkit.py` (renders)). Bambu slices (`scripts/verify_export.py`):
+     | figure | colours | how | h / g | changes (purge h) |
+     |---|---|---|---|---|
+     | MINI EEVEE (Downloads, 1.45M tris) | light brown, dark brown (inner ears, eyes), beige (highlights, neck fur, tail tip) | part fills at 1.5/3/6 deg; tail tip = stroke along the zigzag ridge + fill | 1.59 / 20.1 | 7 |
+     | Charmander mini STL | orange, yellow belly, red flame, blue eyes + white crescent | flame region; belly and eyes = outlines + fills | 3.22 / 47.7 | 48 (2.52) |
+     | photo Squirtle GLB (`batch3`) | 5 + 1 detail, recoloured (blue, brown, off-white rim, cream, red, near-black) | texture palette | 8.59 / 131.6 | 215 (7.49) |
+     Open: the Squirtle's colours cost 7.5 h of purge (offer 3-4 colours + pupils?); the Eevee's eye sockets keep a
+     light-brown wall round the dark eye, and ears a thin light groove inside the rim; a ~1 mm yellow speck by the
+     Charmander's right claw (an outline point on the claw).
 12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

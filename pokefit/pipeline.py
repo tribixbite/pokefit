@@ -1338,8 +1338,13 @@ def preview_faces(session: Session, params: Params, regions: tuple[str, float] |
     else:
         colours = [c[:7] for c in session.colours(params)] or ["#cccccc"]
         idx = [(k - 1) % len(colours) for k in pm.keys]
-    return {"signature": pm.signature, "colours": colours,
-            "parts": [base64.b64encode(np.asarray(i, np.uint8).tobytes()).decode("ascii") for i in idx]}
+    out: dict[str, Any] = {"signature": pm.signature, "colours": colours,
+                           "parts": [base64.b64encode(np.asarray(i, np.uint8).tobytes()).decode("ascii") for i in idx]}
+    if regions is None:
+        # Which slot each used colour prints from: cheap, and a paint step changes which colours are used, so the
+        # UI's "Prints from" follows every tap without waiting for the next analysis.
+        out["import_map"] = [m.to_dict() for m in session.slot_matches(params)]
+    return out
 
 
 def _pick_trees_for(session: Session, params: Params) -> list[Any]:

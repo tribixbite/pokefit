@@ -65,6 +65,7 @@ const underside = new UndersideEditor($("underside"), (pockets) => {
 });
 /** Paint/colours changed since the last analysis (its import-file colour map is stale). */
 let paintDirty = false;
+let colourTimer = 0;
 const colorize = new ColorizePanel({
   params: () => state.params,
   report: () => state.report,
@@ -80,6 +81,12 @@ const colorize = new ColorizePanel({
   setStroking: (fn) => viewer.setStrokeHandler(fn),
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
+  // A colour edit only re-runs the colour part of the analysis (shape work is cached): quick enough to do at once,
+  // so "Prints from" and the swatches' slot dots follow the new colour. Debounced for quick successive edits.
+  coloursChanged: () => {
+    window.clearTimeout(colourTimer);
+    colourTimer = window.setTimeout(() => void runAnalyse(), 300);
+  },
   toast: (msg) => toast(msg),
   slotOf: (n) => slotOf(n),
 });
@@ -338,6 +345,12 @@ async function showFigure(session: string, regions: RegionView | null, overlay: 
     }
   }
   viewer.setFaceColours(faces);
+  if (faces.import_map && state.report) {
+    // A paint step or colour edit: "Prints from" and the swatches' slot dots follow at once.
+    state.report.import_map = faces.import_map;
+    renderImportMap(state.report);
+    colorize.render();
+  }
   return reloaded;
 }
 
@@ -346,7 +359,8 @@ async function showFigure(session: string, regions: RegionView | null, overlay: 
 function geometryKey(): string {
   const p = state.params;
   return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
-    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.ball_scale, p.ball_diameter, p.clearance]);
+    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.fill_circle, p.ball_scale, p.ball_diameter,
+    p.clearance, p.strengthen, p.strengthen ? p.figure_height : null]);
 }
 let shownGeometry = "";
 
@@ -624,6 +638,7 @@ function renderImportMap(rep: Report): void {
     });
     const row = h("div", { cls: `slot-row${m.manual ? " manual" : ""}` }, fig, h("span", { cls: "arrow", textContent: "→" }), picker);
     row.setAttribute("role", "listitem");
+    row.dataset.n = String(m.source);
     return row;
   }));
 }

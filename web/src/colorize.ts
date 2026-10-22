@@ -29,6 +29,8 @@ export interface ColorizeHost {
   changed(): void;
   /** Painting stopped: a good moment to re-analyse if anything changed. */
   settled(): void;
+  /** A colour was added or changed: which slot each colour prints from must be matched again. */
+  coloursChanged(): void;
   toast(msg: string): void;
   /** The slot (AMS tray or project slot) filament `n` prints from, per the last analysis; null = unknown. */
   slotOf(n: number): { label: string; colour: string | null } | null;
@@ -73,7 +75,11 @@ export class ColorizePanel {
       this.host.params().colours = cols;
       this.render();
     });
-    $<HTMLInputElement>("paintColour").addEventListener("change", () => { this.host.changed(); void this.reload(); });
+    $<HTMLInputElement>("paintColour").addEventListener("change", () => {
+      this.host.changed();
+      void this.reload();
+      this.host.coloursChanged();
+    });
     const tex = $<HTMLInputElement>("texCol");
     tex.addEventListener("input", () => { $("texColVal").textContent = String(tex.value); });
     tex.addEventListener("change", () => this.setTextureColours(+tex.value));
@@ -172,6 +178,9 @@ export class ColorizePanel {
     pal.replaceChildren(...cols.map((c, i) => this.swatch(i + 1, c)), this.swatch(0, ""), this.addButton());
     $<HTMLInputElement>("paintColour").value = this.filament ? cols[this.filament - 1].slice(0, 7) : "#000000";
     $("paintColourRow").hidden = this.filament === 0;
+    // "Prints from": mark the selected colour's row.
+    document.querySelectorAll<HTMLElement>("#importMap .slot-row").forEach((r) =>
+      r.classList.toggle("sel", r.dataset.n === String(this.filament)));
     $("paintColourLabel").textContent = this.filament ? `Filament ${this.filament}` : "";
     document.querySelectorAll<HTMLButtonElement>("#paintMode button").forEach((b) =>
       b.setAttribute("aria-checked", String(b.dataset.mode === this.mode)));
@@ -241,6 +250,7 @@ export class ColorizePanel {
       this.filament = cols.length;
       this.host.changed();
       this.render();
+      this.host.coloursChanged();
     });
     return b;
   }
