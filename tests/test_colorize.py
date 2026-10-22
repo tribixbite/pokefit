@@ -9,7 +9,7 @@ from conftest import BALL_3MF, two_footed, write_inline_3mf
 from pokefit.colorize import PaintOp, TopologyCache, apply_paint, paint_code, pick_face, region_faces, topology
 from pokefit.model3mf import Part, read_project
 from pokefit.paint import decode_majority
-from pokefit.pipeline import Params, analyse, export, open_session, pick, preview_glb
+from pokefit.pipeline import Params, analyse, export, open_session, pick, preview_faces, preview_glb
 from pokefit.slicer import resize_filaments
 
 
@@ -165,3 +165,29 @@ def test_pipeline_paint_survives_the_pocket_cut(critter: Path, tmp_path: Path) -
     glb = preview_glb(s, params, ("region", 30.0))
     assert glb[:4] == b"glTF"
     json.dumps(rep.to_dict())
+
+
+def test_a_paint_edit_recolours_the_same_preview_and_reuses_the_shape_work(critter: Path, tmp_path: Path) -> None:
+    """Colorize paint keeps the geometry: the preview's signature stays (the view recolours in place),
+    the painted faces get the new colour, and the analysis (fit, pockets, checks reused from the
+    unpainted run) matches a fresh session's."""
+    import base64
+
+    s = open_session(critter, BALL_3MF, None, tmp_path / "w")
+    base = Params(washer="US1/4x1")
+    analyse(s, base)
+    before = preview_faces(s, base)
+    top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
+    hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
+    params = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+                    paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
+    after = preview_faces(s, params)
+    assert after["signature"] == before["signature"] and after["colours"] == ["#E05028", "#161616"]
+    idx = np.frombuffer(base64.b64decode(after["parts"][0]), np.uint8)
+    assert int((idx == 1).sum()) == hit["faces"]
+    rep, _ = analyse(s, params)
+    fresh, _ = analyse(open_session(critter, BALL_3MF, None, tmp_path / "w2"), params)
+    a, b = rep.to_dict(), fresh.to_dict()
+    for d in (a, b):
+        d.pop("timings", None)
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)

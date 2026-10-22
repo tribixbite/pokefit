@@ -3,7 +3,7 @@ import random
 
 import numpy as np
 
-from pokefit.paint import (Tree, decode_majority, decode_weights, encode_tree, leaves, parse_tree, remap_code,
+from pokefit.paint import (Tree, attr_paint, decode_majority, decode_weights, encode_tree, leaves, parse_tree, remap_code,
                            remap_tree, split_children)
 
 
@@ -101,3 +101,12 @@ def test_remap_paints_the_same_area() -> None:
     assert remap_code("4", (1, 2, 0)) == "4"
     # A mirrored 2-split keeps its special corner child; the flipped quad takes its larger state.
     assert remap_tree((2, 0, [3, 1, 1]), (0, 2, 1)) == (2, 0, [3, 1, 1])
+
+
+def test_attr_paint_decodes_a_triangles_attributes() -> None:
+    assert attr_paint('foo="1"') is None
+    whole = attr_paint('paint_color="1C" paint_supports="4"')          # filament 4, one state
+    assert whole is not None and (whole.code, whole.whole, whole.majority, whole.states) == ("1C", 4, 4, (4,))
+    split = attr_paint('paint_color="' + encode_tree((1, 0, [2, 0, 2])) + '"')
+    assert split is not None and split.whole is None and split.majority == 2 and split.states == (2,)
+

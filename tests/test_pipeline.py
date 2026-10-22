@@ -1,3 +1,4 @@
+import base64
 import json
 import zipfile
 from pathlib import Path
@@ -8,7 +9,7 @@ import trimesh
 
 from conftest import BALL_3MF, REAL_DRAGON, two_footed, write_inline_3mf
 from pokefit.model3mf import read_project
-from pokefit.pipeline import Params, analyse, export, open_session, preview_glb
+from pokefit.pipeline import Params, analyse, export, open_session, preview_faces, preview_glb
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +95,12 @@ def test_preview_glb(critter: Path, tmp_path: Path) -> None:
     glb = preview_glb(s, Params())
     assert glb[:4] == b"glTF"
     scene = trimesh.load(trimesh.util.wrap_as_stream(glb), file_type="glb")
-    assert len(scene.geometry) == 2          # unpainted + painted (extruder 2)
+    parts = s.unit_parts(Params())
+    assert sorted(scene.geometry) == [f"p{i}" for i in range(len(parts))]     # one mesh per part
+    faces = preview_faces(s, Params(colours=["#cccccc", "#e05028"]))
+    assert faces["colours"] == ["#cccccc", "#e05028"]
+    idx = np.frombuffer(base64.b64decode(faces["parts"][0]), np.uint8)
+    assert len(idx) == len(scene.geometry["p0"].faces) and set(idx.tolist()) == {0, 1}   # unpainted + painted
 
 
 @pytest.mark.slow

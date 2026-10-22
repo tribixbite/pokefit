@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from .model3mf import Part
-from .paint import decode_weights, remap_states
+from .paint import attr_paint, remap_states
 
 NEW_SLOT_DELTA_E = 25.0     # CIE76 ΔE above which no slot counts as "the same colour"
 
@@ -53,9 +53,9 @@ def used_filaments(parts: list[Part], object_extruder: int) -> list[int]:
     for p in parts:
         used.add(p.extruder or object_extruder)
         for attrs in p.tri_extra.values():
-            if 'paint_color="' in attrs:
-                code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
-                used.update(k for k in decode_weights(code) if k > 0)
+            fp = attr_paint(attrs)
+            if fp is not None:
+                used.update(fp.states)
     return sorted(used)
 
 

@@ -61,8 +61,11 @@ def mesh_checks(part: Part) -> list[Check]:
     name, pid = part.name, part.name
     out: list[Check] = []
 
-    edges = m.edges_sorted
-    uniq, inv, counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
+    # Edges as one int64 key (vertex ids < nv): a 1-D unique, ~10x faster than unique rows.
+    nv = max(1, len(m.vertices))
+    key = m.edges_sorted[:, 0].astype(np.int64) * nv + m.edges_sorted[:, 1]
+    ukey, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
+    uniq = np.stack([ukey // nv, ukey % nv], axis=1)
     open_e, nonman = int((counts == 1).sum()), int((counts > 2).sum())
     if open_e or nonman:
         # Highlight midpoints of the offending edges.

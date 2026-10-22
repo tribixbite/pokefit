@@ -50,10 +50,16 @@ exist only on the original Windows machine (ask the user for the files).
    automated download). The user downloads, then opens the file.
 8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
    vertical (a pedestal between the legs).
-9. **Big meshes**: 200k-face photo Squirtle first analyse ~19.6 s wall (2026-10-20, after the toolchange simulator
-   reads per-layer tuples, 2.8x, and fit tests stop at the first offset that fits; was 21.6-24 s). Profile (scratchpad
-   `prof_analyse.py`): conform 6.2 s, colour-change table 5.3 s (despeckle per palette size 2.0 s, colour spans 3.2 s),
-   pockets 2.7 s, islands 1.7 s, `prepare_points` 2.2 s over 7 calls. 684k-triangle LEGO GLB: 65-69 s.
+9. **Big meshes** (2026-10-22, 303k-triangle `printed/obj_2_Charmander mini.stl`). Measure with
+   `cd web && node scripts/engine-bench.ts <figure>` (Pyodide, the site's engine) or the local server + browser.
+   - Now (Pyodide): boot 10.7 s; open + first analysis 18.6 s (local 11.5 s); tap 1.1 s first (topology), then
+     ~0.05 s local; recolour 0.02-0.3 s (no glTF: `preview_faces`); analysis after painting 1.0 s local / ~5 s
+     Pyodide first, 0.5 s after; palette edit 0.6 s. Before: every tap re-sent a 6 MB glTF (2.4 s) and the
+     analysis after painting took 10-13 s local.
+   - Left in the first analysis (local 11.5 s): conform ~3.6 s (4 fits + 3 height fields), islands 1.8 s,
+     thickness 0.9 s, `_auto_fill` + `_solve` ~1.5 s. Next candidates: compute topology / pick trees when
+     painting starts (first tap 1 s), cache `_conformed` results on disk per file (reopening the same file),
+     islands check on fewer section planes.
 10. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

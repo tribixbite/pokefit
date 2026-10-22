@@ -10,7 +10,7 @@ import trimesh
 from pokefit.ball import Cavity, load_ball
 from pokefit.conform import FILL_NAME, ConformSpec, conform, lift_curve
 from pokefit.model3mf import Part
-from pokefit.pipeline import DEFAULT_BALL, Params, analyse, open_session
+from pokefit.pipeline import DEFAULT_BALL, Params, analyse, open_session, pick, preview_faces
 from pokefit.washer import get_washer
 
 CAVITY = Cavity(load_ball(DEFAULT_BALL), 0.6, get_washer("M6"), 1.0)
@@ -127,3 +127,22 @@ def test_default_fill_is_raised_when_no_magnet_fits(tmp_path: Path) -> None:
     # no magnets asked for: nothing to make room for
     rep3, _ = analyse(s, Params(magnets=0))
     assert rep3.to_dict()["fit"]["conform"]["fill_mm"] == 2.5
+
+
+def test_the_flat_base_cannot_be_painted_and_shows_as_its_own_region(tmp_path: Path) -> None:
+    """The conform step's flat base is not one of the file's parts: a tap on it says so (it used to
+    fail with an index error), and "show regions" greys it out instead of failing too."""
+    stl = tmp_path / "fig.stl"
+    sitting_figure().export(stl)
+    s = open_session(stl, work_dir=tmp_path / "w")
+    p = Params(magnets=0)
+    parts = s.unit_parts(p)
+    assert parts[-1].name == FILL_NAME
+    fb = parts[-1]
+    tri = fb.vertices[fb.faces[np.argmin(fb.vertices[fb.faces][:, :, 2].max(axis=1))]]
+    with pytest.raises(ValueError, match="flat base"):
+        pick(s, p, tri.mean(axis=0).tolist(), [0.0, 0.0, -1.0], "part", 15.0)
+    faces = preview_faces(s, p, ("part", 15.0))
+    import base64
+    base = np.frombuffer(base64.b64decode(faces["parts"][-1]), np.uint8)
+    assert len(base) == len(fb.faces) and set(base.tolist()) == {len(faces["colours"]) - 1}

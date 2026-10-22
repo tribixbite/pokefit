@@ -139,6 +139,16 @@ export interface RegionView {
   angle: number;
 }
 
+/** Colours of the preview glTF's faces (engine `preview_faces`). */
+export interface PreviewFaces {
+  /** Names the preview geometry: equal to the loaded glTF's = recolour it in place. */
+  signature: string;
+  /** "#rrggbb" per colour index. */
+  colours: string[];
+  /** Per mesh `p<i>`: base64, one colour index byte per face. */
+  parts: string[];
+}
+
 export interface PickRequest {
   point: number[];
   normal: number[] | null;

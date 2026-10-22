@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 from .model3mf import Part
-from .paint import leaves, parse_tree
+from .paint import attr_paint, leaves, parse_tree
 
 # Cost model fitted to Bambu CLI slices on the user's X2D project (PETG, 0.16 mm, prime tower):
 # the Manex Squirtle at 1, 2, 3, 4 and 7 colours (extra time / grams over the 1-colour print; predictions
@@ -82,11 +82,11 @@ def layer_use(parts: list[Part], object_extruder: int, n_filaments: int, layer_h
         state = np.full(len(p.faces), base, np.int64)
         split: list[int] = []
         for i, attrs in p.tri_extra.items():
-            if 'paint_color="' not in attrs:
+            fp = attr_paint(attrs)
+            if fp is None:
                 continue
-            tree = parse_tree(attrs.split('paint_color="', 1)[1].split('"', 1)[0])
-            if isinstance(tree, int):
-                state[i] = tree or base
+            if fp.whole is not None:
+                state[i] = fp.whole or base
             else:
                 split.append(i)
         keep = np.ones(len(p.faces), bool)

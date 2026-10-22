@@ -10,8 +10,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { base64Bytes, groupFaces } from "./faces";
 import { allowedProfile, innerWallProfile, type RZ } from "./geometry";
-import type { Check, Report } from "./types";
+import type { Check, PreviewFaces, Report } from "./types";
 
 /** A tap on the figure: surface point and outward normal in the figure frame at scale 1. */
 export interface FigureHit {
@@ -45,6 +46,11 @@ export class Viewer {
   private showAllowed = true;
   private loader = new GLTFLoader();
   private figureUrl = "";
+  /** Engine signature of the shown figure's geometry ("" = none): equal = recolour in place. */
+  figureSignature = "";
+  /** Each figure mesh's face order as loaded (colour edits regroup the index buffer from it). */
+  private faceOrder = new Map<THREE.BufferGeometry, THREE.TypedArray>();
+  private faceMaterials: THREE.MeshStandardMaterial[] = [];
   private frameRequested = false;
   /** Outer radius of the ball (final mm), for framing the camera. */
   private ballRadius = 25;
@@ -138,8 +144,11 @@ export class Viewer {
     });
   }
 
-  /** Load (or reuse) the figure GLB. A new figure stays hidden until the next `update` places it. */
-  async setFigure(url: string): Promise<void> {
+  /**
+   * Load (or reuse) the figure GLB: one uncoloured mesh per part (`p<i>`), coloured by `setFaceColours`.
+   * A new figure stays hidden until the next `update` places it.
+   */
+  async setFigure(url: string, signature: string): Promise<void> {
     if (url === this.figureUrl && this.figure) return;
     this.figureFrame.visible = false;
     const gltf = await this.loader.loadAsync(url);
@@ -147,6 +156,7 @@ export class Viewer {
       this.figureScaled.remove(this.figure);
       disposeTree(this.figure);
     }
+    this.faceOrder.clear();
     this.figure = gltf.scene;
     this.figure.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -155,10 +165,40 @@ export class Viewer {
         mat.side = THREE.DoubleSide;
         mat.flatShading = false;
         m.geometry.computeVertexNormals();
+        if (m.geometry.index) this.faceOrder.set(m.geometry, m.geometry.index.array.slice());
       }
     });
     this.figureScaled.add(this.figure);
     this.figureUrl = url;
+    this.figureSignature = signature;
+    this.requestFrame();
+  }
+
+  /**
+   * Colour the figure's faces in place (a paint or palette edit): each mesh's triangles are
+   * regrouped by colour, one draw call per colour, without reloading its geometry.
+   */
+  setFaceColours(faces: PreviewFaces): void {
+    if (!this.figure) return;
+    for (const m of this.faceMaterials) m.dispose();
+    this.faceMaterials = faces.colours.map((c) => new THREE.MeshStandardMaterial({
+      color: new THREE.Color(c), side: THREE.DoubleSide, metalness: 0, roughness: 0.75,
+    }));
+    faces.parts.forEach((b64, i) => {
+      const mesh = this.figure?.getObjectByName(`p${i}`) as THREE.Mesh | undefined;
+      const order = mesh?.isMesh ? this.faceOrder.get(mesh.geometry) : undefined;
+      if (!mesh || !order) return;
+      const colour = base64Bytes(b64);
+      if (colour.length * 3 !== order.length) return;   // another geometry: the next full load fixes it
+      const { index, groups } = groupFaces(order, colour, this.faceMaterials.length);
+      const geo = mesh.geometry;
+      geo.setIndex(new THREE.BufferAttribute(index, 1));
+      geo.clearGroups();
+      for (const g of groups) geo.addGroup(g.start, g.count, g.materialIndex);
+      const old = mesh.material;
+      if (!Array.isArray(old) && !this.faceMaterials.includes(old as THREE.MeshStandardMaterial)) old.dispose();
+      mesh.material = this.faceMaterials;
+    });
     this.requestFrame();
   }
 

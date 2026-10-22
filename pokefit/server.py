@@ -10,7 +10,8 @@ API (all JSON unless noted):
   POST /api/analyse     {session, params}                          -> report
   POST /api/washers     {session, params}                          -> [washer rows]
   GET  /api/preview.glb ?session&object&rx&ry                      -> GLB (figure at scale 1)
-  POST /api/preview     {session, params, regions?: {mode, angle}} -> GLB (with colorize paint / regions)
+  POST /api/preview     {session, params, regions?: {mode, angle}} -> GLB (one uncoloured mesh per part)
+  POST /api/preview_faces {session, params, regions?}              -> {signature, colours, parts} (its face colours)
   POST /api/pick        {session, params, point, normal, mode, angle} -> {part, face, faces, ...}
   POST /api/slice       {session, params, x10}                     -> {job}
   GET  /api/job         ?id                                        -> {state, result|error}
@@ -39,7 +40,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
                        input_checks,
-                       open_session, pick, preview_glb, safe_stem, slice_variants, washer_table)
+                       open_session, pick, preview_faces, preview_glb, safe_stem, slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
@@ -82,6 +83,15 @@ def _params(body: dict[str, Any]) -> Params:
         return Params.from_dict(body.get("params") or {})
     except (TypeError, ValueError) as exc:
         raise ApiError(400, f"bad params: {exc}") from exc
+
+
+def _regions(body: dict[str, Any]) -> tuple[str, float] | None:
+    """A preview request's "show regions" view: (colorize mode, angle), or None."""
+    reg = body.get("regions")
+    try:
+        return (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
+    except (TypeError, ValueError) as exc:
+        raise ApiError(400, f"bad regions: {exc}") from exc
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -427,11 +437,17 @@ class Handler(BaseHTTPRequestHandler):
         body = self._json_body()
         s, lock = _session(body.get("session"))
         params = _params(body)
-        reg = body.get("regions")
-        regions = (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
         with lock:
-            glb = preview_glb(s, params, regions)
+            glb = preview_glb(s, params, _regions(body))
         self._send(200, glb, "model/gltf-binary")
+
+    def post_preview_faces(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        with lock:
+            res = preview_faces(s, params, _regions(body))
+        self._json(res)
 
     def post_pick(self, q: dict[str, str]) -> None:
         body = self._json_body()

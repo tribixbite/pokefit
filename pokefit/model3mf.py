@@ -16,6 +16,7 @@ settings, filament config and auxiliaries carried over.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -77,6 +78,7 @@ def _remap_cached(code: str, perm: tuple[int, int, int]) -> str:
     return remap_code(code, perm)
 
 
+@lru_cache(maxsize=1 << 16)
 def remap_paint_attrs(attrs: str, perm: tuple[int, int, int]) -> str:
     """A triangle's extra attributes for its corners listed in a new order (new j = old perm[j]):
     split paint (colour, supports, seams) is re-laid on the same areas."""
@@ -85,6 +87,7 @@ def remap_paint_attrs(attrs: str, perm: tuple[int, int, int]) -> str:
     return _PAINT_ATTR_RE.sub(lambda mm: f'{mm.group(1)}="{_remap_cached(mm.group(2).upper(), perm)}"', attrs)
 
 
+@lru_cache(maxsize=1 << 16)
 def whole_paint_attrs(attrs: str) -> str:
     """Attributes with every split paint reduced to its main state, for a triangle whose
     shape is new (its splits would land on the wrong areas)."""
@@ -343,6 +346,103 @@ def world_parts(obj: FigureObject) -> list[Part]:
     return [p.transformed(obj.transform) for p in obj.parts]
 
 
+def row_ids(rows: np.ndarray) -> np.ndarray:
+    """An id per row of an (n, k) integer array, equal ids for equal rows (`np.unique(axis=0)`'s inverse,
+    in some other order).
+
+    `np.unique(axis=0)` sorts the rows as opaque byte strings, about 1 s per million rows. Here the
+    columns are packed into one int64 key, so a single 1-D unique does it (3-10x faster): as they
+    are when their value ranges fit in 63 bits together (vertex ids), else as per-column ranks.
+    """
+    rows = np.asarray(rows)
+    if rows.ndim != 2 or rows.shape[1] == 0 or len(rows) == 0:
+        return np.zeros(len(rows), np.int64)
+    lo = rows.min(axis=0).astype(np.int64)
+    span = rows.max(axis=0).astype(np.int64) - lo
+    cols: list[np.ndarray] = []
+    bits = [max(1, int(s).bit_length()) for s in span.tolist()]
+    if sum(bits) <= 63:
+        cols = [rows[:, j].astype(np.int64) - lo[j] for j in range(rows.shape[1])]
+    else:
+        ranks = [np.unique(col, return_inverse=True) for col in rows.T]
+        bits = [max(1, int(len(u) - 1).bit_length()) for u, _ in ranks]
+        if sum(bits) > 63:
+            return np.unique(rows, axis=0, return_inverse=True)[1].reshape(-1).astype(np.int64)
+        cols = [inv.reshape(-1).astype(np.int64) for _, inv in ranks]
+    key = np.zeros(len(rows), np.int64)
+    for col, b in zip(cols, bits):
+        key = (key << b) | col
+    return np.unique(key, return_inverse=True)[1].reshape(-1).astype(np.int64)
+
+
+def digest(*arrays: np.ndarray) -> bytes:
+    """A short hash of arrays' shapes, types and contents, for caches keyed on geometry
+    (about 10 ms for a 300k-triangle part)."""
+    h = hashlib.blake2b(digest_size=16)
+    for a in arrays:
+        a = np.ascontiguousarray(a)
+        h.update(repr((a.shape, a.dtype.str)).encode())
+        h.update(a.data)
+    return h.digest()
+
+
+def parts_digest(parts: list[Part]) -> bytes:
+    """`digest` of every part's geometry and kind (not its paint)."""
+    h = hashlib.blake2b(digest_size=16)
+    for p in parts:
+        h.update(p.subtype.encode())
+        h.update(digest(p.vertices, p.faces))
+    return h.digest()
+
+
+@dataclass(frozen=True)
+class FaceMap:
+    """Where each triangle of a re-meshed part came from (`face_map`)."""
+    match: np.ndarray        # new triangle -> original triangle with the same corners, or -1
+    shift: np.ndarray        # corner rotation of a matched triangle: new corner j = old corner (j + shift)
+    unmatched: np.ndarray    # new triangles with no match
+    nearest: np.ndarray      # per unmatched triangle: the original triangle with the nearest centroid
+
+
+_FACE_MAPS: dict[bytes, FaceMap] = {}
+FACE_MAP_CACHE = 4           # re-meshes remembered: a paint edit re-cuts the same geometry
+
+
+def face_map(old_v: np.ndarray, old_f: np.ndarray, new_v: np.ndarray, new_f: np.ndarray) -> FaceMap:
+    """Triangle correspondence between a part and its re-meshed geometry (see `remesh_part`).
+
+    It depends on geometry only, so it is cached: a colour edit re-runs the pocket cut on
+    the same shapes and then only carries the new paint over.
+    """
+    key = digest(old_v, old_f, new_v, new_f)
+    if key in _FACE_MAPS:
+        return _FACE_MAPS[key]
+    # Quantised vertex positions -> shared integer ids across both meshes, then per corner.
+    vid = row_ids(np.round(np.vstack([old_v, new_v]) / 1e-5).astype(np.int64))
+    corner = np.vstack([vid[:len(old_v)][old_f], vid[len(old_v):][new_f]])
+    # Canonical corner rotation: start at the smallest id (keeps orientation).
+    k = np.argmin(corner, axis=1)
+    rolled = corner[np.arange(len(corner))[:, None], (np.arange(3) + k[:, None]) % 3]
+    tri_id = row_ids(rolled)
+    n_old = len(old_f)
+    lookup = np.full(tri_id.max() + 1, -1, np.int64)
+    lookup[tri_id[:n_old]] = np.arange(n_old)
+    match = lookup[tri_id[n_old:]]
+    shift = (k[:n_old][np.maximum(match, 0)] - k[n_old:]) % 3
+    unmatched = np.nonzero(match < 0)[0]
+    nearest = np.zeros(0, np.int64)
+    if len(unmatched):
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(old_v[old_f].mean(axis=1))
+        nearest = np.asarray(tree.query(new_v[new_f[unmatched]].mean(axis=1))[1], np.int64)
+    fm = FaceMap(match, shift, unmatched, nearest)
+    while len(_FACE_MAPS) >= FACE_MAP_CACHE:
+        _FACE_MAPS.pop(next(iter(_FACE_MAPS)))
+    _FACE_MAPS[key] = fm
+    return fm
+
+
 def remesh_part(original: Part, mesh: trimesh.Trimesh) -> Part:
     """New geometry for a part (e.g. after a boolean cut), carrying per-triangle attributes over.
 
@@ -355,39 +455,19 @@ def remesh_part(original: Part, mesh: trimesh.Trimesh) -> Part:
     f = np.asarray(mesh.faces, np.int64)
     if not original.tri_extra:
         return Part(original.name, original.extruder, v, f, {}, original.subtype)
-
-    # Quantised corner positions -> shared integer ids across both meshes.
-    q_old = np.round(original.vertices / 1e-5).astype(np.int64)[original.faces].reshape(-1, 3)
-    q_new = np.round(v / 1e-5).astype(np.int64)[f].reshape(-1, 3)
-    _, corner = np.unique(np.vstack([q_old, q_new]), axis=0, return_inverse=True)
-    corner = corner.reshape(-1, 3)
-    # Canonical corner rotation: start at the smallest id (keeps orientation).
-    k = np.argmin(corner, axis=1)
-    rolled = corner[np.arange(len(corner))[:, None], (np.arange(3) + k[:, None]) % 3]
-    _, tri_id = np.unique(rolled, axis=0, return_inverse=True)
-    n_old = len(original.faces)
-    lookup = np.full(tri_id.max() + 1, -1, np.int64)
-    lookup[tri_id[:n_old]] = np.arange(n_old)
-    match = lookup[tri_id[n_old:]]
-
-    # How far each matched triangle's corner list is rotated: new corner j = old corner (j + shift).
-    shift = (k[:n_old][np.maximum(match, 0)] - k[n_old:]) % 3
-
+    fm = face_map(original.vertices, original.faces, v, f)
     extra: dict[int, str] = {}
-    for i in np.nonzero(match >= 0)[0].tolist():
-        ex = original.tri_extra.get(int(match[i]))
+    old_extra = original.tri_extra
+    match = fm.match.tolist()
+    shift = fm.shift.tolist()
+    for i in np.nonzero(fm.match >= 0)[0].tolist():
+        ex = old_extra.get(match[i])
         if ex:
-            r = int(shift[i])
+            r = shift[i]
             extra[i] = remap_paint_attrs(ex, (r, (r + 1) % 3, (r + 2) % 3))
-    unmatched = np.nonzero(match < 0)[0]
-    if len(unmatched):
-        from scipy.spatial import cKDTree
-
-        tree = cKDTree(original.vertices[original.faces].mean(axis=1))
-        _, nearest = tree.query(v[f[unmatched]].mean(axis=1))
-        for i, j in zip(unmatched.tolist(), nearest.tolist()):
-            if j in original.tri_extra:
-                extra[i] = whole_paint_attrs(original.tri_extra[j])
+    for i, j in zip(fm.unmatched.tolist(), fm.nearest.tolist()):
+        if j in old_extra:
+            extra[i] = whole_paint_attrs(old_extra[j])
     return Part(original.name, original.extruder, v, f, extra, original.subtype)
 
 

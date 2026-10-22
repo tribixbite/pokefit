@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
+  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -178,6 +178,12 @@ export async function previewSource(session: string, params: Params, regions: Re
   if (lastPreview) URL.revokeObjectURL(lastPreview);
   lastPreview = URL.createObjectURL(new Blob([bytes], { type: "model/gltf-binary" }));
   return lastPreview;
+}
+
+/** Colours of the preview's faces; while `signature` matches the shown glTF, only these need to change. */
+export async function previewFaces(session: string, params: Params, regions: RegionView | null = null): Promise<PreviewFaces> {
+  if (mode === "local") return postJson<PreviewFaces>("/api/preview_faces", { session, params, regions });
+  return json<PreviewFaces>(await call("faces", [session, JSON.stringify(params), JSON.stringify(regions)]));
 }
 
 /** The triangle under a tap on the preview (figure frame, scale 1) and how big its region is. */

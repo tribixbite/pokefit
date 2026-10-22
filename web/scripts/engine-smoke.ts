@@ -72,6 +72,14 @@ const rep3 = JSON.parse(api.run_analyse(loaded.session, painted));
 const regionGlb = api.preview(loaded.session, painted, JSON.stringify({ mode: "region", angle: 30 }));
 const regionBytes = regionGlb.toJs().length;
 regionGlb.destroy();
+// Face colours of the painted preview: same geometry as unpainted (the view recolours in place), the leg in colour 2.
+const facesPlain = JSON.parse(api.faces(loaded.session, plain, "null"));
+const facesPainted = JSON.parse(api.faces(loaded.session, painted, "null"));
+const legFaces = [...atob(facesPainted.parts[0])].filter((c) => c.charCodeAt(0) === 1).length;
+if (facesPainted.signature !== facesPlain.signature || legFaces !== leg.faces) {
+  throw new Error(`preview face colours: signature ${facesPlain.signature} -> ${facesPainted.signature}, ` +
+    `${legFaces} faces in colour 2, expected ${leg.faces}`);
+}
 console.log(`[${secs()} s] colorize: region ${side.faces} faces, piece ${leg.faces} faces; ` +
   `painted ${rep3.object.parts.map((x: { painted: number }) => x.painted).join("+")} faces; regions preview ${regionBytes} B`);
 const [paintedJson] = api.run_export(loaded.session, painted).toJs({ create_proxies: false });

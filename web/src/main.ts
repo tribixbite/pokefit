@@ -7,7 +7,9 @@ import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
-import type { AmsSlot, Check, Config, Params, PrintPlan, Report, SliceResult, SliceVariants, WasherRow } from "./types";
+import type {
+  AmsSlot, Check, Config, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
+} from "./types";
 import { UndersideEditor } from "./underside";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -50,10 +52,9 @@ let paintDirty = false;
 const colorize = new ColorizePanel({
   params: () => state.params,
   report: () => state.report,
-  // Paint changes colours only: the figure keeps its place, so show it again at once.
+  // Paint changes colours only: the figure keeps its place (a reloaded one is placed again at once).
   refresh: async (regions) => {
-    await refreshFigure(regions);
-    if (state.report) viewer.update(state.report, state.focus);
+    if (await refreshFigure(regions) && state.report) viewer.update(state.report, state.focus);
   },
   pick: (hit, mode, angle, radius) =>
     api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius }),
@@ -264,7 +265,7 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
       r.params.bend !== state.params.bend || r.params.flat_base !== state.params.flat_base ||
       r.params.flat_depth !== state.params.flat_depth || r.params.flat_fill !== state.params.flat_fill;
     shownGeometry = geometryKey();
-    await viewer.setFigure(await api.previewSource(res.session, state.params));
+    await showFigure(res.session, null, false);
     if (differs) await runAnalyse();
     else show(r);
     viewer.view("iso");
@@ -278,20 +279,40 @@ async function load(fn: () => Promise<import("./types").LoadResponse>, name: str
 // ------------------------------------------------------------------ analysis
 
 /**
- * Reload the 3D preview for the current object/orientation/paint (seconds in the browser engine).
- * `regions` colours it by colorize region instead of by filament.
+ * Show the 3D preview for the current object/orientation/paint; `regions` colours it by colorize
+ * region instead of by filament. Returns true when the figure was reloaded (it then stays hidden
+ * until `viewer.update` places it again).
  */
-async function refreshFigure(regions: import("./types").RegionView | null = null): Promise<void> {
-  if (!state.session) return;
+async function refreshFigure(regions: RegionView | null = null): Promise<boolean> {
+  if (!state.session) return false;
   shownGeometry = geometryKey();
-  busy(true, "Preparing the preview…");
   try {
-    await viewer.setFigure(await api.previewSource(state.session, state.params, regions));
+    return await showFigure(state.session, regions, true);
   } catch (e) {
     toast((e as Error).message);
-  } finally {
-    busy(false);
+    return false;
   }
+}
+
+/**
+ * The preview's face colours first (small); the glTF only when its geometry differs from the one
+ * shown. A paint or palette edit then recolours the view in place, without re-sending, parsing and
+ * re-lighting a mesh of hundreds of thousands of triangles. Returns true when the glTF was reloaded.
+ */
+async function showFigure(session: string, regions: RegionView | null, overlay: boolean): Promise<boolean> {
+  const faces = await api.previewFaces(session, state.params, regions);
+  let reloaded = false;
+  if (faces.signature !== viewer.figureSignature) {
+    if (overlay) busy(true, "Preparing the preview…");
+    try {
+      await viewer.setFigure(await api.previewSource(session, state.params, regions), faces.signature);
+      reloaded = true;
+    } finally {
+      if (overlay) busy(false);
+    }
+  }
+  viewer.setFaceColours(faces);
+  return reloaded;
 }
 
 /** What the figure's shape depends on: orientation and the conform step (designed for this ball,

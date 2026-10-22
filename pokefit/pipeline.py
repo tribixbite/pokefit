@@ -9,6 +9,7 @@ Frames:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -27,14 +28,14 @@ from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
 from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
-from .colorize import PaintOp, TopologyCache, apply_paint, pick_face, region_colours, region_faces
+from .colorize import PaintOp, TopologyCache, apply_paint, centroid_trees, pick_face, region_colours, region_faces
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
-from .model3mf import (FigureObject, Part, Project, plate_size, read_project, remesh_part, world_parts,
-                       write_project)
+from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
+                       remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
-from .paint import decode_majority, leaves, parse_tree
+from .paint import attr_paint, leaves, parse_tree
 from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
@@ -59,6 +60,10 @@ DEFAULT_REFERENCE = ROOT / "pokeball60goodPrinted.3mf" if (ROOT / "pokeball60goo
 CACHE_DIR = ROOT / ".pokefit_cache"
 SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
+SHAPE_CACHE = 4             # fit / underside / printability results kept per session (recent shapes)
+# Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
+COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "paint_depth",
+                         "texture_colours", "texture_details"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
 
@@ -188,6 +193,11 @@ class Session:
     _settings: dict[tuple, dict] = field(default_factory=dict)          # (presets version, process) -> settings
     _tc_table: dict[tuple, list[dict[str, Any]]] = field(default_factory=dict)   # palette-size cost tables
     _auto_count: dict[tuple, int | None] = field(default_factory=dict)     # glTF auto palette size per setup
+    _printing: dict[tuple, list[Check]] = field(default_factory=dict)      # geometry -> printability checks
+    _solved: dict[str, tuple] = field(default_factory=dict)                # shape_key -> `_solve` result
+    _undersides: dict[str, dict[str, Any]] = field(default_factory=dict)   # shape_key -> pocket editor data
+    _preview: dict[str, Any] = field(default_factory=dict)                 # last `_preview_meshes` result
+    _pick_trees: dict[tuple, list[Any]] = field(default_factory=dict)      # figure frame -> `centroid_trees`
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -235,7 +245,10 @@ class Session:
                 free = max_scale(self._points[self._spec_key(params, replace(spec, fill=fill))], cavity)
                 if free is None:
                     break
-                field = height_field([p.mesh() for p in parts if p.subtype == "normal_part"])
+                fkey = self._spec_key(params, replace(spec, fill=fill))
+                if fkey not in self._fields:     # the same underside `underside` needs later
+                    self._fields[fkey] = height_field([p.mesh() for p in parts if p.subtype == "normal_part"])
+                field = self._fields[fkey]
                 pockets, _ = choose_pockets(pocket_map(field.scaled(free.max_scale), params.spec), params.spec,
                                             params.magnets)
                 if pockets:
@@ -615,6 +628,17 @@ def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, wash
     return best
 
 
+def shape_key(params: Params) -> str:
+    """`params` without the colour-only settings (`COLOUR_ONLY`): equal keys give the same fit and pockets."""
+    return json.dumps({k: v for k, v in asdict(params).items() if k not in COLOUR_ONLY}, sort_keys=True)
+
+
+def _evict(cache: dict) -> None:
+    """Make room in a small per-session cache (oldest entry out)."""
+    while len(cache) >= SHAPE_CACHE:
+        cache.pop(next(iter(cache)))
+
+
 def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
            ) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
     """(scale, max scale, pockets in the figure frame, pocket checks, XY offset)."""
@@ -737,7 +761,11 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     t["input_checks"] = time.time() - t0
 
     t1 = time.time()
-    scale, s_max, pockets, pchecks, off = _solve(session, params, cavity, washer)
+    skey = shape_key(params)
+    if skey not in session._solved:
+        _evict(session._solved)
+        session._solved[skey] = _solve(session, params, cavity, washer)
+    scale, s_max, pockets, pchecks, off = session._solved[skey]
     t["fit"] = time.time() - t1
     fit_dict: dict[str, Any] = {"max_scale": s_max, "scale": scale, "offset": off,
                                 "height_mm": scale * hp.height, "max_height_mm": s_max * hp.height,
@@ -778,7 +806,10 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
 
     t2 = time.time()
     meshes = [p.mesh() for p in final]
-    underside = _underside(session, params, meshes, scale, washer, off)
+    if skey not in session._undersides:
+        _evict(session._undersides)
+        session._undersides[skey] = _underside(session, params, meshes, scale, washer, off)
+    underside = session._undersides[skey]
     if params.magnets:
         checks.extend(pchecks)
         if pockets:
@@ -811,15 +842,20 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     t["pockets"] = time.time() - t2
 
     t3 = time.time()
-    solid = printable_solid(final)
     st = session.settings(params) or {}
     layer = float(st.get("layer_height", 0.2) or 0.2)
     angle = float(st.get("support_threshold_angle", 30) or 30)
     ignore = [(p.x, p.y, params.pocket_diameter / 2, p.z + params.pocket_depth) for p in pockets] if params.magnets else []
-    printing = [thickness_check(solid), overhang_check(solid, angle, ignore),
-                islands_check(solid, 2 * layer), bed_contact_check(solid)]
-    printing.append(supports_verdict(printing))
-    checks.extend(printing)
+    # Geometry only: a colour edit re-analyses the same shape, so the checks are reused.
+    pkey = (parts_digest(final), layer, angle, repr(ignore))
+    if pkey not in session._printing:
+        solid = printable_solid(final)
+        printing = [thickness_check(solid), overhang_check(solid, angle, ignore),
+                    islands_check(solid, 2 * layer), bed_contact_check(solid)]
+        printing.append(supports_verdict(printing))
+        _evict(session._printing)
+        session._printing[pkey] = printing
+    checks.extend(session._printing[pkey])
     t["printability"] = time.time() - t3
 
     t4 = time.time()
@@ -1071,11 +1107,9 @@ def face_colours(part: Part, colours: list[str], default_extruder: int) -> np.nd
     base = part.extruder or default_extruder
     ext = np.full(len(part.faces), base, np.int64)
     for i, attrs in part.tri_extra.items():
-        if "paint_color=" in attrs:
-            code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
-            st = decode_majority(code)
-            if st > 0:
-                ext[i] = st
+        fp = attr_paint(attrs)
+        if fp is not None and fp.majority > 0:
+            ext[i] = fp.majority
     return ext
 
 
@@ -1083,7 +1117,7 @@ def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndar
     """(vertices, faces, extruder per face) with split paint drawn as its sub-triangles, so the
     preview shows brush strokes and texture-derived colour edges as the slicer will print them."""
     ext = face_colours(part, [], default_extruder)
-    split = [i for i, a in part.tri_extra.items() if "paint_color=" in a and not _whole_paint(a)]
+    split = [i for i, a in part.tri_extra.items() if (fp := attr_paint(a)) is not None and fp.whole is None]
     if not split:
         return part.vertices, part.faces, ext
     base = part.extruder or default_extruder
@@ -1102,10 +1136,38 @@ def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndar
     return np.vstack(verts), np.vstack(faces), np.concatenate(exts)
 
 
-def _whole_paint(attrs: str) -> bool:
-    """A paint_color that is one state for the whole triangle (no split)."""
-    code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
-    return isinstance(parse_tree(code), int)
+# Overlap clipping by part geometry (`parts_digest`): a colour edit clips the same shapes again.
+_CLIPS: dict[bytes, list[tuple[np.ndarray, np.ndarray] | None]] = {}
+
+
+def _clipped_geometry(parts: list[Part]) -> list[tuple[np.ndarray, np.ndarray] | None]:
+    """Per part, its (vertices, faces) after `clip_overlaps`, or None when clipping leaves it as it is."""
+    key = parts_digest(parts)
+    if key in _CLIPS:
+        return _CLIPS[key]
+    out: list[tuple[np.ndarray, np.ndarray] | None] = []
+    done: list[tuple[Part, Any]] = []
+    for part in parts:
+        res = None
+        lo, hi = part.vertices.min(axis=0), part.vertices.max(axis=0)
+        if part.subtype == "normal_part":
+            try:
+                base = to_manifold(merged(part))
+                man = base
+                for prev, pman in done:
+                    plo, phi = prev.vertices.min(axis=0), prev.vertices.max(axis=0)
+                    if np.all(phi >= lo) and np.all(plo <= hi):
+                        man = man - pman
+                if abs(man.volume() - base.volume()) > 1e-6:
+                    m = from_manifold(man)
+                    res = (np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
+                done.append((part, base))
+            except RuntimeError:
+                pass
+        out.append(res)
+    _evict(_CLIPS)
+    _CLIPS[key] = out
+    return out
 
 
 def clip_overlaps(parts: list[Part]) -> list[Part]:
@@ -1116,64 +1178,92 @@ def clip_overlaps(parts: list[Part]) -> list[Part]:
     keeps its colour even though the body mesh encloses it. Parts that are not
     valid solids are left as they are.
     """
-    out: list[Part] = []
-    done: list[tuple[Part, Any]] = []
-    for part in parts:
-        lo, hi = part.vertices.min(axis=0), part.vertices.max(axis=0)
-        cur = part
-        if part.subtype == "normal_part":
-            try:
-                man = to_manifold(merged(part))
-                before = man.volume()
-                for prev, pman in done:
-                    plo, phi = prev.vertices.min(axis=0), prev.vertices.max(axis=0)
-                    if np.all(phi >= lo) and np.all(plo <= hi):
-                        man = man - pman
-                if abs(man.volume() - before) > 1e-6:
-                    cur = remesh_part(part, from_manifold(man))
-                done.append((part, to_manifold(merged(part))))
-            except RuntimeError:
-                pass
-        out.append(cur)
+    return [part if g is None else remesh_part(part, trimesh.Trimesh(g[0], g[1], process=False))
+            for part, g in zip(parts, _clipped_geometry(parts))]
+
+
+REGION_PALETTE = 64          # "show regions" colours, reused cyclically (a figure can have thousands of regions)
+REGION_OTHER = "#5a6270"     # parts taps cannot paint (the conform step's flat base)
+
+
+@dataclass
+class PreviewMeshes:
+    """What the 3D preview draws: per part (vertices, faces) and a colour key per face, plus a geometry hash."""
+    meshes: list[tuple[np.ndarray, np.ndarray]]
+    keys: list[np.ndarray]           # per face: 1-based filament, or (regions) region id, -1 = REGION_OTHER
+    signature: str
+
+
+def _preview_meshes(session: Session, params: Params, regions: tuple[str, float] | None) -> PreviewMeshes:
+    """The preview's parts at scale 1 in the figure frame, cached for the last setting (the
+    glTF and the face colours of one view are asked for one after the other)."""
+    key = json.dumps([session._key(params), session.texture_count(params), params.texture_details, params.paint,
+                      regions], sort_keys=True, default=str)
+    hit = session._preview.get(key)
+    if hit is not None:
+        return hit
+    obj = session.obj(params)
+    unit = session.unit_parts(params) if regions else session.figure_parts(params)
+    meshes: list[tuple[np.ndarray, np.ndarray]] = []
+    keys: list[np.ndarray] = []
+    if regions:
+        # Overlap clipping re-meshes parts and loses the face order the region labels need: skip it here.
+        topo = session.topology(params)
+        mode = "part" if regions[0] == "brush" else regions[0]   # a brush has no fixed regions: show parts
+        for pi, part in enumerate(unit):
+            meshes.append((part.vertices, part.faces))
+            keys.append(topo.labels(pi, mode, regions[1]) if pi < len(topo)
+                        else np.full(len(part.faces), -1, np.int64))
+    else:
+        for part in clip_overlaps(unit):
+            pv, pf, ext = painted_mesh(part, obj.extruder)
+            meshes.append((pv, pf))
+            keys.append(ext)
+    sig = hashlib.blake2b(b"".join(digest(v, f) for v, f in meshes), digest_size=12).hexdigest()
+    out = PreviewMeshes(meshes, keys, sig)
+    session._preview.clear()
+    session._preview[key] = out
     return out
 
 
 def preview_glb(session: Session, params: Params, regions: tuple[str, float] | None = None) -> bytes:
-    """Figure at scale 1 in the figure frame, one mesh per (part, filament) for compact colours.
+    """Figure at scale 1 in the figure frame: one uncoloured mesh per part, named `p<i>`, faces in
+    the order `preview_faces` colours them. Split paint is drawn as its sub-triangles, so brush
+    strokes and texture colour edges show as the slicer prints them.
 
-    With `regions` (colorize mode, angle), each part is coloured by the regions a
-    tap would paint instead, so the user sees what the geometry detection found.
+    With `regions` (colorize mode, angle) the parts are the unclipped ones whose
+    face order the region labels follow.
     """
-    obj = session.obj(params)
-    cols = session.colours(params) or ["#cccccc"]
+    pm = _preview_meshes(session, params, regions)
     scene = trimesh.Scene()
-    unit = session.unit_parts(params) if regions else session.figure_parts(params)
-    # Overlap clipping re-meshes parts and loses the face order the region labels need: skip it there.
-    shown = unit if regions else clip_overlaps(unit)
-    for pi, part in enumerate(shown):
-        if regions:
-            # A brush has no fixed regions: show the parts it would paint within.
-            mode = "part" if regions[0] == "brush" else regions[0]
-            lab = session.topology(params).labels(pi, mode, regions[1])
-            ext = lab + 1
-            palette = region_colours(int(lab.max()) + 1 if len(lab) else 0)
-            pv, pf = part.vertices, part.faces
-        else:
-            pv, pf, ext = painted_mesh(part, obj.extruder)
-        for e in np.unique(ext):
-            sub = trimesh.Trimesh(pv, pf[ext == e], process=False)
-            sub.remove_unreferenced_vertices()
-            if regions:
-                rgba = [int(c) for c in palette[int(e) - 1]] + [255]
-            else:
-                hexc = cols[(int(e) - 1) % len(cols)].lstrip("#")[:6]
-                rgba = [int(hexc[i:i + 2], 16) for i in (0, 2, 4)] + [255]
-            sub.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
-                baseColorFactor=rgba, metallicFactor=0.0, roughnessFactor=0.75))
-            scene.add_geometry(sub, geom_name=f"p{pi}_e{int(e)}")
+    for pi, (v, f) in enumerate(pm.meshes):
+        if len(f):
+            scene.add_geometry(trimesh.Trimesh(v, f, process=False), node_name=f"p{pi}", geom_name=f"p{pi}")
     out = scene.export(file_type="glb")
     assert isinstance(out, bytes)
     return out
+
+
+def preview_faces(session: Session, params: Params, regions: tuple[str, float] | None = None) -> dict[str, Any]:
+    """Colours of `preview_glb`'s triangles: {signature, colours, parts}.
+
+    `parts[i]` is base64 of one byte per face of mesh `p<i>`: an index into `colours` ("#rrggbb").
+    `signature` names the geometry: while it equals the loaded glTF's, a paint or palette edit
+    only recolours the view (a few hundred kB) instead of re-sending the whole mesh.
+    With `regions`, colours are the regions a tap would paint (cycling REGION_PALETTE colours).
+    """
+    import base64
+
+    pm = _preview_meshes(session, params, regions)
+    if regions:
+        colours = ["#%02x%02x%02x" % tuple(int(c) for c in rgb) for rgb in region_colours(REGION_PALETTE)]
+        colours.append(REGION_OTHER)
+        idx = [np.where(k < 0, REGION_PALETTE, k % REGION_PALETTE) for k in pm.keys]
+    else:
+        colours = [c[:7] for c in session.colours(params)] or ["#cccccc"]
+        idx = [(k - 1) % len(colours) for k in pm.keys]
+    return {"signature": pm.signature, "colours": colours,
+            "parts": [base64.b64encode(np.asarray(i, np.uint8).tobytes()).decode("ascii") for i in idx]}
 
 
 def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
@@ -1185,11 +1275,19 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     """
     PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius})
     parts = session.unit_parts(params)
-    pi, fi, dist = pick_face(parts, np.asarray(point, float), None if normal is None else np.asarray(normal, float))
+    key = session._key(params)
+    if key not in session._pick_trees:
+        session._pick_trees.clear()                 # one orientation at a time: trees are large
+        session._pick_trees[key] = centroid_trees(parts)
+    pi, fi, dist = pick_face(parts, np.asarray(point, float), None if normal is None else np.asarray(normal, float),
+                             trees=session._pick_trees[key])
     if pi < 0:
         raise ValueError("no triangle near that point")
+    if pi >= len(session.topology(params)):
+        raise ValueError("That is the flat base under the figure: it prints in the figure's main colour.")
     faces = region_faces(session.topology(params), pi, fi, mode, angle, radius)
-    area = float(trimesh.Trimesh(parts[pi].vertices, parts[pi].faces[faces], process=False).area)
+    tri = parts[pi].vertices[parts[pi].faces[faces]]
+    area = float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum() / 2)
     return {"part": pi, "face": fi, "distance": dist, "faces": int(len(faces)),
             "share": round(len(faces) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2)}
 

@@ -82,7 +82,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 
 | Python (`pokefit/`) | Role |
 |---|---|
-| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb`, `pick`. Start here. |
+| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. Start here. |
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer. Vertex moves only (paint survives) + a separate "flat base" part. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |

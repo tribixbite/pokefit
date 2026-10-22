@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -124,6 +125,7 @@ def paint_code(filament: int) -> str:
     return "".join(f"{n:X}" for n in reversed(_leaf_nibbles(filament)))
 
 
+@lru_cache(maxsize=1 << 12)
 def _with_paint(attrs: str | None, code: str | None) -> str | None:
     """A triangle's extra attributes with its paint replaced (None = paint removed)."""
     rest = _PAINT_RE.sub("", attrs or "").strip()
@@ -136,7 +138,7 @@ def apply_paint(parts: list[Part], ops: list[PaintOp], topo: "TopologyCache") ->
     """Copies of `parts` with the paint operations applied in order (later ones win)."""
     extras = [dict(p.tri_extra) for p in parts]
     for op in ops:
-        if not (0 <= op.part < len(parts)) or not (0 <= op.face < len(parts[op.part].faces)):
+        if not (0 <= op.part < min(len(parts), len(topo))) or not (0 <= op.face < len(parts[op.part].faces)):
             continue                       # from another object or orientation of the file: ignore
         faces = region_faces(topo, op.part, op.face, op.mode, op.angle, op.radius)
         code = paint_code(op.filament) if op.filament else None
@@ -158,6 +160,10 @@ class TopologyCache:
         self._topo: dict[int, Topology] = {}
         self._labels: dict[tuple[int, str, float], np.ndarray] = {}
 
+    def __len__(self) -> int:
+        """Parts it covers: the file's own (not the conform step's flat base, which taps cannot paint)."""
+        return len(self._parts)
+
     def part(self, i: int) -> Topology:
         if i not in self._topo:
             self._topo[i] = topology(self._parts[i])
@@ -178,33 +184,41 @@ def region_faces(topo: TopologyCache, part: int, face: int, mode: str, angle: fl
     return np.nonzero(lab == lab[face])[0]
 
 
+def centroid_trees(parts: list[Part]) -> list[Any]:
+    """Per part, a KD-tree of its triangle centroids for `pick_face` (None for parts taps skip)."""
+    from scipy.spatial import cKDTree
+
+    return [cKDTree(p.vertices[p.faces].mean(axis=1)) if len(p.faces) and p.subtype == "normal_part" else None
+            for p in parts]
+
+
 def pick_face(parts: list[Part], point: np.ndarray, normal: np.ndarray | None = None,
-              candidates: int = 24) -> tuple[int, int, float]:
+              candidates: int = 24, trees: list[Any] | None = None) -> tuple[int, int, float]:
     """(part index, face index, distance) of the triangle nearest `point`.
 
     Exact point–triangle distances over the triangles with the nearest
     centroids (pure numpy + a KD-tree, so it runs in the browser too). With
     `normal` (the view's surface normal), triangles facing away are skipped, so
     a tap on a thin ear picks its near side. Ties go to the earlier part, which
-    is the one the slicer prints where parts overlap.
+    is the one the slicer prints where parts overlap. `trees` (`centroid_trees(parts)`) saves
+    building them per tap (a 300k-triangle part: 0.2 s).
     """
-    from scipy.spatial import cKDTree
-
+    trees = trees if trees is not None else centroid_trees(parts)
     best = (-1, -1, np.inf)
     p = np.asarray(point, np.float64)
-    for pi, part in enumerate(parts):
-        if not len(part.faces) or part.subtype != "normal_part":
+    for pi, (part, tree) in enumerate(zip(parts, trees)):
+        if tree is None:
             continue
-        tri = part.vertices[part.faces]
-        k = min(candidates, len(tri))
-        _, idx = cKDTree(tri.mean(axis=1)).query(p, k=k)
+        k = min(candidates, len(part.faces))
+        _, idx = tree.query(p, k=k)
         idx = np.atleast_1d(idx)
+        tri = part.vertices[part.faces[idx]]
         if normal is not None:
-            n = np.cross(tri[idx, 1] - tri[idx, 0], tri[idx, 2] - tri[idx, 0])
+            n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
             facing = (n @ np.asarray(normal, np.float64)) > 0
             if facing.any():
-                idx = idx[facing]
-        cp = trimesh.triangles.closest_point(tri[idx], np.repeat(p[None], len(idx), axis=0))
+                idx, tri = idx[facing], tri[facing]
+        cp = trimesh.triangles.closest_point(tri, np.repeat(p[None], len(idx), axis=0))
         d = np.linalg.norm(cp - p, axis=1)
         j = int(np.argmin(d))
         if d[j] < best[2] - 1e-9:

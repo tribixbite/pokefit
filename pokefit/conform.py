@@ -177,11 +177,12 @@ class _Shaped:
 
 
 def _shape(v0: np.ndarray, parts: list[Part], axis: np.ndarray, s: float, k: float, cavity: Cavity,
-           spec: ConformSpec, height: float) -> _Shaped:
+           spec: ConformSpec, height: float, field0: HeightField | None = None) -> _Shaped:
     """Bend (strength k) and press the disc flat, designed for print scale s with the ball axis at `axis`.
 
     The press lowers only the disc: parts beyond it (inside the bend band) are raised by the
     same depth first, so pressing cannot push feet or a tail into the sphere's slope.
+    `field0` is v0's height field when the caller has it (unbent, v0 is pressed as it is).
     """
     r_flat = spec.flat_diameter / 2 if spec.flat_diameter > 0 else 0.0
     rr = np.linalg.norm(v0[:, :2] - axis, axis=1) * s
@@ -193,7 +194,8 @@ def _shape(v0: np.ndarray, parts: list[Part], axis: np.ndarray, s: float, k: flo
     v[:, 2] -= v[:, 2].min()
     if r_flat <= 0 or spec.max_depth <= 0:
         return _Shaped(v, 0.0, 0.0, axis)
-    t, share = flat_depth(_field(v, parts), axis, r_flat / s, spec.max_depth / s)
+    field = field0 if k <= 0 and field0 is not None else _field(v, parts)
+    t, share = flat_depth(field, axis, r_flat / s, spec.max_depth / s)
     if t * s < MIN_DEPTH:
         return _Shaped(v, 0.0, share, axis)
     u = np.clip((rr - r_flat) / EASE, 0.0, 1.0)
@@ -215,7 +217,8 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     info.scale_before = first[0]
     s0 = float(spec.scale) if spec.scale else first[0]
     r_flat = spec.flat_diameter / 2 if spec.flat_diameter > 0 else 0.0
-    info.limb_share = limb_share(_field(v0, parts), first[1], max(r_flat, 1e-6) / s0, height)
+    field0 = _field(v0, parts)
+    info.limb_share = limb_share(field0, first[1], max(r_flat, 1e-6) / s0, height)
     k = spec.bend if spec.bend is not None else info.limb_share * float(
         np.clip(2 * (low_aspect(v0, height) - 0.5), 0.0, 1.0))
     k = float(np.clip(k, 0.0, 1.0))
@@ -223,7 +226,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     def solve(strength: float) -> tuple[_Shaped, float]:
         """Shape, refitting until the design scale settles; returns (shape, its largest fit scale)."""
         s, axis = s0, first[1]
-        shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height)
+        shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height, field0)
         got = _fit(shaped.v, cavity, hint=s)
         for _ in range(ROUNDS if strength > 0 else 0):
             if got is None:
@@ -232,7 +235,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
             s, axis = (s0 if spec.scale else got[0]), got[1]
             if settled or spec.scale:
                 break
-            shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height)
+            shaped = _shape(v0, parts, axis, s, strength, cavity, spec, height, field0)
             got = _fit(shaped.v, cavity, hint=s)
         return shaped, (got[0] if got else 0.0)
 

@@ -17,6 +17,8 @@ an export that is imported into another project with other filament slots).
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -62,6 +64,33 @@ def decode_majority(code: str) -> int:
     """Dominant state of a painted triangle (0 = unpainted)."""
     w = decode_weights(code)
     return max(w.items(), key=lambda kv: kv[1])[0] if w else 0
+
+
+@dataclass(frozen=True)
+class FacePaint:
+    """One triangle's `paint_color`, decoded."""
+    code: str
+    whole: int | None                 # its state when the triangle is not split, else None
+    majority: int                     # dominant state (0 = unpainted)
+    states: tuple[int, ...]           # painted states (> 0) it holds, ascending
+
+
+@lru_cache(maxsize=1 << 16)
+def attr_paint(attrs: str) -> FacePaint | None:
+    """The `paint_color` in a triangle's extra attributes (None when it has none).
+
+    Colorize paint gives hundreds of thousands of triangles the same few strings, and
+    previews, checks and the colour-change estimate each read every triangle: decoding
+    once per distinct string took a 300k-triangle figure's paint pass from seconds to
+    tens of milliseconds.
+    """
+    if 'paint_color="' not in attrs:
+        return None
+    code = attrs.split('paint_color="', 1)[1].split('"', 1)[0]
+    w = decode_weights(code)
+    tree = parse_tree(code)
+    return FacePaint(code, tree if isinstance(tree, int) else None,
+                     max(w.items(), key=lambda kv: kv[1])[0] if w else 0, tuple(sorted(k for k in w if k > 0)))
 
 
 def _leaf_nibbles(state: int) -> list[int]:

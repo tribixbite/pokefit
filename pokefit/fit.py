@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import shapely
 from scipy.optimize import minimize
-from scipy.spatial import ConvexHull, QhullError
 
 from .ball import Cavity
 
@@ -45,25 +45,16 @@ def prepare_points(vertices: np.ndarray, n_slabs: int = N_SLABS) -> HullPoints:
     height = float(z.max())
     edges = np.linspace(0.0, height, n_slabs + 1)
     idx = np.clip(np.searchsorted(edges, z, side="right") - 1, 0, n_slabs - 1)
-    xs, lo, hi = [], [], []
-    order = np.argsort(idx, kind="stable")
-    bounds = np.searchsorted(idx[order], np.arange(n_slabs + 1))
-    for k in range(n_slabs):
-        sel = order[bounds[k]:bounds[k + 1]]
-        if len(sel) == 0:
-            continue
-        pts = v[sel, :2]
-        if len(pts) >= 3:
-            try:
-                pts = pts[ConvexHull(pts).vertices]
-            except QhullError:  # collinear / duplicate points: keep them all
-                pass
-        xs.append(pts)
-        lo.append(np.full(len(pts), edges[k]))
-        hi.append(np.full(len(pts), edges[k + 1]))
-    xy = np.vstack(xs)
+    # Per slab, its 2D convex hull's corners (the fit's margins are extremes, met at hull corners; a
+    # collinear slab keeps its end points). One vectorised GEOS call: scipy's qhull per slab cost a
+    # temporary file each on Windows (~0.4 s per figure).
+    present, slab = np.unique(idx, return_inverse=True)
+    order = np.argsort(slab.reshape(-1), kind="stable")          # shapely wants the points grouped by slab
+    hulls = shapely.convex_hull(shapely.multipoints(v[order, :2], indices=slab.reshape(-1)[order]))
+    xy, which = shapely.get_coordinates(hulls, return_index=True)
+    k = present[which]
     mn, mx = v[:, :2].min(axis=0), v[:, :2].max(axis=0)
-    return HullPoints(xy, np.concatenate(lo), np.concatenate(hi), height, (mn + mx) / 2)
+    return HullPoints(np.asarray(xy, np.float64), edges[k], edges[k + 1], height, (mn + mx) / 2)
 
 
 @dataclass

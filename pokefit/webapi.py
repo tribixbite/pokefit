@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, preview_glb,
+from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, preview_faces, preview_glb,
                        safe_stem, washer_table)
 from .presets import PresetLibrary, load_settings_file
 
@@ -105,11 +105,19 @@ def washers(sid: str, params_json: str) -> str:
     return _dump(washer_table(_session(sid), Params.from_dict(json.loads(params_json))))
 
 
-def preview(sid: str, params_json: str, regions_json: str = "null") -> bytes:
-    """GLB of the figure; `regions_json` {mode, angle} colours it by colorize region instead."""
+def _regions(regions_json: str) -> tuple[str, float] | None:
     reg = json.loads(regions_json)
-    regions = (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
-    return preview_glb(_session(sid), Params.from_dict(json.loads(params_json)), regions)
+    return (str(reg.get("mode", "part")), float(reg.get("angle", 15.0))) if isinstance(reg, dict) else None
+
+
+def preview(sid: str, params_json: str, regions_json: str = "null") -> bytes:
+    """GLB of the figure (one uncoloured mesh per part); `regions_json` {mode, angle}: the unclipped parts."""
+    return preview_glb(_session(sid), Params.from_dict(json.loads(params_json)), _regions(regions_json))
+
+
+def faces(sid: str, params_json: str, regions_json: str = "null") -> str:
+    """The preview's face colours (`preview_faces`): {signature, colours, parts}."""
+    return _dump(preview_faces(_session(sid), Params.from_dict(json.loads(params_json)), _regions(regions_json)))
 
 
 def pick_face(sid: str, params_json: str, req_json: str) -> str:

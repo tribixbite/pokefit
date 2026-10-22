@@ -7,7 +7,7 @@ import pytest
 import trimesh
 
 from conftest import REAL_DRAGON, write_inline_3mf
-from pokefit.model3mf import Part, read_project, remesh_part, world_parts, write_project
+from pokefit.model3mf import Part, read_project, remesh_part, row_ids, world_parts, write_project
 from pokefit.paint import encode_tree, leaves, parse_tree
 
 
@@ -172,3 +172,17 @@ def test_objects_parse_lazily(tmp_path: Path) -> None:
     obj = proj.default_object()
     assert obj.face_count == 12 and obj._parts is None      # counted, not parsed
     assert len(obj.parts[0].faces) == 12 and obj._parts is not None
+
+
+def test_row_ids_match_numpy_unique_rows() -> None:
+    rng = np.random.default_rng(3)
+    # Packed values (small ranges), packed per-column ranks (41-bit ranges, 500 rows), the np.unique
+    # fallback (22 columns of 6-bit ranks > 63 bits), and no rows.
+    for rows in (rng.integers(-2**40, 2**40, (500, 3)) // 2**38, rng.integers(-2**40, 2**40, (500, 3)),
+                 rng.integers(0, 64, (64, 22)), np.zeros((0, 3), np.int64)):
+        ids = row_ids(rows)
+        ref = np.unique(rows, axis=0, return_inverse=True)[1].reshape(-1) if len(rows) else np.zeros(0, int)
+        # Same partition of the rows (the ids themselves may differ).
+        pairs = set(zip(ids.tolist(), ref.tolist()))
+        assert len(pairs) == len(set(ids.tolist())) == len(set(ref.tolist()))
+

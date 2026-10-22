@@ -50,7 +50,7 @@ from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 from .geom import mf
-from .model3mf import Part, remesh_part
+from .model3mf import Part, digest, remesh_part
 from .planar import regions
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
@@ -577,6 +577,31 @@ def pocket_solid(pockets: list[Pocket], spec: PocketSpec) -> mf.Manifold:
     return tool
 
 
+# Pocket cuts by (part geometry, pockets): a colour edit re-analyses the same shapes.
+_CUTS: dict[tuple[bytes, str], tuple[np.ndarray, np.ndarray, float] | None] = {}
+CUT_CACHE = 4
+
+
+def _cut(part: Part, pockets: list[Pocket], spec: PocketSpec) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """(vertices, faces, mm³ removed) of the part minus the pockets, or None when they miss it.
+    Raises RuntimeError when the part is not a closed solid."""
+    key = (digest(part.vertices, part.faces), repr((pockets, spec)))
+    if key in _CUTS:
+        return _CUTS[key]
+    mesh = part.mesh()
+    mesh.merge_vertices()      # STL soups and some 3MF writers duplicate shared vertices
+    body = to_manifold(mesh)
+    cut = body - pocket_solid(pockets, spec)
+    out: tuple[np.ndarray, np.ndarray, float] | None = None
+    if abs(cut.volume() - body.volume()) >= 1e-6:
+        m = from_manifold(cut)
+        out = (np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64), body.volume() - cut.volume())
+    while len(_CUTS) >= CUT_CACHE:
+        _CUTS.pop(next(iter(_CUTS)))
+    _CUTS[key] = out
+    return out
+
+
 def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> tuple[list[Part], list[Check]]:
     """Subtract the pockets from every part they touch; returns new parts + per-part results."""
     if not pockets:
@@ -590,20 +615,17 @@ def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> t
             out.append(part)
             continue
         try:
-            mesh = part.mesh()
-            mesh.merge_vertices()      # STL soups and some 3MF writers duplicate shared vertices
-            body = to_manifold(mesh)
+            cut = _cut(part, pockets, spec)
         except RuntimeError as exc:
             checks.append(Check(f"cut:{part.name}", f"Cut {part.name}", "fail",
                                 f"Cannot cut pockets: part is not a closed solid ({exc}). Repair it first."))
             out.append(part)
             continue
-        cut = body - tool
-        if abs(cut.volume() - body.volume()) < 1e-6:
+        if cut is None:
             out.append(part)
             continue
-        removed = body.volume() - cut.volume()
-        out.append(remesh_part(part, from_manifold(cut)))
+        v, f, removed = cut
+        out.append(remesh_part(part, trimesh.Trimesh(v, f, process=False)))
         checks.append(Check(f"cut:{part.name}", f"Cut {part.name}", "pass",
                             f"Removed {removed:.1f} mm³ for {len(pockets)} pocket(s).", round(removed, 2)))
     return out, checks
