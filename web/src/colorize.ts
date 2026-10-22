@@ -4,13 +4,17 @@
  * the nearest crease, the whole connected piece, or one triangle) and writes it
  * as Bambu paint, so a single-colour file can come out multi-colour.
  *
+ * Also: a bucket "Fill" bounded only by colour, Mirror (the same spot on the
+ * other side of the figure), Pick colour (eyedropper), Grow/Shrink of the last
+ * step, Undo/Redo, and keyboard shortcuts.
+ *
  * State lives in the shared `Params` (`colours`, `paint`), so analysis and
  * export see exactly what the preview shows.
  */
 import { textOn } from "./colour";
 import { formatDuration } from "./geometry";
 import type { FigureHit } from "./scene";
-import type { Params, PaintMode, PickResult, RegionView, Report } from "./types";
+import type { PaintMode, PaintOp, Params, PickResult, PrepareResult, RegionView, Report } from "./types";
 
 export interface ColorizeHost {
   params(): Params;
@@ -18,9 +22,10 @@ export interface ColorizeHost {
   /** Reload the 3D preview; `regions` colours it by what a tap would paint. */
   refresh(regions: RegionView | null): Promise<void>;
   /** The triangle under a tap and the size of its region; `stroke`: the rest of a brush drag. */
-  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number, stroke?: FigureHit[]): Promise<PickResult>;
+  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number, stroke?: FigureHit[], mirror?: boolean
+  ): Promise<PickResult>;
   /** Build the engine's tap structures now (painting started), so the first tap is as quick as the rest. */
-  prepare(mode: PaintMode, angle: number): Promise<void>;
+  prepare(mode: PaintMode, angle: number, mirror: boolean): Promise<PrepareResult>;
   /** Turn tap-to-pick on the 3D view on or off. */
   setPicking(fn: ((hit: FigureHit) => void) | null): void;
   /** Brush: a drag that starts on the figure paints a stroke (null = drags turn the view). */
@@ -40,6 +45,12 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getEl
 
 /** Colour offered for a newly added filament: the first of these not already in the palette. */
 const NEW_COLOURS = ["#161616", "#FFFFFF", "#E05028", "#2850E0", "#0ACC38", "#FFF144", "#A03CF7", "#F98C36", "#F5A3C7", "#7A4A2A"];
+/** Grow / Shrink step, print mm along the surface. */
+const GROW_STEP = 0.2;
+/** The engine's limit on an operation's grow, file mm (colorize.MAX_GROW). */
+const MAX_GROW = 20;
+/** Modes whose angle slider applies. */
+const ANGLED: readonly PaintMode[] = ["part", "region"];
 
 export class ColorizePanel {
   private filament = 1;            // selected filament (1-based; 0 = erase)
@@ -50,19 +61,33 @@ export class ColorizePanel {
   private painting = false;
   private regions = false;
   private busy = false;
+  /** Paint the mirror image too (the figure's symmetry plane, found by the engine). */
+  private mirror = false;
+  /** The next tap picks the colour under it instead of painting. */
+  private sampling = false;
+  /** Undone steps, last undone at the end (Redo puts them back; a new step clears them). */
+  private undone: PaintOp[] = [];
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
     $("regionsBtn").addEventListener("click", () => { this.regions = !this.regions; void this.reload(); this.render(); });
-    $("paintUndo").addEventListener("click", () => this.edit((p) => p.slice(0, -1)));
-    $("paintClear").addEventListener("click", () => this.edit(() => []));
+    $("paintUndo").addEventListener("click", () => this.undo());
+    $("paintRedo").addEventListener("click", () => this.redo());
+    $("paintClear").addEventListener("click", () => {
+      const ops = this.host.params().paint ?? [];
+      this.undone.push(...[...ops].reverse());          // Redo brings them back one by one, first step first
+      this.edit(() => []);
+    });
+    $("paintGrow").addEventListener("click", () => this.growLast(GROW_STEP));
+    $("paintShrink").addEventListener("click", () => this.growLast(-GROW_STEP));
+    $("paintMirror").addEventListener("click", () => void this.setMirror(!this.mirror));
+    $("paintSample").addEventListener("click", () => {
+      this.sampling = !this.sampling;
+      if (this.sampling && !this.painting) this.setPainting(true);
+      this.render();
+    });
     document.querySelectorAll<HTMLButtonElement>("#paintMode button").forEach((b) =>
-      b.addEventListener("click", () => {
-        this.mode = (b.dataset.mode as PaintMode) ?? "part";
-        if (this.painting) this.setPainting(true);     // brush: drags paint strokes
-        this.render();
-        if (this.regions) void this.reload();
-      }));
+      b.addEventListener("click", () => this.setMode((b.dataset.mode as PaintMode) ?? "part")));
     const slider = $<HTMLInputElement>("paintAngle");
     slider.addEventListener("input", () => { this.angles[this.mode] = +slider.value; this.render(); });
     slider.addEventListener("change", () => { if (this.regions) void this.reload(); });
@@ -86,6 +111,7 @@ export class ColorizePanel {
     $("texColAuto").addEventListener("click", () => this.setTextureColours(null));
     const details = $<HTMLSelectElement>("texDetails");
     details.addEventListener("change", () => this.setTextureDetails(+details.value));
+    document.addEventListener("keydown", (e) => this.onKey(e));
   }
 
   /**
@@ -114,6 +140,7 @@ export class ColorizePanel {
     change();
     p.colours = null;
     p.paint = null;
+    this.undone = [];
     this.filament = 1;
     this.host.changed();
     void this.reload();
@@ -136,7 +163,17 @@ export class ColorizePanel {
     p.texture_details = 0;
     this.filament = 1;
     this.regions = false;
+    this.mirror = false;
+    this.sampling = false;
+    this.undone = [];
     this.setPainting(false);
+  }
+
+  /** Paint steps name triangles; when the triangles change (Simplify), the steps and their redo history go. */
+  dropPaint(): void {
+    this.host.params().paint = null;
+    this.undone = [];
+    this.render();
   }
 
   render(): void {
@@ -184,7 +221,7 @@ export class ColorizePanel {
     $("paintColourLabel").textContent = this.filament ? `Filament ${this.filament}` : "";
     document.querySelectorAll<HTMLButtonElement>("#paintMode button").forEach((b) =>
       b.setAttribute("aria-checked", String(b.dataset.mode === this.mode)));
-    const angled = this.mode === "part" || this.mode === "region";
+    const angled = ANGLED.includes(this.mode);
     $("paintAngleRow").hidden = !angled;
     $("paintAngleVal").textContent = `${this.angle}°`;
     $<HTMLInputElement>("paintAngle").value = String(this.angle);
@@ -196,14 +233,21 @@ export class ColorizePanel {
     t.setAttribute("aria-pressed", String(this.painting));
     t.textContent = this.painting ? "Done painting" : "Paint";
     $("regionsBtn").setAttribute("aria-pressed", String(this.regions));
-    const n = p.paint?.length ?? 0;
+    $("paintMirror").setAttribute("aria-pressed", String(this.mirror));
+    $("paintSample").setAttribute("aria-pressed", String(this.sampling));
+    const ops = p.paint ?? [];
+    const n = ops.length;
     ($("paintUndo") as HTMLButtonElement).disabled = n === 0;
+    ($("paintRedo") as HTMLButtonElement).disabled = this.undone.length === 0;
     ($("paintClear") as HTMLButtonElement).disabled = n === 0;
+    ($("paintGrow") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
+    ($("paintShrink") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
     if (!this.busy && !$("paintInfo").dataset.sticky) {
-      $("paintInfo").textContent = !this.painting ? (n ? `${n} paint step${n > 1 ? "s" : ""}` : "")
-        : this.mode === "brush"
-          ? "Tap or drag on the figure to paint. Turn the view by dragging beside it, with two fingers or the right mouse button."
-          : "Tap the figure to paint.";
+      $("paintInfo").textContent = this.sampling ? "Tap the figure to pick its colour there."
+        : !this.painting ? (n ? `${n} paint step${n > 1 ? "s" : ""}` : "")
+          : this.mode === "brush"
+            ? "Tap or drag on the figure to paint. Turn the view by dragging beside it, with two fingers or the right mouse button."
+            : this.mode === "fill" ? "Tap inside an outline to fill it." : "Tap the figure to paint.";
     }
   }
 
@@ -255,38 +299,68 @@ export class ColorizePanel {
     return b;
   }
 
+  private setMode(mode: PaintMode): void {
+    this.mode = mode;
+    if (this.painting) this.setPainting(true);     // brush: drags paint strokes
+    this.render();
+    if (this.regions) void this.reload();
+  }
+
   private setPainting(on: boolean): void {
     this.painting = on;
+    if (!on) this.sampling = false;
     this.host.setPicking(on ? (hit) => void this.paintAt([hit]) : null);
     this.host.setStroking(on && this.mode === "brush" ? (hits) => void this.paintAt(hits) : null);
     // The engine caches these per figure and orientation, so asking again is cheap; failures surface on the tap.
-    if (on) void this.host.prepare(this.mode, this.angle).catch(() => undefined);
+    if (on) void this.host.prepare(this.mode, this.angle, this.mirror).catch(() => undefined);
     if (!on && this.regions) { this.regions = false; void this.reload(); }
     if (!on) this.host.settled();
+    this.render();
+  }
+
+  /** Mirror on: the engine finds the figure's mirror plane first and says if there is none. */
+  private async setMirror(on: boolean): Promise<void> {
+    this.mirror = on;
+    this.render();
+    if (!on) return;
+    $("paintInfo").textContent = "Finding the mirror plane…";
+    try {
+      const res = await this.host.prepare(this.mode, this.angle, true);
+      if (res.mirror && !res.mirror.ok) {
+        this.mirror = false;
+        this.host.toast("This figure is not mirror-symmetric enough to paint both sides at once.");
+      }
+    } catch (e) {
+      this.mirror = false;
+      this.host.toast((e as Error).message);
+    }
     this.render();
   }
 
   /** Paint at a tap, or along a brush stroke (`hits` = the drag's samples, first = where it started). */
   private async paintAt(hits: FigureHit[]): Promise<void> {
     if (this.busy || !hits.length) return;
+    if (this.sampling) { await this.sampleAt(hits[0]); return; }
     this.busy = true;
     $("paintInfo").textContent = "Finding the region…";
     try {
       const radius = this.radiusFile();
       const stroke = this.mode === "brush" ? hits.slice(1) : [];
-      const res = await this.host.pick(hits[0], this.mode, this.angle, radius, stroke);
+      const res = await this.host.pick(hits[0], this.mode, this.angle, radius, stroke, this.mirror);
       const p = this.host.params();
       if (!p.colours) p.colours = this.colours();      // pin the palette the paint refers to
       p.paint = [...(p.paint ?? []), {
         part: res.part, face: res.face, filament: this.filament, mode: this.mode, angle: this.angle, radius,
         ...(res.path?.length ? { path: res.path } : {}),
+        ...(this.mirror ? { mirror: true } : {}),
       }];
+      this.undone = [];
       const what = this.mode === "face" ? "1 triangle" : `${res.faces.toLocaleString()} triangles`;
-      const angled = this.mode === "part" || this.mode === "region";
-      $("paintInfo").textContent = `${this.filament ? "Painted" : "Erased"} ${what}` +
-        (res.share > 0.9 && angled
+      const both = this.mirror ? (res.mirrored ? " on both sides" : " (no matching spot on the other side)") : "";
+      $("paintInfo").textContent = `${this.filament ? "Painted" : "Erased"} ${what}${both}` +
+        (res.share > 0.9 && ANGLED.includes(this.mode)
           ? " — nearly everything. No crease goes all the way round here: outline it with the brush (drag), " +
-            "then tap inside"
+            "then Fill inside"
           : "");
       $("paintInfo").dataset.sticky = "1";
       this.host.changed();
@@ -301,16 +375,95 @@ export class ColorizePanel {
     }
   }
 
-  /** Crease angle of the current mode (the brush and piece modes ignore it). */
+  /** Pick colour: select the filament shown under the tap, then go back to painting. */
+  private async sampleAt(hit: FigureHit): Promise<void> {
+    this.busy = true;
+    try {
+      const res = await this.host.pick(hit, "face", 15, 0);
+      if (res.filament >= 1 && res.filament <= this.colours().length) this.filament = res.filament;
+      else this.host.toast(`That prints in filament ${res.filament}, which is not in this palette.`);
+    } catch (e) {
+      this.host.toast((e as Error).message);
+    } finally {
+      this.busy = false;
+      this.sampling = false;
+      this.render();
+    }
+  }
+
+  /** Crease angle of the current mode (the brush, fill and piece modes ignore it). */
   private get angle(): number {
     return this.angles[this.mode] ?? 15;
+  }
+
+  /** The figure's print scale: file mm × scale = print mm. */
+  private scale(): number {
+    return this.host.report()?.fit.scale || this.host.report()?.fit.max_scale || 1;
   }
 
   /** Brush radius in the file's mm: the figure prints at `fit.scale` of the file. */
   private radiusFile(): number {
     if (this.mode !== "brush") return 0;
-    const s = this.host.report()?.fit.scale || this.host.report()?.fit.max_scale || 1;
-    return +(this.brushMm / s).toFixed(4);
+    return +(this.brushMm / this.scale()).toFixed(4);
+  }
+
+  /** Widen (`mm` > 0) or narrow the last paint step along the surface, `mm` at the print size. */
+  private growLast(mm: number): void {
+    const ops = this.host.params().paint ?? [];
+    if (!ops.length || ops[ops.length - 1].filament === 0) return;
+    const s = this.scale();
+    const last = ops[ops.length - 1];
+    const grow = Math.max(-MAX_GROW, Math.min(MAX_GROW, +((last.grow ?? 0) + mm / s).toFixed(4)));
+    const next: PaintOp = { ...last, grow };
+    if (Math.abs(grow * s) < 1e-3) delete next.grow;
+    this.edit((p) => [...p.slice(0, -1), next]);
+    const g = (next.grow ?? 0) * s;
+    $("paintInfo").textContent = g ? `Last step ${g > 0 ? "grown" : "shrunk"} by ${Math.abs(g).toFixed(1)} mm` : "Last step as painted";
+    $("paintInfo").dataset.sticky = "1";
+    window.setTimeout(() => { delete $("paintInfo").dataset.sticky; }, 2500);
+  }
+
+  private undo(): void {
+    const ops = this.host.params().paint ?? [];
+    if (!ops.length) return;
+    this.undone.push(ops[ops.length - 1]);
+    this.edit((p) => p.slice(0, -1));
+  }
+
+  private redo(): void {
+    const op = this.undone.pop();
+    if (op) this.edit((p) => [...p, op]);
+  }
+
+  /** Keyboard shortcuts while a figure is open (ignored while typing in a field). */
+  private onKey(e: KeyboardEvent): void {
+    const el = e.target as HTMLElement | null;
+    if (el && (el.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName))) return;
+    if (!this.host.report() || e.altKey) return;
+    const k = e.key;
+    const mod = e.ctrlKey || e.metaKey;
+    let done = true;
+    if (mod && (k === "z" || k === "Z")) { if (e.shiftKey) this.redo(); else this.undo(); }
+    else if (mod && (k === "y" || k === "Y")) this.redo();
+    else if (mod) done = false;
+    else if (/^[1-9]$/.test(k) && +k <= this.colours().length) { this.filament = +k; this.render(); }
+    else if (k === "0") { this.filament = 0; this.render(); }
+    else if (k === "p" || k === "P") this.setPainting(!this.painting);
+    else if (k === "Escape" && this.painting) this.setPainting(false);
+    else if (k === "m" || k === "M") void this.setMirror(!this.mirror);
+    else if (k === "i" || k === "I") { this.sampling = !this.sampling; if (this.sampling && !this.painting) this.setPainting(true); this.render(); }
+    else if (k === "+" || k === "=") this.growLast(GROW_STEP);
+    else if (k === "-" || k === "_") this.growLast(-GROW_STEP);
+    else if (k === "[" || k === "]") this.nudge(k === "]" ? 1 : -1);
+    else done = false;
+    if (done) e.preventDefault();
+  }
+
+  /** [ / ]: the brush radius (0.1 mm steps) or the crease angle (1° steps) down / up. */
+  private nudge(dir: number): void {
+    if (this.mode === "brush") this.brushMm = Math.max(0.3, Math.min(8, +(this.brushMm + dir * 0.1).toFixed(1)));
+    else if (ANGLED.includes(this.mode)) this.angles[this.mode] = Math.max(3, Math.min(90, this.angle + dir));
+    this.render();
   }
 
   private edit(fn: (ops: NonNullable<Params["paint"]>) => NonNullable<Params["paint"]>): void {
@@ -326,4 +479,3 @@ export class ColorizePanel {
     await this.host.refresh(this.regions ? { mode: this.mode, angle: this.angle } : null);
   }
 }
-

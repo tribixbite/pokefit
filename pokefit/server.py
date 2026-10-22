@@ -5,8 +5,8 @@ outputs go under .pokefit_cache/ and pokefit_out/ next to the repo.
 
 API (all JSON unless noted):
   GET  /api/config                         washers, filament slots, defaults, slicer availability
-  POST /api/load        body = file bytes, header X-Filename      -> {session, report}
-  POST /api/load_path   {path}                                     -> {session, report}
+  POST /api/load        body = file bytes, header X-Filename [, X-Params]  -> {session, report}
+  POST /api/load_path   {path[, params]}                                   -> {session, report}
   POST /api/analyse     {session, params}                          -> report
   POST /api/washers     {session, params}                          -> [washer rows]
   GET  /api/preview.glb ?session&object&rx&ry                      -> GLB (figure at scale 1)
@@ -96,9 +96,12 @@ def _regions(body: dict[str, Any]) -> tuple[str, float] | None:
         raise ApiError(400, f"bad regions: {exc}") from exc
 
 
-def _load(path: Path) -> dict[str, Any]:
+def _load(path: Path, params: Params | None = None) -> dict[str, Any]:
+    """Open a file and analyse it with `params` (the UI's settings, so the first analysis is the one it shows;
+    default settings when None), simplified as they ask."""
+    params = params or Params()
     try:
-        s = open_session(path)
+        s = open_session(path, simplify=params.simplify)
     except Exception as exc:  # noqa: BLE001 — bad zip, bad XML, no objects...: all are "unreadable file"
         traceback.print_exc()
         raise ApiError(400, f"Cannot read {path.name}: {type(exc).__name__}: {exc}") from exc
@@ -108,7 +111,7 @@ def _load(path: Path) -> dict[str, Any]:
     s.ams = _ams
     _register(s)
     with _locks[s.id]:
-        rep, _ = analyse(s, Params())
+        rep, _ = analyse(s, params)
     return {"session": s.id, "file": path.name, "report": rep.to_dict()}
 
 
@@ -242,7 +245,12 @@ class Handler(BaseHTTPRequestHandler):
         d.mkdir(parents=True, exist_ok=True)
         path = d / name
         path.write_bytes(data)
-        self._json(_load(path))
+        raw = self.headers.get("X-Params")
+        try:
+            params = _params({"params": json.loads(unquote(raw))}) if raw else None
+        except json.JSONDecodeError as exc:
+            raise ApiError(400, f"bad X-Params: {exc}") from exc
+        self._json(_load(path, params))
 
     def post_reference(self, q: dict[str, str]) -> None:
         """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
@@ -402,10 +410,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"job": _start_job(lambda: {"output": send_print(f, slots), **summary}, jid)})
 
     def post_load_path(self, q: dict[str, str]) -> None:
-        p = Path(str(self._json_body().get("path", ""))).expanduser()
+        body = self._json_body()
+        p = Path(str(body.get("path", ""))).expanduser()
         if not p.is_file():
             raise ApiError(404, f"no such file: {p}")
-        self._json(_load(p))
+        self._json(_load(p, _params(body) if body.get("params") else None))
 
     def post_analyse(self, q: dict[str, str]) -> None:
         body = self._json_body()
@@ -460,7 +469,8 @@ class Handler(BaseHTTPRequestHandler):
             normal = [float(v) for v in body["normal"]][:3] if body.get("normal") else None
             mode, angle = str(body.get("mode", "part")), float(body.get("angle", 15.0))
             with lock:
-                res = pick(s, params, point, normal, mode, angle, float(body.get("radius", 0.0)), body.get("stroke"))
+                res = pick(s, params, point, normal, mode, angle, float(body.get("radius", 0.0)), body.get("stroke"),
+                           bool(body.get("mirror", False)), float(body.get("grow", 0.0)))
         except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(400, f"bad pick: {exc}") from exc
         self._json(res)
@@ -470,7 +480,8 @@ class Handler(BaseHTTPRequestHandler):
         s, lock = _session(body.get("session"))
         params = _params(body)
         with lock:
-            res = prepare_paint(s, params, str(body.get("mode", "part")), float(body.get("angle", 15.0)))
+            res = prepare_paint(s, params, str(body.get("mode", "part")), float(body.get("angle", 15.0)),
+                                bool(body.get("mirror", False)))
         self._json(res)
 
     def post_slice(self, q: dict[str, str]) -> None:

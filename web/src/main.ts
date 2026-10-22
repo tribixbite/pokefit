@@ -36,6 +36,7 @@ let defaults: Params = {
   pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
   process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, paint_depth: null,
   filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0, strengthen: 0,
+  simplify: null, despeckle: 0.5,
 };
 /** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
 const prefStore = browserStore();
@@ -73,10 +74,10 @@ const colorize = new ColorizePanel({
   refresh: async (regions) => {
     if (await refreshFigure(regions) && state.report) viewer.update(state.report, state.focus);
   },
-  pick: (hit, mode, angle, radius, stroke) =>
+  pick: (hit, mode, angle, radius, stroke, mirror) =>
     api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius,
-      ...(stroke?.length ? { stroke } : {}) }),
-  prepare: (mode, angle) => api.preparePaint(state.session ?? "", state.params, { mode, angle }),
+      ...(stroke?.length ? { stroke } : {}), ...(mirror ? { mirror } : {}) }),
+  prepare: (mode, angle, mirror) => api.preparePaint(state.session ?? "", state.params, { mode, angle, mirror }),
   setPicking: (fn) => viewer.setPickHandler(fn),
   setStroking: (fn) => viewer.setStrokeHandler(fn),
   changed: () => { paintDirty = true; },
@@ -154,15 +155,15 @@ async function init(): Promise<void> {
 
   const query = new URLSearchParams(location.search);
   const path = query.get("path");
-  if (path) await load(() => api.loadPath(path), path.split(/[\\/]/).pop() ?? path);
+  if (path) await load((p) => api.loadPath(path, p), path.split(/[\\/]/).pop() ?? path);
   // ?url=<model URL>: fetch it (the server must allow cross-origin reads).
   const url = query.get("url");
   const urlName = url ? urlFileName(url) : null;
   if (url && urlName) {
-    await load(async () => {
+    await load(async (p) => {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Cannot fetch ${urlName}: HTTP ${res.status}`);
-      return api.loadFile(new File([await res.blob()], urlName));
+      return api.loadFile(new File([await res.blob()], urlName), p);
     }, urlName);
   } else if (url) {
     toast("?url= must point to a .3mf, .stl, .obj, .glb or .gltf file.");
@@ -171,7 +172,7 @@ async function init(): Promise<void> {
   window.addEventListener("message", (e) => {
     if (!trustedOrigin(e.origin)) return;
     const file = handoffFile(e.data);
-    if (file) void load(() => api.loadFile(file), file.name);
+    if (file) void load((p) => api.loadFile(file, p), file.name);
   });
   if (window.opener) {
     try {
@@ -278,15 +279,20 @@ function engineStatus(text: string): void {
   if (failed) toast(`The engine could not start (${text.slice(8)}). Reload to retry.`);
 }
 
-async function load(fn: () => Promise<import("./types").LoadResponse>, name: string): Promise<void> {
+/**
+ * Open a file: `fn` gets the settings a new figure starts from (the remembered ones, per-file fields reset), so
+ * the engine simplifies and analyses it with them in one go.
+ */
+async function load(fn: (params: Params) => Promise<import("./types").LoadResponse>, name: string): Promise<void> {
   busy(true, `Loading ${name}…`);
+  const fresh: Params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
+    object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
+    fill_circle: null };
   try {
-    const res = await fn();
+    const res = await fn(fresh);
     state.session = res.session;
     colorize.reset();
-    state.params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-      object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
-      fill_circle: null };
+    state.params = fresh;
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("sliceOut").replaceChildren();
@@ -360,7 +366,7 @@ function geometryKey(): string {
   const p = state.params;
   return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
     p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.fill_circle, p.ball_scale, p.ball_diameter,
-    p.clearance, p.strengthen, p.strengthen ? p.figure_height : null]);
+    p.clearance, p.strengthen, p.strengthen ? p.figure_height : null, p.simplify]);
 }
 let shownGeometry = "";
 
@@ -385,6 +391,8 @@ function syncControls(): void {
   $<HTMLInputElement>("flatFill").value = String(p.flat_fill);
   $<HTMLSelectElement>("paintDepth").value = p.paint_depth === null ? "" : String(p.paint_depth);
   $<HTMLSelectElement>("strengthenSelect").value = String(p.strengthen);
+  $<HTMLSelectElement>("simplifySelect").value = p.simplify ? String(p.simplify) : "";
+  $<HTMLSelectElement>("despeckleSelect").value = String(p.despeckle);
   document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
     b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === p.magnets)));
   document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
@@ -445,6 +453,14 @@ function show(rep: Report): void {
   const shaped = rep.checks.find((c) => c.id === "conform")?.message ?? f.conform?.note ?? "";
   $("conformInfo").textContent = shaped;
   $("conformInfo").hidden = !shaped;
+  // What Simplify did: triangles before / after, and how far the surface moved at this size.
+  const simp = rep.object.simplified;
+  const scale = f.scale || f.max_scale;
+  $("simplifyInfo").textContent = simp
+    ? `Simplified ${simp.faces_before.toLocaleString()} → ${simp.faces_after.toLocaleString()} triangles; the surface ` +
+      `moved by at most ${scale ? `${Math.max(0.001, simp.error * scale).toFixed(3)} mm at this size` : `${simp.error.toFixed(3)} mm`}.`
+    : state.params.simplify ? `${rep.object.faces.toLocaleString()} triangles: already within ${state.params.simplify.toLocaleString()}.` : "";
+  $("simplifyInfo").hidden = !$("simplifyInfo").textContent;
   renderStatus(rep);
 
   const pill = $("fitPill");
@@ -882,7 +898,7 @@ function bind(): void {
   const fileInput = $<HTMLInputElement>("fileInput");
   fileInput.addEventListener("change", () => {
     const f = fileInput.files?.[0];
-    if (f) void load(() => api.loadFile(f), f.name);
+    if (f) void load((p) => api.loadFile(f, p), f.name);
     fileInput.value = "";
   });
   const vp = $("viewport");
@@ -893,7 +909,7 @@ function bind(): void {
     e.preventDefault();
     drop.classList.remove("over");
     const f = e.dataTransfer?.files?.[0];
-    if (f) void load(() => api.loadFile(f), f.name);
+    if (f) void load((p) => api.loadFile(f, p), f.name);
     else if (state.session) drop.classList.add("hidden");
   });
 
@@ -1012,6 +1028,25 @@ function bind(): void {
     state.params.strengthen = +(e.target as HTMLSelectElement).value;
     state.params.figure_scale = null;
     state.params.pockets = null;
+    void runAnalyse();
+  });
+  // Simplify: the engine loads the file again with fewer triangles. Paint steps name triangles, so they go; a
+  // glTF's colours are sampled again on the new triangles, so its palette follows the file again.
+  $<HTMLSelectElement>("simplifySelect").addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    const p = state.params;
+    p.simplify = v ? +v : null;
+    if (p.paint?.length) toast("Paint steps cleared: they belong to the old triangles.");
+    colorize.dropPaint();
+    if (state.report?.object.texture_colours) p.colours = null;
+    p.figure_scale = null;
+    p.pockets = null;
+    void runAnalyse();
+  });
+  // Specks: only colours change (the shape work is reused), so the preview recolours and the analysis is quick.
+  $<HTMLSelectElement>("despeckleSelect").addEventListener("change", (e) => {
+    state.params.despeckle = +(e.target as HTMLSelectElement).value;
+    if (state.params.paint?.length) void refreshFigure();
     void runAnalyse();
   });
   // Fill where: round the washer (automatic) or a circle the user places under the body.

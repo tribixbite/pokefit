@@ -55,18 +55,20 @@ def config() -> str:
     return _dump({**app_config(None, _reference, _reference_name, _presets), "engine": "browser"})
 
 
-def load(name: str, data: Any) -> str:
-    """Open an uploaded .3mf / .stl / .obj / .glb (bytes) and analyse it with default settings."""
+def load(name: str, data: Any, params_json: str = "{}") -> str:
+    """Open an uploaded .3mf / .stl / .obj / .glb (bytes) and analyse it with the UI's settings (simplified as
+    they ask), so the first analysis is the one shown."""
+    params = Params.from_dict(json.loads(params_json))
     folder = WORK / uuid.uuid4().hex[:8]
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / Path(name).name
     path.write_bytes(_raw(data))
-    s = open_session(path, work_dir=folder / "work")
+    s = open_session(path, work_dir=folder / "work", simplify=params.simplify)
     if _reference is not None:
         s.reference = _reference
     s.presets = _presets
     _sessions[s.id] = s
-    rep, _ = analyse(s, Params())
+    rep, _ = analyse(s, params)
     return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
 
 
@@ -121,18 +123,20 @@ def faces(sid: str, params_json: str, regions_json: str = "null") -> str:
 
 
 def pick_face(sid: str, params_json: str, req_json: str) -> str:
-    """The triangle under a tap: req = {point, normal, mode, angle, radius, stroke?} (figure frame, scale 1)."""
+    """The triangle under a tap: req = {point, normal, mode, angle, radius, stroke?, mirror?, grow?} (figure
+    frame, scale 1)."""
     req = json.loads(req_json)
     return _dump(pick(_session(sid), Params.from_dict(json.loads(params_json)), req["point"], req.get("normal"),
                       str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0)),
-                      req.get("stroke")))
+                      req.get("stroke"), bool(req.get("mirror", False)), float(req.get("grow", 0.0))))
 
 
 def paint_prepare(sid: str, params_json: str, req_json: str) -> str:
-    """Build the tap structures (`pipeline.prepare_paint`) when painting starts: req = {mode, angle}."""
+    """Build the tap structures (`pipeline.prepare_paint`) when painting starts: req = {mode, angle, mirror?}."""
     req = json.loads(req_json)
     return _dump(prepare_paint(_session(sid), Params.from_dict(json.loads(params_json)),
-                               str(req.get("mode", "part")), float(req.get("angle", 15.0))))
+                               str(req.get("mode", "part")), float(req.get("angle", 15.0)),
+                               bool(req.get("mirror", False))))
 
 
 def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { zipSync } from "fflate";
 
-/** Python sources and bundled JSON profiles under `<repo>/pokefit`, as a zip archive. */
+/** Python sources, bundled JSON profiles and WebAssembly (the mesh simplifier) under `<repo>/pokefit`, as a zip. */
 export function pokefitZip(repoRoot: string): Uint8Array {
   const pkg = join(repoRoot, "pokefit");
   const files: Record<string, Uint8Array> = {};
@@ -12,7 +12,7 @@ export function pokefitZip(repoRoot: string): Uint8Array {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) {
         if (name !== "__pycache__") walk(p);
-      } else if (name.endsWith(".py") || name.endsWith(".json")) {
+      } else if (name.endsWith(".py") || name.endsWith(".json") || name.endsWith(".wasm")) {
         files[relative(repoRoot, p).replace(/\\/g, "/")] = readFileSync(p);
       }
     }

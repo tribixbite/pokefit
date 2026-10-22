@@ -205,7 +205,12 @@
           <label title="Thicken thin parts so they do not snap off: where an ear, a tail tip or a flame joins the figure it gets at least this thickness, tapering toward its tip; a thin neck between two bigger parts gets it all along. Only the surface moves, so colours stay. Measured at the height you set (else the largest).">Strengthen thin parts
             <select id="strengthenSelect"><option value="0">Off</option><option value="1.2">1.2 mm</option>
               <option value="1.6">1.6 mm</option><option value="2">2 mm</option></select></label>
+          <label title="Cut a dense mesh down to about this many triangles when it loads (like Bambu Studio's Simplify): painting, the analysis and slicing get several times faster, and noisy sculpts paint in cleaner regions. The surface moves by at most 0.1 % of the figure's size (about 0.03 mm), so it stops early where the shape needs the triangles. Changing it clears paint steps (they name triangles).">Simplify mesh
+            <select id="simplifySelect"><option value="">Off (as in the file)</option><option value="400000">400k triangles</option>
+              <option value="200000">200k triangles</option><option value="100000">100k triangles</option>
+              <option value="50000">50k triangles</option><option value="25000">25k triangles</option></select></label>
         </div>
+        <p id="simplifyInfo" class="hint" hidden></p>
         <p id="conformInfo" class="hint" hidden></p>
         <div id="partsList" class="parts"></div>
       </section>
@@ -235,7 +240,7 @@
           </label>
           <div id="texCost" class="tex-cost" aria-label="Colour-change cost per number of filaments"></div>
         </div>
-        <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
+        <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. Each tap fills a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Outline with the brush and Fill inside where no crease goes round; Mirror paints both sides at once. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
         <div class="row" id="paintColourRow">
           <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
@@ -252,7 +257,7 @@
         <div class="row seat-row">
           <span class="muted">Tap fills</span>
           <div class="seg" id="paintMode" role="radiogroup" aria-label="What a tap paints">
-            <button role="radio" data-mode="part" title="Spread until a valley where parts meet (tail, ears, legs, eye sockets)">Part</button><button role="radio" data-mode="region" title="Spread until any crease sharper than the angle (like Bambu's smart fill)">Crease</button><button role="radio" data-mode="piece" title="Everything connected to the tapped spot (a separate shell, e.g. loose eyes)">Piece</button><button role="radio" data-mode="brush" title="A round patch around the tap (spots, stripes)">Brush</button>
+            <button role="radio" data-mode="part" title="Spread until a valley where parts meet (tail, ears, legs, eye sockets)">Part</button><button role="radio" data-mode="region" title="Spread until any crease sharper than the angle (like Bambu's smart fill)">Crease</button><button role="radio" data-mode="fill" title="Bucket fill: the tapped colour up to where the colour changes, across any crease (tap inside a brush outline)">Fill</button><button role="radio" data-mode="piece" title="Everything connected to the tapped spot (a separate shell, e.g. loose eyes)">Piece</button><button role="radio" data-mode="brush" title="A round patch around the tap (spots, stripes)">Brush</button>
           </div>
         </div>
         <label class="range-row" id="brushRow" hidden>Brush radius
@@ -264,11 +269,21 @@
           <span id="paintAngleVal" class="muted">30°</span>
         </label>
         <div class="row wrap">
+          <button id="paintMirror" class="btn" aria-pressed="false" title="Paint the same spot on the other side of the figure too, across its mirror plane: both eyes, cheeks or paws in one tap (M)">Mirror</button>
+          <button id="paintSample" class="btn" aria-pressed="false" title="Tap the figure to pick the colour shown there (I)">Pick colour</button>
           <button id="regionsBtn" class="btn" aria-pressed="false" title="Colour the figure by the regions a tap would fill">Show regions</button>
-          <button id="paintUndo" class="btn">Undo</button>
+        </div>
+        <div class="row wrap">
+          <button id="paintUndo" class="btn" title="Undo the last paint step (Ctrl+Z)">Undo</button>
+          <button id="paintRedo" class="btn" title="Redo (Ctrl+Shift+Z)">Redo</button>
           <button id="paintClear" class="btn">Clear</button>
+          <span class="grow-group" role="group" aria-label="Grow or shrink the last paint step">
+            <button id="paintShrink" class="btn" title="Narrow the last paint step by 0.2 mm along the surface (−)">− Shrink</button>
+            <button id="paintGrow" class="btn" title="Widen the last paint step by 0.2 mm along the surface: an eye that stops short of its socket's rim (+)">+ Grow</button>
+          </span>
           <span id="paintInfo" class="muted" aria-live="polite"></span>
         </div>
+        <p class="hint keys">Keys: 1–9 colour, 0 erase, P paint, M mirror, I pick colour, [ ] brush or angle, + − grow the last step, Ctrl+Z / Ctrl+Shift+Z undo / redo, Esc stop.</p>
         <label class="row seat-row" title="How far painted colours reach into the figure (Bambu “maximum width of a segmented region”); deeper inside is the figure's main filament. Print time and colour changes stay about the same — the colours still appear on the same layers — but less of each colour is used and the inside is one material."><span class="muted">Paint depth</span>
           <select id="paintDepth">
             <option value="">Project's setting</option>
@@ -277,6 +292,15 @@
             <option value="1.2">1.2 mm</option>
             <option value="2">2 mm</option>
             <option value="3">3 mm</option>
+          </select>
+        </label>
+        <label class="row seat-row" title="A painted patch smaller than this at the print size takes the colour around it: a stray dab on a claw would otherwise cost a filament change on every layer it spans. 0.5 mm² is a dot about 0.8 mm across, two nozzle lines."><span class="muted">Drop specks under</span>
+          <select id="despeckleSelect">
+            <option value="0">Keep all</option>
+            <option value="0.25">0.25 mm²</option>
+            <option value="0.5">0.5 mm²</option>
+            <option value="1">1 mm²</option>
+            <option value="2">2 mm²</option>
           </select>
         </label>
       </section>

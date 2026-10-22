@@ -65,6 +65,10 @@ export interface Params {
   strengthen: number;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
+  /** Simplify the mesh to about this many triangles when it loads (shape within 0.1 % of its size); null = as in the file. */
+  simplify: number | null;
+  /** Painted patches smaller than this (mm² at the print size) take the colour around them; 0 = keep all. */
+  despeckle: number;
 }
 
 export interface Washer {
@@ -116,6 +120,8 @@ export interface ObjectInfo {
   id: string;
   name: string;
   faces: number;
+  /** Triangles before / after the import's simplify step and the largest surface change (file mm); null = not simplified. */
+  simplified: { faces_before: number; faces_after: number; error: number } | null;
   parts: { name: string; extruder: number; faces: number; painted: number }[];
   colours: string[];
   /** The file's own colours (before colorize changes). */
@@ -126,7 +132,7 @@ export interface ObjectInfo {
 }
 
 /** part: up to concave valleys; region: up to any crease; piece: connected shell; brush: a disc; face: one triangle. */
-export type PaintMode = "part" | "region" | "piece" | "brush" | "face";
+export type PaintMode = "part" | "region" | "piece" | "fill" | "brush" | "face";
 
 /** Paint the region (by `mode`, crease `angle` in degrees) of one source triangle with a filament (0 = erase). */
 export interface PaintOp {
@@ -139,6 +145,10 @@ export interface PaintOp {
   radius: number;
   /** Brush stroke: more triangles of the same part along the drag. */
   path?: number[];
+  /** Also paint the mirror image across the figure's symmetry plane. */
+  mirror?: boolean;
+  /** Widen (> 0) or narrow (< 0) the painted area, file mm. */
+  grow?: number;
 }
 
 /** Colour the preview by what a tap would paint. */
@@ -167,6 +177,14 @@ export interface PickRequest {
   radius: number;
   /** Brush stroke: the rest of the drag after `point` (figure frame, scale 1). */
   stroke?: { point: number[]; normal: number[] | null }[];
+  mirror?: boolean;
+  grow?: number;
+}
+
+/** `prepare_paint`: with `mirror` asked, whether the figure has a mirror plane to paint across. */
+export interface PrepareResult {
+  parts: number;
+  mirror?: { ok: boolean; error: number; normal: number[] };
 }
 
 export interface PickResult {
@@ -178,6 +196,10 @@ export interface PickResult {
   faces: number;
   share: number;
   area_mm2: number;
+  /** With mirror: a matching spot on the other side was painted too. */
+  mirrored: boolean;
+  /** The filament shown under the tap (the colour picker). */
+  filament: number;
 }
 
 export interface Underside {

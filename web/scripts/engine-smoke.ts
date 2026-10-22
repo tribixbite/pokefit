@@ -164,7 +164,23 @@ const sitting = JSON.parse(api.load("sitting.stl", pyodide.FS.readFile("/tmp/sit
 const shaped = sitting.report.checks.find((c: { id: string }) => c.id === "conform");
 console.log(`[${secs()} s] conform: ${shaped?.message ?? "none"} parts ${sitting.report.object.parts.length}`);
 
+// Simplify (meshoptimizer's WebAssembly via the worker's WebAssembly) at load, and a mirror plane (scipy.ndimage).
+pyodide.runPython(`
+import trimesh
+trimesh.creation.icosphere(subdivisions=5, radius=10.0).export("/tmp/dense.stl")
+`);
+const dense = JSON.parse(api.load("dense.stl", pyodide.FS.readFile("/tmp/dense.stl"),
+  JSON.stringify({ simplify: 5000, magnets: 0 })));
+const simp = dense.report.object.simplified;
+const mirror = JSON.parse(api.paint_prepare(dense.session, JSON.stringify(dense.report.params),
+  JSON.stringify({ mode: "fill", angle: 15, mirror: true }))).mirror;
+console.log(`[${secs()} s] simplify: ${JSON.stringify(simp)}; mirror ${JSON.stringify(mirror)}`);
+
 const problems: string[] = [];
+if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense.report.object.parts[0].faces !== simp.faces_after) {
+  problems.push("simplify at load");
+}
+if (!mirror?.ok) problems.push("mirror plane of a sphere");
 if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
   problems.push("conform (bend + flat base)");
 }

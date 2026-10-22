@@ -50,14 +50,15 @@ exist only on the original Windows machine (ask the user for the files).
    automated download). The user downloads, then opens the file.
 8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
    vertical (a pedestal between the legs).
-9. **Big meshes** (2026-10-22, 303k-triangle `printed/obj_2_Charmander mini.stl`). Measure with
-   `cd web && node scripts/engine-bench.ts <figure>` (Pyodide, the site's engine) or the local server + browser.
-   - Now (Pyodide): boot 10.7 s; open + first analysis 18.6 s (local 11.5 s; ~6.5 s at a set 25.4 mm height);
-     taps prepared when Paint is pressed (`prepare_paint`, local 1.0 s), then ~0.05-0.25 s local per tap; recolour
-     0.02-0.3 s (`preview_faces`); analysis after painting 1.0 s local / ~5 s Pyodide first, 0.5 s after.
-   - Left in the first analysis (local 11.5 s): conform ~3.6 s (4 fits + 3 height fields), islands 1.8 s,
-     thickness 0.9 s, `_auto_fill` + `_solve` ~1.5 s. Next candidates: cache `_conformed` results on disk per file
-     (reopening the same file), islands check on fewer section planes.
+9. **Big meshes**: Simplify (`pokefit/simplify.py`, `Params.simplify`, Figure card "Simplify mesh", off by default,
+   remembered; the analysis shows a "Dense mesh" hint above 300k triangles). 1.45M-triangle MINI EEVEE at 100k,
+   local engine (scratchpad `bench_simplify.py`): open + analyse 39.5 -> 11.5 s, prepare paint (mirror) 5.4 -> 1.0 s,
+   tap 0.80 -> 0.03 s, re-analysis after a paint step 3.7 -> 0.3 s, export 13.5 -> 1.4 s (19.3 -> 2.5 MB); surface
+   change 0.017 mm at 25.4 mm tall (exact closest-point check, rtree: max 0.024 mm of 40 before RegularizeLight).
+   Watertight in, watertight out (fold cleanup). Local and Pyodide give identical triangles (same WASM).
+   Open: (a) should Simplify default to on (e.g. 200k)? The user's call - it changes face numbers, so a session's
+   paint steps belong to one setting; (b) of the remaining 11.5 s, parsing the 1.45M-triangle 3MF XML is the bulk
+   (not measured separately); (c) a GLB loads its texture again on every Simplify change (k-means, a few s).
 10. **Strengthen thin parts** (`pokefit/strengthen.py`, `Params.strengthen`, UI "Strengthen thin parts", off by default).
    Charmander at 26.9 mm, 1.6 mm: 5-6 % of the surface thin (flame tips, flame/tail join, toes, claws), up to
    0.37-0.45 mm out, +2.5 s local; smooth result (scratchpad renders `char_flame_zoom.png`). Synthetic checks
@@ -67,25 +68,16 @@ exist only on the original Windows machine (ask the user for the files).
    (a flat fin on a box) is under-thickened in its first ~half target (smoothed normals tilt into the box; TODO in
    `strengthen()`); (c) low-poly meshes move only their few vertices (the smoke critter reads 33 % "thin": box
    corners), so it suits dense sculpts; (d) measured at the asked height or the largest, not at a slider scale.
-11. **Paint on smooth sculpts**: generated/smoothed figures (this Charmander) have eyes whose rim is creased only
-   part way round and a belly with no crease at all, so no angle isolates them (measured: per-edge creases 2-15 deg
-   never close the eye ring). Fix shipped: brush strokes (drag) + part/region fills that stop at a colour change.
-   Verified on the Charmander locally (outline 1,210 triangles, fill inside 352) and in tests. A stroke's samples
-   more than 8 brush radii apart are not joined (taken as a jump across a silhouette). A fill after an outline
-   should use angle 180 (only the colour stops it): on a noisy sculpt the tapped face's 15-degree region can be a
-   fragment.
-   - Scripted paint jobs 2026-10-22 (all 25.4 mm, 2 magnets raised allowed, fill 0; outputs in `pokefit_out/<name>/`
-     with renders; scripts in the session scratchpad `paint_eevee.py`, `paint_charmander.py`, `paint_squirtle.py`
-     + helpers `groove.py` (valley/ridge band, tip past a zigzag line), `frontpaint.py` (front-view outlines ->
-     strokes), `paintkit.py` (renders)). Bambu slices (`scripts/verify_export.py`):
-     | figure | colours | how | h / g | changes (purge h) |
-     |---|---|---|---|---|
-     | MINI EEVEE (Downloads, 1.45M tris) | light brown, dark brown (inner ears, eyes), beige (highlights, neck fur, tail tip) | part fills at 1.5/3/6 deg; tail tip = stroke along the zigzag ridge + fill | 1.59 / 20.1 | 7 |
-     | Charmander mini STL | orange, yellow belly, red flame, blue eyes + white crescent | flame region; belly and eyes = outlines + fills | 3.22 / 47.7 | 48 (2.52) |
-     | photo Squirtle GLB (`batch3`) | 5 + 1 detail, recoloured (blue, brown, off-white rim, cream, red, near-black) | texture palette | 8.59 / 131.6 | 215 (7.49) |
-     Open: the Squirtle's colours cost 7.5 h of purge (offer 3-4 colours + pupils?); the Eevee's eye sockets keep a
-     light-brown wall round the dark eye, and ears a thin light groove inside the rim; a ~1 mm yellow speck by the
-     Charmander's right claw (an outline point on the claw).
+11. **Paint tools** (colorize): Fill (bucket, colour-bounded only), Mirror, Grow/Shrink, Pick colour, Undo/Redo,
+   keys, "Drop specks under" (`Params.despeckle`, default 0.5 mm² at print size). Verified in the local UI on the
+   Eevee at 100k: one tap at 6 degrees painted both eyes (1,004 triangles), Grow x2 = 0.4 mm smooth, Pick colour
+   picked the eye's filament, no console errors, Colours card fits 390 px. Mirror plane (distance field, ~1 s):
+   x-plane found on both Eevees and both Charmanders, fit 0.08-0.26 mm; ~15 % of random spots have no twin (tail,
+   paws in pose). Open: (a) grow/shrink distance is centre-to-centre path length, up to ~15 % short of the asked
+   mm; (b) mirror on a figure with two symmetry planes (a box-like body) can pick the wrong one (real figures have
+   a face/tail, so one plane wins; the test critter had two); (c) the Squirtle palette offer from 2026-10-22
+   stands (6 colours = 7.5 h purge; 3-4 + pupils is cheaper) - not made; (d) redo the Eevee/Charmander paint jobs
+   with the new tools? Grow addresses the Eevee's light wall round the dark eyes, specks the Charmander's claw dot.
 12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

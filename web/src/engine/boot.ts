@@ -26,7 +26,8 @@ export const wheelName = (url: string): string => url.slice(url.lastIndexOf("/")
 /** The `pokefit.webapi` module as seen from JS. */
 export interface WebApi {
   config(): string;
-  load(name: string, data: Uint8Array): string;
+  /** `params`: the UI's settings as JSON (the first analysis uses them; default settings when left out). */
+  load(name: string, data: Uint8Array, params?: string): string;
   set_reference(name: string, data: Uint8Array): string;
   set_ball_model(name: string, data: Uint8Array): string;
   run_analyse(sid: string, params: string): string;

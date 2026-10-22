@@ -230,3 +230,119 @@ def test_a_paint_edit_recolours_the_same_preview_and_reuses_the_shape_work(critt
     for d in (a, b):
         d.pop("timings", None)
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def _states(out: Part) -> dict[int, int]:
+    return {i: decode_majority(a.split('paint_color="')[1].split('"')[0])
+            for i, a in out.tri_extra.items() if "paint_color" in a}
+
+
+def test_fill_stops_only_at_colour() -> None:
+    """A box has 90° creases a part fill stops at; a fill crosses them and stops only at the painted outline."""
+    box = trimesh.creation.box([20, 20, 20]).subdivide().subdivide().subdivide()
+    part = _part(box)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    assert len(region_faces(topo, 0, top, "fill", 15)) == len(box.faces)       # nothing painted: the whole piece
+    c = box.triangles_center
+    band = np.nonzero(np.abs(c[:, 2]) < 1.5)[0]                                # a belt round the middle
+    ring = PaintOp(0, int(band[0]), 2, "brush", radius=1.5, path=tuple(int(f) for f in band[1:]))
+    (out,) = apply_paint([part], [ring, PaintOp(0, top, 3, "fill")], topo)
+    s = _states(out)
+    filled = np.array([f for f, v in s.items() if v == 3])
+    assert len(filled) and c[filled, 2].min() > 0                              # the upper half, all its sides
+    assert {round(float(n), 3) for n in box.face_normals[filled][:, 0]} >= {-1.0, 0.0, 1.0}
+
+
+def test_grow_and_shrink_move_the_edge_along_the_surface() -> None:
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    dab = topo.part(0).brush([top], 3.0)
+    big = topo.part(0).grown(dab, 1.0)
+    small = topo.part(0).grown(dab, -1.0)
+    c = ball.triangles_center
+    rad = lambda f: float(np.hypot(c[f, 0], c[f, 1]).max())                    # noqa: E731
+    assert set(dab.tolist()) < set(big.tolist()) and set(small.tolist()) < set(dab.tolist())
+    # Steps between triangle centres zigzag a little, so the band is up to ~15 % narrower than asked.
+    assert 3.6 < rad(big) < 4.4 and 1.6 < rad(small) < 2.6 and 2.6 < rad(dab) < 3.2
+    (out,) = apply_paint([part], [PaintOp(0, top, 2, "brush", radius=3.0, grow=1.0)], topo)
+    assert len(_states(out)) == len(big)
+    assert PaintOp.from_dict(PaintOp(0, 1, 2, grow=-0.5).to_dict()).grow == -0.5
+    assert "grow" not in PaintOp(0, 1, 2).to_dict() and "mirror" not in PaintOp(0, 1, 2).to_dict()
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "grow": 99})
+
+
+def _two_eared() -> trimesh.Trimesh:
+    """A head with two ears and a nose, mirror-symmetric across x = 0 only (turned 0.3 rad about z, so the plane is
+    not an axis of the file)."""
+    head = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    ears = [trimesh.creation.icosphere(subdivisions=3, radius=3).apply_translation([s * 7, 0, 7]) for s in (-1, 1)]
+    nose = trimesh.creation.icosphere(subdivisions=3, radius=2.5).apply_translation([0, -9.5, 0])
+    m = trimesh.boolean.union([head, *ears, nose], engine="manifold")
+    m.apply_transform(trimesh.transformations.rotation_matrix(0.3, [0, 0, 1]))
+    return m
+
+
+def test_mirror_paints_the_other_side_too() -> None:
+    m = _two_eared()
+    part = _part(m)
+    topo = TopologyCache([part])
+    plane = topo.mirror()
+    expect = np.array([np.cos(0.3), np.sin(0.3), 0.0])
+    assert abs(abs(plane.normal @ expect) - 1) < 2e-3 and plane.error < 0.01
+    _, f, _ = pick_face([part], np.array([7 * np.cos(0.3), 7 * np.sin(0.3), 7.0]) + 3 * np.array([0, 0, 1.0]),
+                        np.array([0, 0, 1.0]))
+    (out,) = apply_paint([part], [PaintOp(0, f, 2, "brush", radius=1.5, mirror=True)], topo)
+    c = m.triangles_center
+    lr = c @ expect
+    painted = np.array(sorted(_states(out)))
+    assert (lr[painted] > 3).sum() > 5 and (lr[painted] < -3).sum() > 5         # both ears
+    assert abs(int((lr[painted] > 0).sum()) - int((lr[painted] < 0).sum())) <= 0.25 * len(painted)
+    # A lopsided shape has no plane: mirror paints one side only.
+    lop = trimesh.boolean.union([trimesh.creation.box([20, 10, 10]),
+                                 trimesh.creation.box([6, 6, 14]).apply_translation([7, 2, 6]),
+                                 trimesh.creation.icosphere(3, 4).apply_translation([-8, -3, -4])], engine="manifold")
+    lp = _part(lop)
+    lt = TopologyCache([lp])
+    assert lt.mirrored(0, 0) is None or lt.mirror().error <= 0.02
+
+
+def test_specks_take_the_colour_round_them() -> None:
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    side = _face_at(part, [10, 0, 0], [1, 0, 0])
+    ops = [PaintOp(0, top, 2, "brush", radius=0.4), PaintOp(0, side, 3, "brush", radius=3.0)]
+    (kept,) = apply_paint([part], ops, topo)
+    assert set(_states(kept).values()) == {2, 3}
+    (clean,) = apply_paint([part], ops, topo, min_area=2.0)                  # the 0.4 mm dab is ~0.5 mm²
+    assert set(_states(clean).values()) == {3}
+    # A speck of the part's own colour inside paint is filled in too.
+    hole = [PaintOp(0, side, 3, "brush", radius=3.0), PaintOp(0, side, 0, "face")]
+    (filled,) = apply_paint([part], hole, topo, min_area=2.0)
+    assert side in _states(filled)
+
+
+def test_pick_reports_the_colour_under_the_tap_and_the_mirror(critter: Path, tmp_path: Path) -> None:
+    s = open_session(critter, BALL_3MF, None, tmp_path / "w")
+    base = Params(washer="US1/4x1")
+    top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
+    hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
+    assert hit["filament"] == 1 and hit["mirrored"] is False
+    painted = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+                     paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
+    assert pick(s, painted, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)["filament"] == 2
+    # A head with ears mirrors across its middle: an ear's tap has a twin, and counts both.
+    head = open_session(write_inline_3mf(tmp_path / "head.3mf", _two_eared(), np.eye(4)), BALL_3MF, None,
+                        tmp_path / "w2")
+    v = np.vstack([p.vertices for p in head.unit_parts(base)])
+    ear = np.array([7 * np.cos(0.3), 7 * np.sin(0.3), 0.0])       # the unit frame is centred on x/y like the file
+    top = float(v[:, 2].max())
+    one = pick(head, base, [*ear[:2].tolist(), top], [0.0, 0.0, 1.0], "brush", 15.0, 1.0)
+    both = pick(head, base, [*ear[:2].tolist(), top], [0.0, 0.0, 1.0], "brush", 15.0, 1.0, mirror=True)
+    assert both["mirrored"] is True and one["mirrored"] is False
+    assert 1.6 * one["faces"] <= both["faces"] <= 2.4 * one["faces"]

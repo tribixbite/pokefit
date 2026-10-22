@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
+  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -111,22 +111,25 @@ export async function getConfig(): Promise<Config> {
   return (await (await check(await fetch(versioned("config.json")))).json()) as Config;
 }
 
-/** Open a .3mf/.stl/.obj/.glb; the engine analyses it with default parameters. */
-export async function loadFile(file: File): Promise<LoadResponse> {
+/** Open a .3mf/.stl/.obj/.glb; the engine simplifies it as `params` ask and analyses it with them. */
+export async function loadFile(file: File, params: Params): Promise<LoadResponse> {
   if (mode === "local") {
     const res = await check(
-      await fetch("/api/load", { method: "POST", headers: { "X-Filename": encodeURIComponent(file.name) }, body: file }),
+      await fetch("/api/load", {
+        method: "POST", body: file,
+        headers: { "X-Filename": encodeURIComponent(file.name), "X-Params": encodeURIComponent(JSON.stringify(params)) },
+      }),
     );
     return (await res.json()) as LoadResponse;
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  return json<LoadResponse>(await call("load", [file.name, bytes], [bytes.buffer]));
+  return json<LoadResponse>(await call("load", [file.name, bytes, JSON.stringify(params)], [bytes.buffer]));
 }
 
 /** Load a file already on the server's disk (local engine only). */
-export async function loadPath(path: string): Promise<LoadResponse> {
+export async function loadPath(path: string, params: Params): Promise<LoadResponse> {
   if (mode !== "local") throw new Error("Opening a path needs the local version; drop the file instead.");
-  return postJson<LoadResponse>("/api/load_path", { path });
+  return postJson<LoadResponse>("/api/load_path", { path, params });
 }
 
 /** Use the filament slots of the user's own Bambu project (for the import file). */
@@ -192,13 +195,11 @@ export async function pick(session: string, params: Params, req: PickRequest): P
   return json<PickResult>(await call("pick", [session, JSON.stringify(params), JSON.stringify(req)]));
 }
 
-/** Build what taps need (pick trees, edge topology, the mode's regions) before the first tap. */
-export async function preparePaint(session: string, params: Params, req: { mode: string; angle: number }): Promise<void> {
-  if (mode === "local") {
-    await postJson<unknown>("/api/paint_prepare", { session, params, ...req });
-    return;
-  }
-  await call("paintPrepare", [session, JSON.stringify(params), JSON.stringify(req)]);
+/** Build what taps need (pick trees, edge topology, the mode's regions; the mirror plane) before the first tap. */
+export async function preparePaint(session: string, params: Params,
+  req: { mode: string; angle: number; mirror?: boolean }): Promise<PrepareResult> {
+  if (mode === "local") return postJson<PrepareResult>("/api/paint_prepare", { session, params, ...req });
+  return json<PrepareResult>(await call("paintPrepare", [session, JSON.stringify(params), JSON.stringify(req)]));
 }
 
 export async function exportFiles(session: string, params: Params): Promise<ExportResponse> {

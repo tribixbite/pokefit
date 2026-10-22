@@ -22,8 +22,12 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   gets it all along;
 - **colours single-colour models**: tap the 3D view and each tap fills a part found from the shape (ears, tail,
   eyes, bib…), a separate piece or a brush patch; drag the brush to draw outlines, and a fill stops at a painted
-  outline, so eyes or a belly with no crease round them can be painted too. Exported as Bambu paint;
-- **remembers your settings** (ball, washer, magnets, height, shape) in your browser, and lets you set them before
+  outline, so eyes or a belly with no crease round them can be painted too. Mirror paints both sides at once
+  (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
+  are dropped. Exported as Bambu paint;
+- **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: a 1.45M-triangle sculpt
+  at 100k opens 3x faster, paints and exports 10-25x faster, with the surface moved by under 0.02 mm;
+- **remembers your settings** (ball, washer, magnets, height, shape, simplify) in your browser, and lets you set them before
   opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's

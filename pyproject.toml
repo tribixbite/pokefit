@@ -9,6 +9,7 @@ license-files = ["LICENSE"]
 # ships (manifold3d is swapped for its WebAssembly build there, see pokefit/geom.py).
 dependencies = [
     "numpy", "scipy", "trimesh", "manifold3d", "shapely", "lxml", "contourpy", "pillow", "networkx",
+    "wasmtime",   # runs the vendored meshoptimizer simplifier (pokefit/simplify.py) outside the browser
 ]
 
 [build-system]
@@ -19,7 +20,7 @@ build-backend = "setuptools.build_meta"
 packages = ["pokefit"]
 
 [tool.setuptools.package-data]
-pokefit = ["profiles/*.json"]
+pokefit = ["profiles/*.json", "vendor/*.wasm", "vendor/*.md"]
 
 [project.optional-dependencies]
 dev = ["pytest", "mypy"]

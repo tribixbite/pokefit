@@ -106,13 +106,22 @@ class FigureObject:
     transform: np.ndarray               # build item transform (4x4), first instance
     loader: Callable[[], list[Part]] | None = None
     n_faces: int | None = None          # known without parsing (counted in the XML)
+    simplify: int | None = None         # triangle budget the parts are simplified to when loaded (simplify.py)
+    simplified: Any = None              # simplify.SimplifyInfo once that happened (None: nothing to cut)
 
     @property
     def parts(self) -> list[Part]:
         """Meshes are parsed on first use: a file of 14 figures only parses the one being fitted."""
         if self._parts is None:
             assert self.loader is not None
-            self._parts, self.loader = self.loader(), None
+            parts = self.loader()
+            if self.simplify:
+                from .simplify import simplify_parts
+
+                cut, info = simplify_parts(parts, self.simplify)
+                if info.faces_after < info.faces_before:
+                    parts, self.simplified = cut, info
+            self._parts, self.loader = parts, None
         return self._parts
 
     @property
@@ -249,20 +258,21 @@ def _model_settings(z: zipfile.ZipFile) -> dict[str, dict]:
     return out
 
 
-def read_project(path: str | Path) -> Project:
+def read_project(path: str | Path, simplify: int | None = None) -> Project:
     """Load a 3MF project, a glTF/GLB scene (one part, its colours as paint; see gltf.py)
-    or an STL/OBJ mesh (one object, one part)."""
+    or an STL/OBJ mesh (one object, one part). `simplify`: cut each figure to about this many triangles
+    when its meshes load (simplify.py; None = as in the file)."""
     path = Path(path)
     if path.suffix.lower() in (".glb", ".gltf"):
         from .gltf import read_gltf                 # imports this module: load it on use
 
-        return read_gltf(path)
+        return read_gltf(path, simplify)
     if path.suffix.lower() != ".3mf":
         m = trimesh.load(path, force="mesh", process=False)
         assert isinstance(m, trimesh.Trimesh)
         m.merge_vertices()             # STL stores every triangle's corners separately
         part = Part(path.stem, 0, np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
-        obj = FigureObject("1", path.stem, 1, [part], np.eye(4))
+        obj = FigureObject("1", path.stem, 1, None, np.eye(4), lambda: [part], len(part.faces), simplify)
         return Project(path, "mesh", [obj], DEFAULT_COLOURS[:1], None)
 
     with zipfile.ZipFile(path) as z:
@@ -327,7 +337,7 @@ def read_project(path: str | Path) -> Project:
             return out
         return load
 
-    objects = [FigureObject(oid, name, ext, None, build[oid], loader(lv, pm), n)
+    objects = [FigureObject(oid, name, ext, None, build[oid], loader(lv, pm), n, simplify)
                for oid, name, ext, pm, lv, n in found]
 
     if not objects:

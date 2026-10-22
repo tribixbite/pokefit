@@ -35,7 +35,14 @@
   out along smoothed normals, blended into the surface around, so colours are kept.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
   largest that fits is used, with a note. Settings that are changed (ball, washer, magnets, pockets, height, shape,
-  strengthen, paint depth) are remembered in the browser as the defaults; "reset settings" in the footer clears them.
+  strengthen, simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the
+  footer clears them. Settings set before a file is opened are used for its first analysis.
+- Simplify mesh: a dense mesh (sculpts and scans of hundreds of thousands to millions of triangles) is cut to a
+  triangle budget (400k to 25k) when it loads, like Bambu Studio's Simplify: quadric edge collapse with even
+  triangle sizes (meshoptimizer's own WebAssembly build, the same in the browser and the local version), never
+  moving the surface by more than 0.1 % of the figure's size. A glTF's colours are sampled on the new triangles;
+  a painted 3MF keeps one colour per triangle. Measured on a 1.45M-triangle Eevee at 100k: open 39.5 -> 11.5 s,
+  a paint tap 0.8 -> 0.03 s, export 13.5 -> 1.4 s, surface change 0.017 mm at 25 mm tall.
 - GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
   kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
   materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament
@@ -51,7 +58,12 @@
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc; dragging the brush paints a stroke, and a
   part or crease fill stops where the colour changes (outline an eye or a belly that has no crease round it, then
-  tap inside). Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
+  tap inside), or "Fill" (a bucket fill that crosses every crease and stops only where the colour changes).
+  Mirror paints the same spot on the other side too (the figure's mirror plane, found from its shape; asymmetric
+  spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
+  0.2 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
+  specks under" (default 0.5 mm²) gives tiny painted patches the colour around them, since each would cost a
+  filament change on every layer it spans. Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
   swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"

@@ -44,6 +44,7 @@ import trimesh
 
 from .model3mf import DEFAULT_COLOURS, FigureObject, Part, Project
 from .paint import Tree, encode_tree, split_children
+from .simplify import SimplifyInfo, budgets, clean, simplify_indices
 
 GLTF_SUFFIXES = (".glb", ".gltf")
 MAX_COLOURS = 8           # cap of the "auto" palette
@@ -418,9 +419,10 @@ def two_sided(v: np.ndarray, f: np.ndarray) -> np.ndarray:
     return pair & (odd[group] == 1)                             # exactly one of the two is reversed
 
 
-def read_gltf(path: Path) -> Project:
+def read_gltf(path: Path, simplify: int | None = None) -> Project:
     """A glTF/GLB scene as one single-part figure whose colours are paint (module doc).
-    The project's `texture` re-cuts the palette to another size (TextureColours.paint)."""
+    The project's `texture` re-cuts the palette to another size (TextureColours.paint). `simplify`: cut the
+    scene to about this many triangles first (simplify.py), so colour is sampled on the triangles that print."""
     try:
         scene = trimesh.load(path, force="scene", process=False)
     except Exception as e:                          # Draco/meshopt compression, external buffers, ...
@@ -428,14 +430,29 @@ def read_gltf(path: Path) -> Project:
                          "and .gltf files with separate .bin/texture files are not supported; "
                          "export a plain .glb.") from e
     assert isinstance(scene, trimesh.Scene)        # force="scene" always returns one
+    nodes = [(xf, g) for xf, g in (scene.graph[n] for n in scene.graph.nodes_geometry)]
+    prims = [(xf, scene.geometry[g]) for xf, g in nodes
+             if isinstance(scene.geometry.get(g), trimesh.Trimesh) and len(scene.geometry[g].faces)]
+    # Points, lines and empty primitives are skipped. Primitives coloured per face cannot be simplified (their
+    # colours belong to the old faces); the others share the triangle budget.
+    cuts = budgets([0 if _face_coloured(g) else len(g.faces) for _, g in prims], simplify) if simplify         else [None] * len(prims)
+    before = after = 0
+    worst = 0.0
     meshes: list[tuple[np.ndarray, np.ndarray, Sampler, bool, np.ndarray]] = []
-    for node in scene.graph.nodes_geometry:
-        xf, gname = scene.graph[node]
-        g = scene.geometry.get(gname)
-        if not isinstance(g, trimesh.Trimesh) or not len(g.faces):
-            continue                                # points, lines, empty primitives
+    for (xf, g), cut in zip(prims, cuts):
         v = np.asarray(g.vertices, np.float64) @ xf[:3, :3].T + xf[:3, 3]
         f = np.asarray(g.faces, np.int64)
+        before += len(f)
+        if cut is not None and cut < len(f):
+            # Over the primitive's own (unwelded) vertices: corners split at a UV seam share a position, which
+            # meshoptimizer keeps matched, so every new triangle still has its corners' UVs / vertex colours.
+            f2, rel = simplify_indices(v, f, cut)
+            f2 = clean(f2)
+            if len(f2):
+                worst = max(worst, rel * float(np.ptp(v, axis=0).max()))
+                g = trimesh.Trimesh(g.vertices, f2, visual=g.visual.copy(), process=False)
+                f = f2
+        after += len(f)
         kept = np.flatnonzero(~two_sided(v, f))             # the primitive's own face numbers, for the sampler
         f = f[kept]
         sample, varies = _sampler(g)
@@ -492,5 +509,12 @@ def read_gltf(path: Path) -> Project:
     y_up = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], np.float64)
     part = Part(path.stem, base, np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64),
                 extra).transformed(y_up @ np.diag([unit, unit, unit, 1.0]))
-    return Project(path, "mesh", [FigureObject("1", path.stem, base, [part], np.eye(4))], colours, None,
-                   texture=texture)
+    obj = FigureObject("1", path.stem, base, [part], np.eye(4), n_faces=before, simplify=simplify)
+    if after < before:
+        obj.simplified = SimplifyInfo(before, after, worst * unit)
+    return Project(path, "mesh", [obj], colours, None, texture=texture)
+
+
+def _face_coloured(g: trimesh.Trimesh) -> bool:
+    """Colour given per face (not per vertex or by texture): it would not survive new faces."""
+    return isinstance(g.visual, trimesh.visual.ColorVisuals) and g.visual.kind == "face"

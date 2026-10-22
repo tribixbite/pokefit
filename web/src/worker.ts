@@ -54,7 +54,7 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
     const transfer: Transferable[] = [];
     switch (fn) {
       case "config": result = api.config(); break;
-      case "load": result = api.load(args[0] as string, args[1] as Uint8Array); break;
+      case "load": result = api.load(args[0] as string, args[1] as Uint8Array, args[2] as string); break;
       case "setReference": result = api.set_reference(args[0] as string, args[1] as Uint8Array); break;
       case "setBallModel": result = api.set_ball_model(args[0] as string, args[1] as Uint8Array); break;
       case "analyse": result = api.run_analyse(args[0] as string, args[1] as string); break;

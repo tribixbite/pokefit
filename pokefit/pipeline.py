@@ -15,7 +15,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +29,8 @@ from .checks import (bed_contact_check, merged, islands_check, mesh_checks, over
                      supports_verdict, thickness_check)
 from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
 from .strengthen import StrengthenInfo, strengthen
-from .colorize import (MAX_PATH, PaintOp, PaintState, TopologyCache, apply_paint, centroid_trees, pick_face,
-                       region_colours, region_faces)
+from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, PaintOp, PaintState, TopologyCache, apply_paint,
+                       centroid_trees, op_faces, pick_face, region_colours)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
@@ -65,8 +65,9 @@ _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 SHAPE_CACHE = 4             # fit / underside / printability results kept per session (recent shapes)
 # Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
 COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "paint_depth",
-                         "texture_colours", "texture_details"})
+                         "texture_colours", "texture_details", "despeckle"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
+DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`)
 AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
 
 
@@ -128,6 +129,12 @@ class Params:
     # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
     # still appear on the same layers); only how much of each colour, and of the base, is used.
     paint_depth: float | None = None
+    # Simplify dense meshes to about this many triangles when the file loads (simplify.py; None = as in the file).
+    # The shape moves by at most 0.1 % of the figure's size; fewer triangles make every later step faster.
+    simplify: int | None = None
+    # Painted patches smaller than this (mm² at the print size) take the colour around them: a stray dab costs a
+    # filament change on every layer it spans (colorize.Topology.specks). 0 = keep every patch.
+    despeckle: float = 0.5
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -176,6 +183,13 @@ class Params:
             self.paint_depth = float(self.paint_depth)
             if not 0 <= self.paint_depth <= 10:
                 raise ValueError("paint_depth must be 0..10 mm (0 = unlimited, or null for the project's)")
+        self.despeckle = float(self.despeckle)
+        if not 0 <= self.despeckle <= 20:
+            raise ValueError("despeckle must be 0..20 mm² (0 = off)")
+        if self.simplify is not None:
+            self.simplify = int(self.simplify) or None
+            if self.simplify is not None and not 1_000 <= self.simplify <= 10_000_000:
+                raise ValueError("simplify must be 1,000..10,000,000 triangles (or null for the file's own)")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -200,6 +214,7 @@ class Session:
     ball: Ball
     reference: dict | None
     presets: PresetLibrary | None = None        # Bambu presets the user imported (presets.py)
+    simplify: int | None = None                 # triangle budget `project` was loaded with (Params.simplify)
     # Filaments loaded in the user's printer (printer.py, via beambam): when set, the figure's colours are
     # matched to these slots instead of the reference project's.
     ams: list[AmsSlot] | None = None
@@ -225,9 +240,23 @@ class Session:
     _undersides: dict[str, dict[str, Any]] = field(default_factory=dict)   # shape_key -> pocket editor data
     _preview: dict[str, Any] = field(default_factory=dict)                 # last `_preview_meshes` result
     _pick_trees: dict[tuple, list[Any]] = field(default_factory=dict)      # figure frame -> `centroid_trees`
+    _paint_scale: dict[tuple, float] = field(default_factory=dict)         # `paint_scale` per setup
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
+
+    def use_simplify(self, target: int | None) -> None:
+        """Load the file again simplified to `target` triangles (None = as in the file) if it was loaded with
+        another budget. Every cached result belongs to the old triangles, so all are dropped (paint steps name
+        triangles too: the UI clears them when this setting changes)."""
+        if (target or None) == self.simplify:
+            return
+        self.project = read_project(self.project.path, target or None)
+        self.simplify = target or None
+        self.input_checks.clear()
+        for f in fields(self):
+            if f.name.startswith("_"):
+                getattr(self, f.name).clear()
 
     def _orientation(self, params: Params) -> tuple[str, float, float, float]:
         """Object id and the three angles (degrees, mod 360)."""
@@ -425,17 +454,37 @@ class Session:
 
     def figure_parts(self, params: Params) -> list[Part]:
         """`unit_parts` with the file's colour (glTF: at the chosen count) and the colorize paint
-        applied (geometry identical)."""
+        applied (geometry identical), specks under `despeckle` mm² at the print size cleared."""
         parts = self.textured_parts(params)
         if not params.paint:
             return parts
+        s = self.paint_scale(params) if params.despeckle > 0 else 0.0
         key = (self._key(params), self.texture_count(params), params.texture_details,
-               json.dumps(params.paint, sort_keys=True))
+               json.dumps(params.paint, sort_keys=True), params.despeckle, round(s, 4))
         if key not in self._painted:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
                 self._painted.clear()
-            self._painted[key] = apply_paint(parts, params.paint_ops, self.topology(params))
+            min_area = params.despeckle / (s * s) if s > 0 else 0.0
+            self._painted[key] = apply_paint(parts, params.paint_ops, self.topology(params), min_area)
         return self._painted[key]
+
+    def paint_scale(self, params: Params) -> float:
+        """The print scale paint sizes are judged at: the scale chosen, else the height asked for (capped at the
+        largest that fits), else the largest that fits (0 when nothing fits)."""
+        key = (self._key(params), params.figure_scale, params.figure_height, round(self.ball_scale(params), 6),
+               params.washer, params.clearance)
+        if key not in self._paint_scale:
+            if params.figure_scale:
+                s = float(params.figure_scale)
+            else:
+                hp = self.points(params)
+                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(params.washer), params.clearance)
+                free = max_scale(hp, cavity)
+                s = free.max_scale if free is not None else 0.0
+                if params.figure_height and hp.height > 0:
+                    s = min(s, params.figure_height / hp.height) if s > 0 else params.figure_height / hp.height
+            self._paint_scale[key] = s
+        return self._paint_scale[key]
 
     def points(self, params: Params) -> HullPoints:
         self.unit_parts(params)
@@ -484,7 +533,7 @@ class Session:
         if not targets:
             return []
         obj = self.obj(params)
-        ukey = (f"{obj.id}:{self.texture_count(params)}:{params.texture_details}:"
+        ukey = (f"{obj.id}:{self.texture_count(params)}:{params.texture_details}:{params.despeckle}:"
                 f"{json.dumps(params.paint, sort_keys=True)}")
         if ukey not in self._used:
             parts = self.figure_parts(params)
@@ -516,14 +565,15 @@ def scaled(parts: list[Part], s: float) -> list[Part]:
 
 
 def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
-                 reference_path: str | Path | None = DEFAULT_REFERENCE, work_dir: str | Path | None = None) -> Session:
+                 reference_path: str | Path | None = DEFAULT_REFERENCE, work_dir: str | Path | None = None,
+                 simplify: int | None = None) -> Session:
     path = Path(path)
-    proj = read_project(path)
+    proj = read_project(path, simplify)
     sid = uuid.uuid4().hex[:12]
     wd = Path(work_dir) if work_dir else CACHE_DIR / "sessions" / sid
     wd.mkdir(parents=True, exist_ok=True)
     ref = reference_settings(reference_path) if reference_path and Path(reference_path).exists() else None
-    return Session(sid, proj, wd, load_ball(ball_path, CACHE_DIR), ref)
+    return Session(sid, proj, wd, load_ball(ball_path, CACHE_DIR), ref, simplify=simplify)
 
 
 def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "",
@@ -782,6 +832,7 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
     manifold3d, which release the GIL for most of it. The session's caches are
     warmed first so the threads only read them (each writes its own _auto key).
     """
+    session.use_simplify(params.simplify)
     from concurrent.futures import ThreadPoolExecutor
 
     session.unit_parts(params)
@@ -817,6 +868,7 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
 
 def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[Report, list[Part]]:
     """Fit, pockets, checks. Returns the report and the final (cut) figure-frame parts."""
+    session.use_simplify(params.simplify)
     t: dict[str, float] = {}
     t0 = time.time()
     washer = get_washer(params.washer)
@@ -825,6 +877,8 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     unit = session.figure_parts(params)
     obj = session.obj(params)
     checks: list[Check] = list(input_checks(session, params))
+    if (dense := _dense_hint(obj, params)) is not None:
+        checks.append(dense)
     t["input_checks"] = time.time() - t0
 
     t1 = time.time()
@@ -1120,6 +1174,16 @@ def _height_image(f: HeightField) -> dict[str, Any]:
             "height_span": round(span, 2)}
 
 
+def _dense_hint(obj: FigureObject, params: Params) -> Check | None:
+    """A mesh far denser than a print shows, not simplified: say what Simplify would save."""
+    if params.simplify or obj.face_count <= DENSE_FACES:
+        return None
+    return Check("dense", "Dense mesh", "info",
+                 f"{obj.face_count:,} triangles, far more than a print this size shows. Simplify (Model card) to "
+                 "100,000 makes painting, the analysis and Bambu Studio several times faster; the surface moves "
+                 "by at most 0.1 % of the figure's size (about 0.03 mm).", obj.face_count)
+
+
 def _units_hint(height: float) -> Check | None:
     """STL/OBJ carry no units: a figure a few mm or several metres tall as saved was probably not modelled in mm.
 
@@ -1146,6 +1210,8 @@ def _extents(parts: list[Part]) -> list[float]:
 
 def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, Any]:
     return {"id": obj.id, "name": obj.name, "faces": obj.face_count,
+            # Triangles before and after the import's simplify step, and how far the surface moved (file mm).
+            "simplified": obj.simplified.to_dict() if obj.simplified else None,
             "parts": [{"name": p.name, "extruder": p.extruder or obj.extruder, "faces": len(p.faces),
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
@@ -1310,6 +1376,7 @@ def preview_glb(session: Session, params: Params, regions: tuple[str, float] | N
     With `regions` (colorize mode, angle) the parts are the unclipped ones whose
     face order the region labels follow.
     """
+    session.use_simplify(params.simplify)
     pm = _preview_meshes(session, params, regions)
     scene = trimesh.Scene()
     for pi, (v, f) in enumerate(pm.meshes):
@@ -1328,6 +1395,7 @@ def preview_faces(session: Session, params: Params, regions: tuple[str, float] |
     only recolours the view (a few hundred kB) instead of re-sending the whole mesh.
     With `regions`, colours are the regions a tap would paint (cycling REGION_PALETTE colours).
     """
+    session.use_simplify(params.simplify)
     import base64
 
     pm = _preview_meshes(session, params, regions)
@@ -1355,19 +1423,31 @@ def _pick_trees_for(session: Session, params: Params) -> list[Any]:
     return session._pick_trees[key]
 
 
-def prepare_paint(session: Session, params: Params, mode: str = "part", angle: float = 15.0) -> dict[str, Any]:
-    """Build what taps need (pick trees, edge topology, the mode's regions) before the first tap: the UI
-    calls it when painting starts, so the first tap on a big mesh answers as fast as the rest."""
+def prepare_paint(session: Session, params: Params, mode: str = "part", angle: float = 15.0,
+                  mirror: bool = False) -> dict[str, Any]:
+    """Build what taps need (pick trees, edge topology, the mode's regions; with `mirror`, the symmetry plane)
+    before the first tap: the UI calls it when painting starts, so the first tap on a big mesh answers as fast as
+    the rest. Says whether the figure is symmetric enough to paint both sides at once."""
+    session.use_simplify(params.simplify)
     _pick_trees_for(session, params)
     topo = session.topology(params)
     for i in range(len(topo)):
         topo.labels(i, mode, angle) if mode not in ("brush", "face") else topo.part(i)
-    return {"parts": len(topo)}
+    out: dict[str, Any] = {"parts": len(topo)}
+    if mirror:
+        out["mirror"] = _mirror_info(topo)
+    return out
+
+
+def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
+    plane = topo.mirror()
+    return {"ok": plane.error <= MIRROR_MAX_ERROR, "error": round(plane.error, 4),
+            "normal": [round(float(x), 4) for x in plane.normal]}
 
 
 def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
          mode: str = "part", angle: float = 15.0, radius: float = 0.0,
-         stroke: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+         stroke: list[dict[str, Any]] | None = None, mirror: bool = False, grow: float = 0.0) -> dict[str, Any]:
     """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
 
     The answer's part/face go into a colorize paint operation, which then
@@ -1375,8 +1455,12 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     only): further {point, normal} samples of a drag; their triangles on the
     same part come back as `path`. Fills are counted against the current
     paint, so a fill that stops at a painted outline reports the faces inside it.
+    With `mirror` the count includes the other side (`mirrored`: one was found).
+    `filament` is the colour shown under the tap (the UI's colour picker).
     """
-    PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius})
+    session.use_simplify(params.simplify)
+    PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius,
+                       "grow": grow})
     if stroke and mode != "brush":
         raise ValueError("only the brush paints strokes")
     parts = session.unit_parts(params)
@@ -1397,12 +1481,27 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
         sp, sf, _ = at(sample["point"], sample.get("normal"))
         if sp == pi and sf != fi and (not path or path[-1] != sf):
             path.append(sf)
-    paint = PaintState(session.figure_parts(params)[pi]) if mode in ("part", "region") and params.paint else None
-    faces = region_faces(topo, pi, fi, mode, angle, radius, tuple(path), paint)
-    tri = parts[pi].vertices[parts[pi].faces[faces]]
-    area = float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum() / 2)
-    return {"part": pi, "face": fi, "distance": dist, "faces": int(len(faces)), "path": path,
-            "share": round(len(faces) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2)}
+    figure = session.figure_parts(params)
+    states: dict[int, PaintState] = {}
+
+    def state(i: int) -> PaintState | None:
+        if mode not in BOUNDED or not params.paint:
+            return None
+        return states.setdefault(i, PaintState(figure[i]))
+
+    op = PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow)
+    sides = op_faces(topo, op, state)
+    n = sum(len(f) for _, f in sides)
+    area = 0.0
+    for sp_, f in sides:
+        tri = parts[sp_].vertices[parts[sp_].faces[f]]
+        area += float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum() / 2)
+    attrs = figure[pi].tri_extra.get(fi)
+    fp = attr_paint(attrs) if attrs else None
+    shown = fp.majority if fp is not None and fp.majority > 0 else (figure[pi].extruder or session.obj(params).extruder)
+    return {"part": pi, "face": fi, "distance": dist, "faces": int(n), "path": path,
+            "share": round(len(sides[0][1]) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2),
+            "mirrored": len(sides) > 1, "filament": int(shown)}
 
 
 def with_paint_depth(settings: dict | None, params: Params) -> dict | None:
@@ -1434,6 +1533,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     is for dragging into an open project with "Import geometry only": its
     filament numbers are the user's project slots of the closest colour.
     """
+    session.use_simplify(params.simplify)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rep, final = analyse(session, params)
@@ -1483,6 +1583,7 @@ def _shell_mesh(model: Path) -> trimesh.Trimesh:
 def slice_variants(session: Session, params: Params, x10: bool = True,
                    work_root: str | Path | None = None) -> dict[str, Any]:
     """Bambu slices: supports off, auto supports, and (best-effort) 10 copies with supports as needed."""
+    session.use_simplify(params.simplify)
     _, final = analyse(session, params)
     obj = session.obj(params)
     root = Path(work_root) if work_root else session.work_dir / f"slice_{int(time.time() * 1000)}"

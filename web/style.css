@@ -107,6 +107,9 @@ select, input[type="number"] {
 .custom-washer label { flex-direction: column; color: var(--muted); }
 .custom-washer input[type="number"] { width: 100%; }
 .hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.grow-group { display: inline-flex; gap: 6px; }
+/* Keyboard shortcuts mean nothing on a touch screen. */
+@media (hover: none) { .hint.keys { display: none; } }
 .muted { color: var(--muted); font-size: 13px; }
 
 .summary { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; gap: 4px 14px; align-items: center; }
