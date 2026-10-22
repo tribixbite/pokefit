@@ -10,33 +10,42 @@ exist only on the original Windows machine (ask the user for the files).
    key in `~/.x2d`, never in a repo). "Start print" has never been pressed. **The first real print needs the user's OK in
    chat, every later one their click.** It also settles whether a dual-nozzle start still fails (beambam notes disagree,
    err 84033544). Then: AMS load/unload. `beambam print --dry-run` (purge check only, touches no printer) is safe to use.
-2. **Eyes: "Keep details"** (`Params.texture_details` 0-3, `gltf.TextureColours._details`, Colours card select, CLI
-   `fit --details N`): small fine clusters (< 2 % of the surface) contrasting most (full CIELAB ΔE ≥ 25) with the colour
-   they would merge into keep their own filament. +1 detail = the black pupils on both Squirtles at 2 and 3 colours.
-   Bambu slices, 2 colours vs 2 + 1 detail: Manex 1h45/19.8 g -> 2h58/40.9 g, photo Squirtle 1h56/20.7 g -> 2h45/35.6 g
-   (pupils at 4-5 colours cost ~5.4 h before). Off by default: ask the user before making it part of "auto". At 1 colour
-   + 1 the Manex picks a shell-brown cluster, not the pupils (highest contrast vs a blue mean); not a goal so far.
-3. **Photo models**: Pixal3D multi-view + mirrored right view stays the default; TRELLIS.2 is `--model trellis2` for one
-   photo. Clean timings 2026-10-20 (idle GPU, fresh ComfyUI): Pixal3D 1 photo 164 s, TRELLIS.2 1 photo 472 s, 3 photos
-   160 s, 3 + mirror 166 s, 700k faces 162 s (looks like 200k: voxel colours limit the eyes). Only the defaults of the
-   dialog's settings are measured. Paid generators: dropped (user, 2026-10-20). In-browser TRELLIS.2 (SpawnDev demo,
-   ~10.5 GB cached in Chrome's OPFS) lost the WebGPU device on the Intel iGPU; retry only after the user switches Chrome
-   to the high-performance GPU (Windows Settings > Display > Graphics). llama-server is stopped: restart command in
-   memory `local-installs`.
-4. **Gloss specks** (photo colours, `imageto3d.photo_colours`): light streaks of the toy's shiny plastic become light
-   patches. Two detectors tried 2026-10-20 and NOT kept (diff: scratchpad `gloss_attempt.diff`, probe `gloss_probe.py`,
-   renders `gloss2_cmp.png`): (a) image-space "lighter + paler than a 41 px local mean" flagged colour edges (eye rims,
-   mouth line), not the streaks; (b) multi-view "lighter + paler than the darkest view" left the head side paler (the
-   darkest view is usually a grazing, shaded one). Next ideas: compare each sample with the model's own lighting-free
-   albedo after the gain fit; or have Qwen-Image-Edit remove reflections in the photo step (`photoclean.py`).
-5. **Ordinary photos -> clean views** (`pokefit/photoclean.py`, `photos --clean P1 P2 P3 [--pose]`): Charmander
-   (`imageto3d/charmander/`, scratchpad `char_clean3/`) fits at 32.8 mm, limited by the raised arms. Open: `--pose`
-   did not move the arms; "matte" wording did not remove gloss; try an OpenPose reference or arm wording; a second
-   figure to confirm the side-view naming ("right side view" in fal's LoRA = the rig's left).
-6. **Paint depth** (`Params.paint_depth` -> Bambu `mmu_segmented_region_max_width`; Colours card, CLI `fit --paint-depth`):
-   8-colour Charmander slices (scratchpad `paint_depth.py`): 0 (unlimited) / 0.8 / 1.6 / 3 mm = 664 / 665 / 667 / 667 min,
-   284 colour changes each; only the per-colour grams move. Not measured: strength,
-   `mmu_segmented_region_interlocking_depth`, a figure where a colour exists only inside.
+2. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
+   changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
+   auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its
+   dark brown) merge into brown below 5 colours and +1 detail picks a 0.08 % beige; Squirtle at auto 2 merges belly,
+   shell and eyes into one tan; Mew finds no detail. Ideas: score detail candidates by hue distance and share, not
+   only ΔE to the group mean; ask the user whether "Keep details +1" should be the default (pupils on Squirtle cost
+   1.98 -> 2.70 h, 20.9 -> 34.1 g).
+3. **Generated-figure batch** (2026-10-21; photos in `imageto3d/<name>/`, git-ignored, Takara Tomy MonColle studio shots
+   + a Jazwares Togepi; scratchpad `batch_figs.py` = generate + fit + slice, `sheet.py` = painted renders,
+   results `batch3/summary.jsonl`, sheets `figures_1.png`/`figures_2.png`). Pixal3D multi-view 96-235 s each; Mew via
+   `--clean` (3 photos) 231 s. Defaults, Bambu slices (auto | auto + 1 detail):
+   | figure | mm | magnets | auto | h / g | +1 detail h / g |
+   |---|---|---|---|---|---|
+   | Squirtle (gloss-fixed) | 31.6 | 2 | 2 | 1.98 / 20.9 | 2.70 / 34.1 |
+   | Charmander, `--pose` | 33.8 | 2 | 3 | 2.83 / 35.5 | 3.67 / 44.8 |
+   | Pikachu | 36.0 | 2 | 2 | 2.01 / 22.8 | 2.33 / 28.6 |
+   | Eevee | 29.8 | 1 (fill 4 mm) | 2 | 1.38 / 15.3 | 1.73 / 22.3 |
+   | Jigglypuff | 29.8 | 2 | 4 | 2.23 / 28.8 | 2.42 / 28.9 |
+   | Bulbasaur | 22.1 | 2 | 2 | 1.48 / 15.6 | 2.25 / 27.2 |
+   | Charmander (arms up) | 25.0 | 2 | 3 | 2.00 / 26.0 | 2.34 / 30.6 |
+   | Snorlax | 28.3 | 2 | 2 | 1.76 / 20.2 | 2.15 / 26.6 |
+   | Psyduck | 33.0 | 2 | 3 | 1.91 / 24.1 | 3.27 / 42.6 |
+   | Togepi | 30.7 | 2 | 2 | 1.63 / 16.5 | 3.11 / 38.7 |
+   | Piplup | 37.8 | 1 (fill 6 mm) | 2 | 1.37 / 12.9 | 1.75 / 19.5 |
+   | Mew | 39.6 | 0: FAIL | 3 | 3.54 / 47.1 | (no detail) |
+   All need supports (chins, arms). Open: Mew (thin looping tail and feet: no pocket, small bed contact; glue it or a
+   stand); Bulbasaur only 22 mm (long and wide); several "magnets overhang the steel" warnings (a larger washer).
+4. **Photo pipeline**: Pixal3D multi-view + mirrored right is the default. `--pose` (OpenPose skeleton reference, arms
+   down) turned the arms-up Charmander into a sitting, arms-down one: 33.8 mm vs 32.8, 2 magnets. Gloss
+   (`imageto3d.gloss_free`) clears streaks on head and shell; a faint darker blotchiness remains on the Squirtle's head
+   side where reflections were replaced. Side-view naming confirmed on a second figure (Mew). In-browser TRELLIS.2: only
+   after the user switches Chrome to the high-performance GPU. llama-server is stopped (restart command in memory
+   `local-installs`).
+5. **Paint depth**: `mmu_segmented_region_interlocking_depth` 0 / 0.4 / 0.8 mm (max width 1.6) = 666.6 / 664.6 /
+   665.8 min, 284 changes each (8-colour Charmander): no time effect; strength needs a physical test. Not exposed.
+6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only).
 7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
    automated download). The user downloads, then opens the file.
 8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
