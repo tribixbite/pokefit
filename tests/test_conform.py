@@ -188,3 +188,46 @@ def test_a_height_asked_for_is_printed_unless_it_does_not_fit(tmp_path: Path) ->
     assert any(c["id"] == "size:height" for c in big["checks"])
     with pytest.raises(ValueError, match="figure_height"):
         Params(figure_height=0)
+
+
+def test_magnets_on_the_washer_get_pads_so_they_are_walled_from_the_washer_up(tmp_path: Path) -> None:
+    """2.5 mm of air under the belly and a tiny fill circle: the pockets get pads filling that gap round them."""
+    s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
+    params = Params(magnets=2, flat_fill=4, fill_circle={"x": 0.0, "y": 0.0, "d": 1.0})
+    rep, final = analyse(s, params)
+    d = rep.to_dict()
+    pocket_checks = [c for c in d["checks"] if c["id"].startswith("pocket:")]
+    assert len(d["pockets"]) == 2 and all(p["z"] == 0.0 for p in d["pockets"])
+    assert all(c["status"] == "pass" and "Sits on the washer" in c["message"] for c in pocket_checks)
+    assert not any("glue" in c["message"] for c in pocket_checks)
+    pad = s.pads(params)
+    assert pad is not None and any(p.name == FILL_NAME for p in s.figure_parts(params))
+    scale = d["fit"]["scale"]
+    for p in d["pockets"]:                       # the pad lies under each pocket, from the bed up
+        near = np.hypot(pad.vertices[:, 0] * scale - p["x"], pad.vertices[:, 1] * scale - p["y"]) < 3.5
+        assert near.any() and pad.vertices[near, 2].min() == pytest.approx(0.0, abs=1e-6)
+    # The raised seat puts the pockets up into the figure instead: no pads.
+    raised = Params(magnets=2, flat_fill=4, fill_circle={"x": 0.0, "y": 0.0, "d": 1.0}, pocket_seat="raised")
+    assert s.pads(raised) is None
+    assert all(p["z"] > 0 for p in analyse(s, raised)[0].to_dict()["pockets"])
+
+
+def test_fill_everywhere_and_a_drawn_shape(tmp_path: Path) -> None:
+    s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
+    every = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="all")) if p.name == FILL_NAME][0]
+    assert np.ptp(every.vertices[:, 0]) > 13 and np.ptp(every.vertices[:, 1]) > 8      # under the whole belly
+    assert [p for p in s.unit_parts(Params(magnets=0, flat_fill=2, fill_area="all")) if p.name == FILL_NAME] == []
+    tri = [[-5.0, -3.5], [5.0, -3.5], [0.0, 3.5]]
+    shaped = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="shape", fill_shape=tri))
+              if p.name == FILL_NAME][0]
+    v = shaped.vertices
+    assert 8 < np.ptp(v[:, 0]) <= 10.2 and 5.5 < np.ptp(v[:, 1]) <= 7.2
+    top = v[v[:, 1] > 2.0]                          # narrow near the triangle's apex
+    assert len(top) and np.ptp(top[:, 0]) < 3.5
+    with pytest.raises(ValueError, match="fill_area"):
+        Params(fill_area="moon")
+    with pytest.raises(ValueError, match="fill_shape"):
+        Params(fill_area="shape")
+    with pytest.raises(ValueError, match="fill_shape"):
+        Params(fill_area="shape", fill_shape=[[0, 0], [1, 1]])
+    assert Params(fill_circle={"x": 0, "y": 0, "d": 4}).fill_area == "circle"   # older clients

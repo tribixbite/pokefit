@@ -123,13 +123,14 @@ def faces(sid: str, params_json: str, regions_json: str = "null") -> str:
 
 
 def pick_face(sid: str, params_json: str, req_json: str) -> str:
-    """The triangle under a tap: req = {point, normal, mode, angle, radius, stroke?, mirror?, grow?} (figure
-    frame, scale 1)."""
+    """The triangle under a tap: req = {point, normal, mode, angle, radius, stroke?, mirror?, grow?, level?,
+    stamp_axes?} (figure frame, scale 1)."""
     req = json.loads(req_json)
     return _dump(pick(_session(sid), Params.from_dict(json.loads(params_json)), req["point"], req.get("normal"),
                       str(req.get("mode", "part")), float(req.get("angle", 15.0)), float(req.get("radius", 0.0)),
                       req.get("stroke"), bool(req.get("mirror", False)), float(req.get("grow", 0.0)),
-                      int(req.get("level", 0))))
+                      int(req.get("level", 0)),
+                      [float(v) for v in req["stamp_axes"]] if req.get("stamp_axes") else None))
 
 
 def paint_prepare(sid: str, params_json: str, req_json: str) -> str:

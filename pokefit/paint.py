@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -270,3 +270,71 @@ def remap_code(code: str, perm: tuple[int, int, int]) -> str:
 def majority_tree(tree: Tree) -> int:
     """The state covering most of a tree's area."""
     return decode_majority(encode_tree(tree)) if not isinstance(tree, int) else tree
+
+
+def _collapse(split: int, special: int, kids: list[Tree]) -> Tree:
+    """A split node, or the one state all its children hold."""
+    if all(isinstance(k, int) for k in kids) and len({k for k in kids if isinstance(k, int)}) == 1:
+        return kids[0]
+    return split, special, kids
+
+
+def overlay(tree: Tree, phi: tuple[float, float, float], state: int, depth: int,
+            only: Callable[[int], bool] | None = None, table: list[list[float]] | None = None,
+            inner: bool = False) -> Tree:
+    """`tree` (one triangle's paint) with the part where a field is <= 0 painted `state`; with `only`, just its
+    leaves whose state passes (a fill bounded by colour must not run over a neighbour's split edge).
+
+    The field is `phi` at the triangle's three corners (its order in the mesh), read linearly in between, or,
+    with `table`, its value at every split point down to `depth` levels: `table[i][j]` at barycentric coordinates
+    ((L - i - j) / L, i / L, j / L), L = 2 ** depth (points off that grid, inside an older deeper split, read
+    `phi` linearly). With `inner`, the area may lie wholly inside a (sub-)triangle whose corners are all outside
+    (a small stamp on a big triangle): such a triangle is still split while a table point inside it is <= 0.
+    The painted edge is the field's zero line. An existing split keeps its structure (each of
+    its leaves is overlaid in turn); a leaf the line crosses is split into four (TriangleSelector's 3-side
+    split) down to `depth` levels below the triangle, the last level taking the state of its centre.
+    """
+    big = float(1 << depth)
+    p0, p1, p2 = (float(x) for x in phi)
+
+    # A point is a complex number i + j*1j in lattice units: the split helper averages corners, and complex
+    # numbers average exactly (dyadic), cheaply, with no arrays.
+    def value(c: complex) -> float:
+        i, j = c.real, c.imag
+        if table is not None and i == int(i) and j == int(j):
+            return table[int(i)][int(j)]
+        return ((big - i - j) * p0 + i * p1 + j * p2) / big
+
+    negs = [complex(i, j) for i, row in enumerate(table) for j, v in enumerate(row) if v <= 0] \
+        if inner and table is not None else []
+
+    def holds(bc: list[complex]) -> bool:
+        """A negative table point lies in the triangle `bc` (edges included)."""
+        a, b, c = bc
+        den = (b - a).real * (c - a).imag - (b - a).imag * (c - a).real
+        if abs(den) < 1e-12:
+            return False
+        for p in negs:
+            u = ((p - a).real * (c - a).imag - (p - a).imag * (c - a).real) / den
+            v = ((b - a).real * (p - a).imag - (b - a).imag * (p - a).real) / den
+            if u >= -1e-9 and v >= -1e-9 and u + v <= 1 + 1e-9:
+                return True
+        return False
+
+    def rec(t: Tree, bc: list[complex], d: int) -> Tree:
+        ph = [value(b) for b in bc]
+        if isinstance(t, int):
+            if only is not None and not only(t):
+                return t
+            if max(ph) <= 0:
+                return state
+            if min(ph) > 0 and not (negs and d < depth and holds(bc)):
+                return t
+            if d >= depth:
+                return state if value((bc[0] + bc[1] + bc[2]) / 3) <= 0 else t
+            return _collapse(3, 0, [rec(t, c, d + 1) for c in split_children(bc, 3, 0)])
+        split, special, children = t
+        return _collapse(split, special, [rec(c, cb, d + 1)
+                                          for c, cb in zip(children, split_children(bc, split, special))])
+
+    return rec(tree, [0j, complex(big, 0), complex(0, big)], 0)

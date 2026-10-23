@@ -22,14 +22,16 @@ export interface ColorizeHost {
   /** Reload the 3D preview; `regions` colours it by what a tap would paint. */
   refresh(regions: RegionView | null): Promise<void>;
   /** The triangle under a tap and the size of its region; `stroke`: the rest of a brush drag. */
-  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number, stroke?: FigureHit[], mirror?: boolean
-  ): Promise<PickResult>;
+  pick(hit: FigureHit, mode: PaintMode, angle: number, radius: number, stroke?: FigureHit[], mirror?: boolean,
+       stampAxes?: number[]): Promise<PickResult>;
   /** Build the engine's tap structures now (painting started), so the first tap is as quick as the rest. */
   prepare(mode: PaintMode, angle: number, mirror: boolean): Promise<PrepareResult>;
   /** Turn tap-to-pick on the 3D view on or off. */
   setPicking(fn: ((hit: FigureHit) => void) | null): void;
   /** Brush: a drag that starts on the figure paints a stroke (null = drags turn the view). */
   setStroking(fn: ((hits: FigureHit[]) => void) | null): void;
+  /** Stamp: a drag on the figure draws an ellipse's box (null = drags turn the view). */
+  setStamping(fn: ((hit: FigureHit, axes: number[]) => void) | null): void;
   /** Called after paint or colours changed (the import-file colour map is stale until re-analysed). */
   changed(): void;
   /** Painting stopped: a good moment to re-analyse if anything changed. */
@@ -62,6 +64,8 @@ export class ColorizePanel {
   private brushMm = 1.5;           // brush radius in print mm
   private painting = false;
   private regions = false;
+  /** The shape map (creases and relief, what the wand follows) is shown. */
+  private shapeMap = false;
   private busy = false;
   /** Paint the mirror image too (the figure's symmetry plane, found by the engine). */
   private mirror = false;
@@ -72,7 +76,18 @@ export class ColorizePanel {
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
-    $("regionsBtn").addEventListener("click", () => { this.regions = !this.regions; void this.reload(); this.render(); });
+    $("regionsBtn").addEventListener("click", () => {
+      this.regions = !this.regions;
+      if (this.regions) this.shapeMap = false;
+      void this.reload();
+      this.render();
+    });
+    $("shapeMapBtn").addEventListener("click", () => {
+      this.shapeMap = !this.shapeMap;
+      if (this.shapeMap) this.regions = false;
+      void this.reload();
+      this.render();
+    });
     $("paintUndo").addEventListener("click", () => this.undo());
     $("paintRedo").addEventListener("click", () => this.redo());
     $("paintClear").addEventListener("click", () => {
@@ -167,6 +182,7 @@ export class ColorizePanel {
     p.texture_details = 0;
     this.filament = 1;
     this.regions = false;
+    this.shapeMap = false;
     this.mirror = false;
     this.sampling = false;
     this.undone = [];
@@ -237,6 +253,7 @@ export class ColorizePanel {
     t.setAttribute("aria-pressed", String(this.painting));
     t.textContent = this.painting ? "Done painting" : "Paint";
     $("regionsBtn").setAttribute("aria-pressed", String(this.regions));
+    $("shapeMapBtn").setAttribute("aria-pressed", String(this.shapeMap));
     $("paintMirror").setAttribute("aria-pressed", String(this.mirror));
     $("paintSample").setAttribute("aria-pressed", String(this.sampling));
     const ops = p.paint ?? [];
@@ -254,7 +271,9 @@ export class ColorizePanel {
             ? "Tap or drag on the figure to paint. Turn the view by dragging beside it, with two fingers or the right mouse button."
             : this.mode === "fill" ? "Tap inside an outline to fill it."
               : this.mode === "wand" ? "Tap a feature (an eye, a flame, a toe pad). Smaller / Larger if it is not quite it."
-                : "Tap the figure to paint.";
+                : this.mode === "stamp"
+                  ? "Drag a box over the spot (an eye): the ellipse in it is painted, seen as you look at it. Turn the view by dragging beside the figure."
+                  : "Tap the figure to paint.";
     }
   }
 
@@ -316,8 +335,12 @@ export class ColorizePanel {
   private setPainting(on: boolean): void {
     this.painting = on;
     if (!on) this.sampling = false;
-    this.host.setPicking(on ? (hit) => void this.paintAt([hit]) : null);
+    this.host.setPicking(on ? (hit) => {
+      if (this.mode === "stamp" && !this.sampling) this.host.toast("Drag a box over the spot: the ellipse in it is painted.");
+      else void this.paintAt([hit]);
+    } : null);
     this.host.setStroking(on && this.mode === "brush" ? (hits) => void this.paintAt(hits) : null);
+    this.host.setStamping(on && this.mode === "stamp" ? (hit, axes) => void this.paintAt([hit], axes) : null);
     // The engine caches these per figure and orientation, so asking again is cheap; failures surface on the tap.
     if (on) void this.host.prepare(this.mode, this.angle, this.mirror).catch(() => undefined);
     if (!on && this.regions) { this.regions = false; void this.reload(); }
@@ -344,8 +367,9 @@ export class ColorizePanel {
     this.render();
   }
 
-  /** Paint at a tap, or along a brush stroke (`hits` = the drag's samples, first = where it started). */
-  private async paintAt(hits: FigureHit[]): Promise<void> {
+  /** Paint at a tap, along a brush stroke (`hits` = the drag's samples, first = where it started), or a stamp
+   * (`axes`: the ellipse's semi-axes, figure frame). */
+  private async paintAt(hits: FigureHit[], axes?: number[]): Promise<void> {
     if (this.busy || !hits.length) return;
     if (this.sampling) { await this.sampleAt(hits[0]); return; }
     this.busy = true;
@@ -353,13 +377,14 @@ export class ColorizePanel {
     try {
       const radius = this.radiusFile();
       const stroke = this.mode === "brush" ? hits.slice(1) : [];
-      const res = await this.host.pick(hits[0], this.mode, this.angle, radius, stroke, this.mirror);
+      const res = await this.host.pick(hits[0], this.mode, this.angle, radius, stroke, this.mirror, axes);
       const p = this.host.params();
       if (!p.colours) p.colours = this.colours();      // pin the palette the paint refers to
       p.paint = [...(p.paint ?? []), {
         part: res.part, face: res.face, filament: this.filament, mode: this.mode, angle: this.angle, radius,
         ...(res.path?.length ? { path: res.path } : {}),
         ...(this.mirror ? { mirror: true } : {}),
+        ...(res.stamp ? { stamp: res.stamp } : {}),
       }];
       this.undone = [];
       const what = this.mode === "face" ? "1 triangle" : `${res.faces.toLocaleString()} triangles`;
@@ -495,6 +520,7 @@ export class ColorizePanel {
   }
 
   private async reload(): Promise<void> {
-    await this.host.refresh(this.regions ? { mode: this.mode, angle: this.angle } : null);
+    await this.host.refresh(this.regions ? { mode: this.mode, angle: this.angle }
+      : this.shapeMap ? { mode: "shape", angle: 0 } : null);
   }
 }

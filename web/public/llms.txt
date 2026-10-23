@@ -26,7 +26,11 @@
   base over the washer is made flat: bumps pressed down by up to 1.2 mm, then gaps up to 2.5 mm between the
   underside and the washer filled by a separate solid "flat base" part (main colour; at the default, raised to 4
   or 6 mm when no magnet pocket fits otherwise, e.g. a figure on four thin legs). "Fill where": round the washer
-  (joined to where the figure stands) or only inside a circle the user places and drags under the body. Only
+  (joined to where the figure stands), everywhere under the figure (every part hovering up to the fill height is
+  filled down to the bed), inside a circle the user places and drags, or inside an outline the user draws in the
+  underside view. With the magnets on the washer, each pocket also gets a pad of the same fill (gaps up to the
+  fill height under its walled disc), so the magnet is walled from the washer up; pocket placement counts on
+  the pads. Only
   vertices move, so paint and texture colour are kept. Settings: bend Auto/Off/Slight/Medium/Follow the sphere,
   flat base diameter (default the washer's), press depth, fill height, fill where.
 - Strengthen thin parts (off by default; 1.2 / 1.6 / 2 mm): local thickness is measured at the print size (voxels
@@ -65,6 +69,12 @@
   decimated mesh whose eyes were flattened away has nothing to find). "Prints from" lists every palette colour,
   including ones not painted yet. "Thicken thin parts to" goes up to 4 mm; the underside view shows the gap fill
   (flat base) in its own colour.
+  Soft edges: the wand, brush and stamp (and any step grown or shrunk) paint with a smooth edge cut through the
+  triangles, written as split Bambu paint, so an eye is an oval and not a stepped outline; a later fill bounded
+  by colour fills up to that edge, inside split triangles too. "Stamp": drag a box over a spot and the ellipse
+  in it is painted like a decal on the surfaces facing the view (for eyes a decimated mesh no longer outlines).
+  "Shape map": the figure shaded by its creases (dark) and relief (warm raised, cool sunk) with contour lines of
+  equal relief, drawn per vertex: the structure the wand follows. Grow / Shrink are exact to a few per cent.
   Mirror paints the same spot on the other side too (the figure's mirror plane, found from its shape; asymmetric
   spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
   0.2 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop

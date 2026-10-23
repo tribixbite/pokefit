@@ -32,6 +32,7 @@ already flat needs t ≈ 0 and is left alone.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -67,6 +68,10 @@ class ConformSpec:
     scale: float | None = None      # print scale to design for (None = the largest that fits)
     # The fill over a circle the user placed (x, y, diameter; figure frame, scale 1) instead of the flat disc
     fill_circle: tuple[float, float, float] | None = None
+    # ... or inside an outline the user drew (figure frame, scale 1; first wins of shape, circle, everywhere)
+    fill_shape: tuple[tuple[float, float], ...] | None = None
+    # ... or under the whole figure: every part hovering at most `fill` mm above the bed is filled down to it
+    fill_all: bool = False
 
 
 @dataclass
@@ -257,13 +262,23 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     s_final = s0 if spec.scale else best_scale
     out = parts if best.depth == 0 and info.bend == 0 else _with_vertices(parts, best.v)
     base: Part | None = None
-    if spec.fill_circle is not None and spec.fill > 0 and s_final > 0:
-        cx, cy, d = spec.fill_circle
-        base = base_fill(out, np.array([cx, cy]), d / 2, spec.fill / s_final, FILL_CELL / s_final,
-                         FILL_OVERLAP / s_final, parts[0].extruder, connected=False)
-    elif r_flat > 0 and spec.fill > 0 and s_final > 0:
-        base = base_fill(out, best.axis, r_flat / s_final, spec.fill / s_final, FILL_CELL / s_final,
-                         FILL_OVERLAP / s_final, parts[0].extruder)
+    if spec.fill > 0 and s_final > 0:
+        # A region the user chose fills every gap in it, joined to the figure's footing or not; the default disc
+        # over the washer only the patches joined to where the figure already stands.
+        region: Region | None = None
+        if spec.fill_shape is not None:
+            region = shape_region(spec.fill_shape)
+        elif spec.fill_circle is not None:
+            cx, cy, d = spec.fill_circle
+            region = disc_region([(cx, cy)], d / 2)
+        elif spec.fill_all:
+            region = everywhere
+        if region is not None:
+            base = base_fill(out, region, spec.fill / s_final, FILL_CELL / s_final, FILL_OVERLAP / s_final,
+                             parts[0].extruder, connected=False)
+        elif r_flat > 0:
+            base = base_fill(out, disc_region([tuple(best.axis)], r_flat / s_final), spec.fill / s_final,
+                             FILL_CELL / s_final, FILL_OVERLAP / s_final, parts[0].extruder)
     if base is not None:
         out = [*out, base]
         info.fill_mm2 = float(base.mesh().area_faces[base.mesh().face_normals[:, 2] < -0.9].sum()) * s_final ** 2
@@ -292,15 +307,47 @@ def smooth_outline(px: np.ndarray, py: np.ndarray, walls: list[tuple[int, int]],
     return x, y
 
 
-def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float, cell: float, overlap: float,
+# Which grid cells (centres gx, gy; cell size) a fill may cover: whole cells inside its region.
+Region = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
+
+
+def disc_region(centres: list[tuple[float, float]], radius: float) -> Region:
+    """Cells within `radius` of any of `centres` (the washer's disc, a fill circle, the pads under pockets)."""
+    def inside(gx: np.ndarray, gy: np.ndarray, step: float) -> np.ndarray:
+        out = np.zeros(gx.shape, bool)
+        for cx, cy in centres:
+            out |= np.hypot(gx - cx, gy - cy) <= radius - step / 2
+        return out
+    return inside
+
+
+def shape_region(points: tuple[tuple[float, float], ...] | list[tuple[float, float]]) -> Region:
+    """Cells inside an outline the user drew (a freehand loop may cross itself: its even-odd area counts)."""
+    import shapely
+    from shapely.geometry import Polygon
+
+    poly = shapely.make_valid(Polygon(points))
+
+    def inside(gx: np.ndarray, gy: np.ndarray, step: float) -> np.ndarray:
+        core = poly.buffer(-step / 2) if poly.area > 0 else poly
+        return np.asarray(shapely.contains_xy(core, gx, gy), bool) if not core.is_empty else np.zeros(gx.shape, bool)
+    return inside
+
+
+def everywhere(gx: np.ndarray, gy: np.ndarray, step: float) -> np.ndarray:
+    """No limit: every cell under the figure (gaps under it up to the fill height)."""
+    return np.ones(gx.shape, bool)
+
+
+def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, overlap: float,
               extruder: int, connected: bool = True) -> Part | None:
-    """A solid filling the gap between the bed and the figure's underside over the disc round `axis`.
+    """A solid filling the gap between the bed and the figure's underside over `region`.
 
     Built on a coarse grid (`cell`) from the underside height field: flat bottom at z = 0, top at
     the underside (the lowest point in each cell) + `overlap`, vertical walls round its outline.
     Only cells where the gap is at most `max_gap` and fully under the figure are filled, and with
     `connected` only those joined to where the figure already touches the bed (or the largest
-    patch); a circle the user placed (`connected=False`) fills all of them. Unit-scale frame.
+    patch); a region the user chose (`connected=False`) fills all of them. Unit-scale frame.
     """
     from scipy import ndimage
 
@@ -325,7 +372,7 @@ def base_fill(parts: list[Part], axis: np.ndarray, radius: float, max_gap: float
     xs = field.x0 + (np.arange(cx) * b + (b - 1) / 2) * field.step
     ys = field.y0 + (np.arange(cy) * b + (b - 1) / 2) * field.step
     gx, gy = np.meshgrid(xs, ys)
-    inside = np.hypot(gx - axis[0], gy - axis[1]) <= radius - step / 2
+    inside = region(gx, gy, step)
     mask = ndimage.binary_opening(under & inside & (zmin <= max_gap))
     if not mask.any():
         return None

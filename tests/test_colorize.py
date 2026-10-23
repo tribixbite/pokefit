@@ -8,7 +8,7 @@ import trimesh
 from conftest import BALL_3MF, two_footed, write_inline_3mf
 from pokefit.colorize import PaintOp, TopologyCache, apply_paint, paint_code, pick_face, region_faces, topology
 from pokefit.model3mf import Part, read_project
-from pokefit.paint import decode_majority
+from pokefit.paint import attr_paint, decode_majority, leaves, parse_tree
 from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, export, open_session, pick, preview_faces, preview_glb
 from pokefit.slicer import resize_filaments
 
@@ -105,7 +105,11 @@ def test_a_fill_stops_at_a_painted_outline_and_a_stroke_has_no_gaps() -> None:
     assert len(filled) and np.hypot(c[filled, 0], c[filled, 1]).max() < 5 and c[filled, 2].min() > 0
     assert sum(1 for s in states.values() if s == 2) > 0       # the outline keeps its own colour
     (erased,) = apply_paint([part], [outline, fill, PaintOp(0, top, 0, "part")], topo)
-    assert sum(1 for a in erased.tri_extra.values() if "paint_color" in a) == sum(1 for s in states.values() if s == 2)
+    # The fill is gone and the outline (its soft edge: triangles split along it) is as it was.
+    held = {i: attr_paint(a).states for i, a in erased.tri_extra.items() if attr_paint(a) is not None}
+    before = {i: attr_paint(a).states for i, a in out.tri_extra.items() if attr_paint(a) is not None}
+    assert held and all(3 not in st for st in held.values())
+    assert {i for i, st in held.items() if 2 in st} == {i for i, st in before.items() if 2 in st}
     # Without the joins a 24-point stroke leaves gaps and the fill leaks over the whole sphere.
     assert PaintOp.from_dict(outline.to_dict()) == outline
     with pytest.raises(ValueError):
@@ -254,21 +258,36 @@ def test_fill_stops_only_at_colour() -> None:
     assert {round(float(n), 3) for n in box.face_normals[filled][:, 0]} >= {-1.0, 0.0, 1.0}
 
 
-def test_grow_and_shrink_move_the_edge_along_the_surface() -> None:
+def _painted_area(out: Part, state: int) -> float:
+    """Area (mm²) painted `state`, split paint counted by its sub-triangles."""
+    total = 0.0
+    for i, a in out.tri_extra.items():
+        fp = attr_paint(a)
+        if fp is None:
+            continue
+        for tri, st in leaves(parse_tree(fp.code), list(out.vertices[out.faces[i]])):
+            if st == state:
+                total += float(np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0]))) / 2
+    return total
+
+
+def test_grow_and_shrink_move_a_soft_edge_exactly() -> None:
+    """A brush dab of 3 mm on a 10 mm sphere covers a cap of pi r² (r measured straight from its centre); grown by
+    1 mm it is 4 mm, shrunk 2 mm. The edge cuts through triangles, so the areas match to a few per cent."""
     ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
     part = _part(ball)
     topo = TopologyCache([part])
     top = _face_at(part, [0, 0, 10], [0, 0, 1])
-    dab = topo.part(0).brush([top], 3.0)
-    big = topo.part(0).grown(dab, 1.0)
-    small = topo.part(0).grown(dab, -1.0)
-    c = ball.triangles_center
-    rad = lambda f: float(np.hypot(c[f, 0], c[f, 1]).max())                    # noqa: E731
-    assert set(dab.tolist()) < set(big.tolist()) and set(small.tolist()) < set(dab.tolist())
-    # Steps between triangle centres zigzag a little, so the band is up to ~15 % narrower than asked.
-    assert 3.6 < rad(big) < 4.4 and 1.6 < rad(small) < 2.6 and 2.6 < rad(dab) < 3.2
-    (out,) = apply_paint([part], [PaintOp(0, top, 2, "brush", radius=3.0, grow=1.0)], topo)
-    assert len(_states(out)) == len(big)
+    for grow, r in ((0.0, 3.0), (1.0, 4.0), (-1.0, 2.0)):
+        (out,) = apply_paint([part], [PaintOp(0, top, 2, "brush", radius=3.0, grow=grow)], topo)
+        assert _painted_area(out, 2) == pytest.approx(np.pi * r * r, rel=0.03)
+    # Growing a region found from the shape (a crease-bounded box face) moves its edge the same way.
+    box = trimesh.creation.box([10, 10, 10]).subdivide_to_size(0.5)
+    bp = _part(box)
+    bt = TopologyCache([bp])
+    f = _face_at(bp, [0, 0, 5], [0, 0, 1])
+    (grown,) = apply_paint([bp], [PaintOp(0, f, 2, "region", 30, grow=1.0)], bt)
+    assert _painted_area(grown, 2) == pytest.approx(100 + 4 * 10 * 1.0, rel=0.04)    # the top and 1 mm down its sides
     assert PaintOp.from_dict(PaintOp(0, 1, 2, grow=-0.5).to_dict()).grow == -0.5
     assert "grow" not in PaintOp(0, 1, 2).to_dict() and "mirror" not in PaintOp(0, 1, 2).to_dict()
     with pytest.raises(ValueError):
@@ -318,9 +337,9 @@ def test_specks_take_the_colour_round_them() -> None:
     side = _face_at(part, [10, 0, 0], [1, 0, 0])
     ops = [PaintOp(0, top, 2, "brush", radius=0.4), PaintOp(0, side, 3, "brush", radius=3.0)]
     (kept,) = apply_paint([part], ops, topo)
-    assert set(_states(kept).values()) == {2, 3}
+    assert {2, 3} <= set(_states(kept).values()) <= {0, 2, 3}           # 0: edge triangles mostly unpainted
     (clean,) = apply_paint([part], ops, topo, min_area=2.0)                  # the 0.4 mm dab is ~0.5 mm²
-    assert set(_states(clean).values()) == {3}
+    assert 2 not in set(_states(clean).values()) and 3 in set(_states(clean).values())
     # A speck of the part's own colour inside paint is filled in too.
     hole = [PaintOp(0, side, 3, "brush", radius=3.0), PaintOp(0, side, 0, "face")]
     (filled,) = apply_paint([part], hole, topo, min_area=2.0)
@@ -424,3 +443,78 @@ def test_wand_takes_a_flame_off_its_tail() -> None:
     reg = topo.part(0).wand(f)
     z = m.triangles_center[reg][:, 2]
     assert z.min() > 4.0 and len(reg) > 0.5 * (m.triangles_center[:, 2] > 5.5).sum()
+
+
+def test_a_stamp_paints_an_ellipse_across_big_triangles() -> None:
+    """A decal on a coarse box face (two triangles per side): the painted area is the ellipse's, pi a b, cut through
+    the triangles; nothing on the sides it does not face."""
+    box = trimesh.creation.box([20, 20, 20])
+    part = _part(box)
+    topo = TopologyCache([part])
+    f = _face_at(part, [1.0, 1.0, 10.0], [0, 0, 1])
+    stamp = (1.0, 1.0, 10.0, 4.0, 0.0, 0.0, 0.0, 2.5, 0.0)                    # 4 x 2.5 mm semi-axes, seen from +z
+    (out,) = apply_paint([part], [PaintOp(0, f, 2, "stamp", stamp=stamp)], topo)
+    assert _painted_area(out, 2) == pytest.approx(np.pi * 4.0 * 2.5, rel=0.03)
+    painted = [i for i, a in out.tri_extra.items() if 2 in attr_paint(a).states]
+    assert all(box.face_normals[i][2] > 0.99 for i in painted)
+    op = PaintOp(0, f, 2, "stamp", stamp=stamp, grow=0.5)
+    assert PaintOp.from_dict(op.to_dict()) == op
+    (grown,) = apply_paint([part], [op], topo)
+    assert _painted_area(grown, 2) == pytest.approx(np.pi * 4.5 * 3.0, rel=0.03)
+    with pytest.raises(ValueError, match="stamp"):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "stamp"})
+    with pytest.raises(ValueError, match="right angles"):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "stamp", "stamp": [0, 0, 0, 1, 0, 0, 1, 1, 0]})
+
+
+def test_a_soft_edge_fill_stops_at_an_earlier_soft_edge() -> None:
+    """A brush dab painted soft, then the wand / bucket of the surrounding colour: the second paint fills up to the
+    first one's curved edge, inside split triangles too, and never over it."""
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    dab = PaintOp(0, top, 2, "brush", radius=2.5)
+    (one,) = apply_paint([part], [dab], topo)
+    side = _face_at(part, [10, 0, 0], [1, 0, 0])
+    (two,) = apply_paint([part], [dab, PaintOp(0, side, 3, "fill")], topo)
+    assert _painted_area(two, 2) == pytest.approx(_painted_area(one, 2), rel=1e-9)        # the dab untouched
+    total = float(ball.area)
+    assert _painted_area(two, 3) + _painted_area(two, 2) == pytest.approx(total, rel=0.002)  # the rest, all of it
+
+
+def test_the_shape_map_marks_creases_and_relief() -> None:
+    """A ball with a bump and a dent: the bump reads raised, the dent sunk, smooth surface level; the dent's rim
+    is a crease (a valley), the smooth surface is not."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    bump = trimesh.creation.icosphere(subdivisions=3, radius=2.0).apply_translation([0, 0, 10.8])
+    dent = trimesh.creation.icosphere(subdivisions=3, radius=2.0).apply_translation([10.8, 0, 0])
+    m = trimesh.boolean.difference([trimesh.boolean.union([ball, bump], engine="manifold"), dent], engine="manifold")
+    part = _part(m)
+    t = TopologyCache([part]).part(0)
+    sm = t.shape_map().astype(float)
+    v = t.verts
+    top = (np.hypot(v[:, 0], v[:, 1]) < 0.8) & (v[:, 2] > 11)
+    pit = (np.hypot(v[:, 1], v[:, 2]) < 0.8) & (v[:, 0] > 8) & (v[:, 0] < 9.6)
+    plain = np.abs(v[:, 1]) > 9.0
+    assert sm[top, 1].mean() > sm[plain, 1].mean() + 25 and sm[pit, 1].mean() < sm[plain, 1].mean() - 25
+    rim = (np.abs(np.hypot(v[:, 1], v[:, 2]) - 1.5) < 0.4) & (v[:, 0] > 9)
+    assert sm[rim, 0].mean() > sm[plain, 0].mean() + 40
+
+
+def test_the_mirror_plane_prefers_an_upright_one() -> None:
+    """An egg lying on its side mirrors across a level plane and, nearly as well, an upright one: with the figure's
+    up given, the upright plane is taken."""
+    from pokefit.colorize import mirror_plane, surface_points
+
+    egg = trimesh.creation.icosphere(subdivisions=4, radius=1.0)
+    egg.apply_scale([10.0, 6.0, 5.0])
+    bump = trimesh.creation.icosphere(subdivisions=2, radius=0.8).apply_translation([3.0, 6.0, 0.0])
+    m = trimesh.boolean.union([egg, bump], engine="manifold")      # breaks the x = 0 and y = 0 planes only
+    rng = np.random.default_rng(1)
+    tri = m.triangles
+    pts, dense = surface_points(tri, 3000, rng), surface_points(tri, 150_000, rng)
+    plain = mirror_plane(pts, dense)
+    assert abs(plain.normal[2]) > 0.95                                 # level (z = 0) is the best fit
+    upright = mirror_plane(pts, dense, up=np.array([0.0, 0.0, 1.0]))
+    assert abs(upright.normal[2]) < 0.3 and upright.error <= 1.5 * plain.error + 1e-9 or upright.normal[2] > 0.95

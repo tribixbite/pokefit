@@ -16,7 +16,7 @@ const REMEMBERED = {
   figure_height: "number|null", magnets: "number", pocket_diameter: "number", pocket_depth: "number",
   pocket_wall: "number", pocket_ceiling: "number", pocket_grip: "number", pocket_max_seat: "number",
   pocket_seat: "string", settings_source: "string", bend: "number|null", flat_base: "number|null",
-  flat_depth: "number", flat_fill: "number", paint_depth: "number|null", strengthen: "number",
+  flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null", strengthen: "number",
   simplify: "number|null", despeckle: "number",
 } as const satisfies Partial<Record<keyof Params, string>>;
 

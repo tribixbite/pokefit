@@ -8,7 +8,7 @@ import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import type {
-  AmsSlot, Check, Config, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
+  AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
 } from "./types";
 import { browserStore, clearPrefs, readPrefs, REMEMBERED_KEYS, writePrefs } from "./prefs";
 import { UndersideEditor } from "./underside";
@@ -34,7 +34,7 @@ let defaults: Params = {
   rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
   pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
   pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, paint_depth: null,
+  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "washer", fill_shape: null, paint_depth: null,
   filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5,
 };
@@ -63,6 +63,15 @@ const underside = new UndersideEditor($("underside"), (pockets) => {
   state.params.fill_circle = { ...fc, x: +(c.x / s).toFixed(4), y: +(c.y / s).toFixed(4) };
   state.params.pockets = null;
   void runAnalyse();
+}, (pts) => {
+  // A drawn fill outline, kept at scale 1 like the circle.
+  const s = state.report?.fit.scale;
+  if (!s) return;
+  state.params.fill_shape = pts.map((p) => [+(p.x / s).toFixed(4), +(p.y / s).toFixed(4)]);
+  state.params.fill_area = "shape";
+  state.params.pockets = null;
+  syncFillCircle();
+  void runAnalyse();
 });
 /** Paint/colours changed since the last analysis (its import-file colour map is stale). */
 let paintDirty = false;
@@ -74,12 +83,14 @@ const colorize = new ColorizePanel({
   refresh: async (regions) => {
     if (await refreshFigure(regions) && state.report) viewer.update(state.report, state.focus);
   },
-  pick: (hit, mode, angle, radius, stroke, mirror) =>
+  pick: (hit, mode, angle, radius, stroke, mirror, stampAxes) =>
     api.pick(state.session ?? "", state.params, { point: hit.point, normal: hit.normal, mode, angle, radius,
-      ...(stroke?.length ? { stroke } : {}), ...(mirror ? { mirror } : {}) }),
+      ...(stroke?.length ? { stroke } : {}), ...(mirror ? { mirror } : {}),
+      ...(stampAxes ? { stamp_axes: stampAxes } : {}) }),
   prepare: (mode, angle, mirror) => api.preparePaint(state.session ?? "", state.params, { mode, angle, mirror }),
   setPicking: (fn) => viewer.setPickHandler(fn),
   setStroking: (fn) => viewer.setStrokeHandler(fn),
+  setStamping: (fn) => viewer.setStampHandler(fn),
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
   // A colour edit only re-runs the colour part of the analysis (shape work is cached): quick enough to do at once,
@@ -287,7 +298,8 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
   busy(true, `Loading ${name}…`);
   const fresh: Params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
-    fill_circle: null };
+    // A circle or outline belongs to the last figure; filling everywhere is a preference.
+    fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "washer" };
   try {
     const res = await fn(fresh);
     state.session = res.session;
@@ -365,7 +377,7 @@ async function showFigure(session: string, regions: RegionView | null, overlay: 
 function geometryKey(): string {
   const p = state.params;
   return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
-    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.fill_circle, p.ball_scale, p.ball_diameter,
+    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.fill_area, p.fill_circle, p.fill_shape, p.ball_scale, p.ball_diameter,
     p.clearance, p.strengthen, p.strengthen ? p.figure_height : null, p.simplify]);
 }
 let shownGeometry = "";
@@ -401,13 +413,31 @@ function syncControls(): void {
   syncFillCircle();
 }
 
-/** The "Fill where" controls from `state.params.fill_circle` (its Ø shown at the print size). */
+/** The "Fill where" controls from `state.params` (the circle's Ø shown at the print size). */
 function syncFillCircle(): void {
-  const fc = state.params.fill_circle;
-  $<HTMLSelectElement>("fillWhere").value = fc ? "circle" : "auto";
+  const p = state.params;
+  const drawing = underside.drawing;
+  $<HTMLSelectElement>("fillWhere").value = drawing ? "shape" : p.fill_area;
+  const fc = p.fill_area === "circle" ? p.fill_circle : null;
   $("fillCircleRow").hidden = !fc;
+  $("fillShapeRow").hidden = !(drawing || p.fill_area === "shape");
+  const draw = $("fillDraw");
+  draw.setAttribute("aria-pressed", String(drawing));
+  draw.textContent = drawing ? "Drag round the area below…" : p.fill_shape ? "Draw it again" : "Draw the outline";
   const s = state.report?.fit.scale;
   if (fc && s) $<HTMLInputElement>("fillCircleD").value = (fc.d * s).toFixed(1);
+}
+
+/** Start (or stop) drawing the gap fill's outline in the underside view, which is shown and scrolled to. */
+function drawFillShape(on: boolean): void {
+  underside.setDrawing(on);
+  const u = $("underside");
+  if (on) {
+    u.hidden = false;
+    u.scrollIntoView({ block: "center", behavior: "smooth" });
+    toast("Drag round the area to fill in the underside view; let go to close the outline.");
+  }
+  syncFillCircle();
 }
 
 async function runAnalyse(): Promise<void> {
@@ -538,15 +568,18 @@ function renderMagnets(rep: Report): void {
   document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
     b.setAttribute("aria-checked", String(b.dataset.seat === rep.params.pocket_seat)));
   $("seatHint").textContent = raised
-    ? "Under a part that floats above the bed, the pocket opening moves up into it: the magnet is hidden but sits above the steel, so it holds less."
-    : "Every magnet rests on the washer. Under a part that floats above the bed, the pocket only goes as far into it as the magnet reaches, and the magnet shows below it.";
+    ? "Where the figure floats above the bed, that pocket's opening moves up into it, each only as far as its own spot needs (one over the flat base stays on the washer): the magnet is hidden but sits above the steel, so it holds less."
+    : "Every magnet rests on the washer. Gaps under the figure up to the “Fill gaps” height are filled round each magnet, so it is walled from the washer up; where the figure floats higher, the magnet's lower side shows.";
   $<HTMLInputElement>("pkMaxSeat").disabled = !raised;
   $("maxSeatLabel").classList.toggle("off", !raised);
   for (const e of [$("seatMode").closest<HTMLElement>(".seat-row"), $("seatHint")]) if (e) e.hidden = n === 0;
-  const fc = rep.params.fill_circle;
+  const area = rep.params.fill_area ?? (rep.params.fill_circle ? "circle" : "washer");
+  const fc = area === "circle" ? rep.params.fill_circle : null;
+  const shape = area === "shape" ? rep.params.fill_shape : null;
   const s = rep.fit.scale;
-  $("underside").hidden = n === 0 && !fc;
-  underside.render(rep.underside, rep.pockets, fc && s ? { x: fc.x * s, y: fc.y * s, r: (fc.d / 2) * s } : null);
+  $("underside").hidden = n === 0 && !fc && !shape && !underside.drawing;
+  underside.render(rep.underside, rep.pockets, fc && s ? { x: fc.x * s, y: fc.y * s, r: (fc.d / 2) * s } : null,
+    shape && s ? shape.map(([x, y]) => ({ x: x * s, y: y * s })) : null);
   syncFillCircle();
   $("pocketInfo").textContent = !n ? "no magnets" : rep.params.pockets ? "placed by hand"
     : rep.pockets.length ? "automatic" : "";
@@ -578,8 +611,8 @@ function renderMagnets(rep: Report): void {
   $("pocketList").replaceChildren(...rep.pockets.map((p, i) => {
     const c = rep.checks.find((x) => x.id === `pocket:${i + 1}`);
     let seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
-    const shows = c?.message.match(/shows up to ([\d.]+) mm/);
-    const short = c?.message.match(/Only ([\d.]+) mm of the pocket is walled/);
+    const shows = c?.message.match(/up to ([\d.]+) mm above the washer here/);
+    const short = c?.message.match(/only ([\d.]+) mm of the magnet is walled/);
     if (short) seat += ` · only ${short[1]} mm walled, glue it`;
     else if (shows) seat += ` · shows ${shows[1]} mm`;
     return h("li", { cls: c?.status ?? "" }, h("span", { cls: "n", textContent: String(i + 1) }),
@@ -1053,29 +1086,37 @@ function bind(): void {
   });
   // Fill where: round the washer (automatic) or a circle the user places under the body.
   $<HTMLSelectElement>("fillWhere").addEventListener("change", (e) => {
-    const circle = (e.target as HTMLSelectElement).value === "circle";
+    const area = (e.target as HTMLSelectElement).value as FillArea;
     const rep = state.report;
-    if (circle && !rep) {
-      toast("Open a figure first: the circle is placed under it.");
+    const placed = area === "circle" || area === "shape";
+    if (placed && !rep) {
+      toast(`Open a figure first: the ${area} is placed under it.`);
       syncFillCircle();
       return;
     }
-    if (circle && rep) {
+    if (area !== "washer" && state.params.flat_fill <= 0) {
+      state.params.flat_fill = 2.5;
+      $<HTMLInputElement>("flatFill").value = "2.5";
+      toast("Fill gaps up to was 0 mm (nothing filled): set to 2.5 mm.");
+    }
+    if (area === "shape" && !state.params.fill_shape) {
+      drawFillShape(true);       // analysed once the outline is drawn
+      return;
+    }
+    underside.setDrawing(false);
+    if (area === "circle" && rep && !state.params.fill_circle) {
       const s = rep.fit.scale || rep.fit.max_scale;
       const d = state.params.flat_base ?? rep.ball.washer.od;
       // Starts centred on the washer, as wide as the flat base.
       state.params.fill_circle = { x: +(rep.underside.ring.x / s).toFixed(4), y: +(rep.underside.ring.y / s).toFixed(4),
         d: +(d / s).toFixed(4) };
-      if (state.params.flat_fill <= 0) {
-        state.params.flat_fill = 2.5;
-        $<HTMLInputElement>("flatFill").value = "2.5";
-        toast("Fill gaps up to was 0 mm (nothing filled): set to 2.5 mm.");
-      }
-    } else state.params.fill_circle = null;
+    }
+    state.params.fill_area = area;
     state.params.pockets = null;
     syncFillCircle();
     void runAnalyse();
   });
+  $("fillDraw").addEventListener("click", () => drawFillShape(!underside.drawing));
   $<HTMLInputElement>("fillCircleD").addEventListener("change", (e) => {
     const mm = +(e.target as HTMLInputElement).value;
     const fc = state.params.fill_circle;

@@ -3,6 +3,7 @@
  * draggable magnet pockets. Shows the underside heights (dark = on the bed,
  * lighter = higher), the outline of what touches the bed, where a pocket centre
  * keeps its walls (green), and the washer's steel ring as the ball will hold it.
+ * The gap fill's circle can be dragged, and its outline drawn freehand (`setDrawing`).
  */
 import { bounds, insideRings, onSteel } from "./geometry";
 import type { Underside } from "./types";
@@ -14,6 +15,10 @@ const CIRCLE = -2;
 export type Pocket = { x: number; y: number };
 /** The flat base's fill circle as drawn: centre and radius in final mm (figure frame). */
 export type FillCircle = { x: number; y: number; r: number };
+/** A drawn outline's points are kept at least this far apart (mm). */
+const DRAW_STEP = 0.25;
+/** ...and at most this many (the engine's limit is 400). */
+const MAX_POINTS = 300;
 
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
   const e = document.createElementNS(NS, tag);
@@ -30,23 +35,44 @@ export class UndersideEditor {
   private data: Underside | null = null;
   private pockets: Pocket[] = [];
   private circle: FillCircle | null = null;
+  private shape: Pocket[] | null = null;
   /** Pocket index being dragged, CIRCLE for the fill circle, -1 = none. */
   private dragging = -1;
+  /** Drawing the fill outline: the next drag on the view draws it. */
+  private drawMode = false;
+  /** The outline being drawn (figure frame, final mm) and its line on screen. */
+  private drawn: Pocket[] | null = null;
+  private drawLine: SVGPolylineElement | null = null;
+  private group: SVGGElement | null = null;
 
-  /** `onChange` fires when a pocket drag ends, with all pocket positions; `onCircle` when the fill circle moved. */
+  /** `onChange` fires when a pocket drag ends, with all pocket positions; `onCircle` when the fill circle moved;
+   * `onShape` when a fill outline was drawn (final mm, figure frame). */
   constructor(host: HTMLElement, private onChange: (p: Pocket[]) => void,
-              private onCircle: (c: Pocket) => void = () => undefined) {
+              private onCircle: (c: Pocket) => void = () => undefined,
+              private onShape: (points: Pocket[]) => void = () => undefined) {
     this.svg = el("svg", { class: "underside", role: "img", "aria-label": "Figure underside with magnet pockets" });
     host.appendChild(this.svg);
+    this.svg.addEventListener("pointerdown", (e) => this.startDraw(e));
     this.svg.addEventListener("pointermove", (e) => this.move(e));
     this.svg.addEventListener("pointerup", (e) => this.drop(e));
     this.svg.addEventListener("pointercancel", (e) => this.drop(e));
   }
 
-  render(data: Underside, pockets: Pocket[], circle: FillCircle | null = null): void {
+  /** Draw mode on/off: a drag on the view then draws the gap fill's outline (released = closed). */
+  setDrawing(on: boolean): void {
+    this.drawMode = on;
+    this.svg.classList.toggle("drawing", on);
+  }
+
+  get drawing(): boolean {
+    return this.drawMode;
+  }
+
+  render(data: Underside, pockets: Pocket[], circle: FillCircle | null = null, shape: Pocket[] | null = null): void {
     this.data = data;
     this.pockets = pockets.map((p) => ({ ...p }));
     this.circle = circle ? { ...circle } : null;
+    this.shape = shape ? shape.map((p) => ({ ...p })) : null;
     const s = this.svg;
     s.replaceChildren();
     const ring = data.ring;
@@ -55,6 +81,7 @@ export class UndersideEditor {
       [ring.x + ring.outer, ring.y + ring.outer],
       ...pockets.map((p) => [p.x, p.y]),
       ...(circle ? [[circle.x - circle.r, circle.y - circle.r], [circle.x + circle.r, circle.y + circle.r]] : []),
+      ...(shape ?? []).map((p) => [p.x, p.y]),
     ];
     const ext = data.extent;
     const [x0, y0, x1, y1] = bounds(data.feet, [...extra, [ext[0], ext[1]], [ext[2], ext[3]]]);
@@ -64,6 +91,7 @@ export class UndersideEditor {
     s.setAttribute("viewBox", `${-(x1 + pad)} ${-(y1 + pad)} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`);
     const g = el("g", { transform: "scale(-1,-1)" });
     s.appendChild(g);
+    this.group = g;
 
     // Height image: row 0 is the grid's lowest y, which this mirrored group draws at the bottom.
     g.appendChild(el("image", { href: data.height_png, x: ext[0], y: ext[1], width: ext[2] - ext[0],
@@ -87,6 +115,11 @@ export class UndersideEditor {
       });
       c.addEventListener("keydown", (e) => this.nudge(e, CIRCLE));
       g.appendChild(c);
+    }
+
+    if (this.shape) {
+      g.appendChild(el("polygon", { points: this.shape.map((p) => `${p.x},${p.y}`).join(" "), class: "u-fill u-shape",
+        "aria-label": "Gap fill outline" }));
     }
 
     this.pockets.forEach((p, i) => {
@@ -121,7 +154,26 @@ export class UndersideEditor {
     return { x: -pt.x, y: -pt.y };
   }
 
+  /** In draw mode, a press on the view (not on a pocket or the circle) starts the outline. */
+  private startDraw(e: PointerEvent): void {
+    if (!this.drawMode || this.dragging !== -1 || !this.group) return;
+    this.drawn = [this.toFigure(e)];
+    this.drawLine = el("polyline", { points: "", class: "u-fill u-drawing" });
+    this.group.appendChild(this.drawLine);
+    try { this.svg.setPointerCapture(e.pointerId); } catch { /* synthetic events have no capturable pointer */ }
+    e.preventDefault();
+  }
+
   private move(e: PointerEvent): void {
+    if (this.drawn && this.drawLine) {
+      const p = this.toFigure(e);
+      const last = this.drawn[this.drawn.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= DRAW_STEP) {
+        this.drawn.push(p);
+        this.drawLine.setAttribute("points", this.drawn.map((q) => `${q.x},${q.y}`).join(" "));
+      }
+      return;
+    }
     if (this.dragging === CIRCLE && this.circle) {
       const p = this.toFigure(e);
       this.circle = { ...this.circle, x: p.x, y: p.y };
@@ -146,7 +198,19 @@ export class UndersideEditor {
     }
   }
 
-  private drop(_e: PointerEvent): void {
+  private drop(e: PointerEvent): void {
+    if (this.drawn) {
+      const pts = this.drawn;
+      this.drawn = null;
+      if (e.type === "pointerup") pts.push(this.toFigure(e));
+      this.drawLine?.remove();
+      this.drawLine = null;
+      if (pts.length >= 3 && Math.abs(polygonArea(pts)) >= 1) {
+        this.setDrawing(false);
+        this.onShape(thin(pts, MAX_POINTS).map((p) => ({ x: +p.x.toFixed(3), y: +p.y.toFixed(3) })));
+      }
+      return;
+    }
     if (this.dragging === CIRCLE && this.circle) {
       this.dragging = -1;
       this.onCircle({ x: +this.circle.x.toFixed(3), y: +this.circle.y.toFixed(3) });
@@ -173,4 +237,20 @@ export class UndersideEditor {
     this.pockets[i] = { x: this.pockets[i].x + v[0], y: this.pockets[i].y + v[1] };
     this.onChange(this.pockets.map((p) => ({ x: +p.x.toFixed(3), y: +p.y.toFixed(3) })));
   }
+}
+
+/** Shoelace area of a closed outline (mm²; the sign gives its direction). */
+export function polygonArea(pts: Pocket[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
+/** At most `n` of `pts`, evenly spaced along the list (a long slow drag records many). */
+export function thin(pts: Pocket[], n: number): Pocket[] {
+  if (pts.length <= n) return pts;
+  return Array.from({ length: n }, (_, i) => pts[Math.floor((i * pts.length) / n)]);
 }

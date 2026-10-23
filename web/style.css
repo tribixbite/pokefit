@@ -148,6 +148,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 /* The fill circle: an outline (filled, it read as a shadow over the map); the transparent fill keeps it draggable. */
 .u-fill { fill: rgba(255, 179, 71, 0); stroke: #ffb347; stroke-width: .25; stroke-dasharray: .8 .5; cursor: grab; }
 .u-fill:focus { outline: none; stroke: #6aa8ff; }
+.u-shape { cursor: default; pointer-events: none; }
+.u-drawing { stroke: #6aa8ff; stroke-dasharray: none; fill: none; pointer-events: none; }
+svg.underside.drawing { cursor: crosshair; touch-action: none; }
 .u-pocket.ok { fill: rgba(255, 255, 255, .85); stroke: #fff; }
 .u-pocket.bad { fill: rgba(255, 77, 94, .85); stroke: #fff; }
 .u-pocket:focus { outline: none; stroke: #6aa8ff; stroke-width: .4; }
@@ -219,6 +222,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; to
 .seg button { background: transparent; color: var(--text); border: 0; padding: 6px 12px; min-width: 40px; min-height: 34px; font: inherit; cursor: pointer; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-checked="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+/* Paint modes: seven of them wrap to a second line on a phone instead of widening the page. */
+#paintMode { display: flex; flex-wrap: wrap; max-width: 100%; }
+#paintMode button { flex: 1 1 auto; border-bottom: 1px solid var(--line); margin-bottom: -1px; }
 
 .pocket-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
 .pocket-list li { display: flex; gap: 8px; align-items: baseline; }
@@ -374,3 +380,5 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .print-check { font-size: 13px; display: grid; gap: 4px; }
 .print-check .warn-text { color: var(--warn); }
 .linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+/* Colorize stamp: the box being dragged, its ellipse shown inside. */
+.stamp-box { position: absolute; pointer-events: none; border: 2px dashed #6aa8ff; border-radius: 50%; background: rgba(106, 168, 255, .12); z-index: 5; }

@@ -22,7 +22,9 @@ triangles around it that its mode selects:
     triangle, or of any triangle on its `path` (a stroke dragged across the
     figure): spots, stripes and outlines on a smooth sculpt that has no edge
     to follow;
-  * "face": that triangle only.
+  * "face": that triangle only;
+  * "stamp": an ellipse laid on the surface like a decal (dragged on the view), for an eye or a spot the shape
+    does not outline (a decimated mesh whose eye creases were flattened away).
 
 "part" and "region" fills also stop where the visible colour changes (bucket
 fill): a sculpt whose eyes or belly have no crease all the way round (a
@@ -33,24 +35,29 @@ Any operation can also
   * `mirror`: paint the same spot on the other side of the figure, across its
     plane of mirror symmetry (found from the shape: `MirrorPlane`), so both
     eyes, cheeks or paws take one tap or one stroke;
-  * `grow`: widen (mm > 0) or narrow (mm < 0) the painted area along the
-    surface: an eye fill that stops short of its socket's rim grows into it.
+  * `grow`: widen (mm > 0) or narrow (mm < 0) the painted area: an eye fill
+    that stops short of its socket's rim grows into it.
+
+The wand, brush and stamp (and anything grown) paint with a soft edge: a
+smooth line through the triangles (`Field`), written as split paint, so an
+eye is an oval and not the stepped outline of the triangles it covers.
 
 `despeckle` (run after all operations) gives a painted patch smaller than a
 set area the colour around it: a stray dab on a claw would otherwise cost a
 filament change on every layer it spans.
 
 Filament 0 removes paint (the part's own filament prints there). The result
-is written as Bambu/Prusa per-triangle paint (`paint_color`, whole-triangle
-states), so it opens in Bambu Studio as ordinary painted colour and survives
-the pocket cut (`remesh_part` carries per-triangle attributes over).
+is written as Bambu/Prusa per-triangle paint (`paint_color`: whole-triangle
+states, split triangles along soft edges), so it opens in Bambu Studio as
+ordinary painted colour and survives the pocket cut (`remesh_part` carries
+per-triangle attributes over, split paint remapped).
 """
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import trimesh
@@ -59,7 +66,7 @@ from scipy.sparse.csgraph import connected_components
 
 from .model3mf import Part
 
-MODES = ("wand", "part", "region", "piece", "fill", "brush", "face")
+MODES = ("wand", "part", "region", "piece", "fill", "brush", "face", "stamp")
 DEFAULT_ANGLE = 15.0        # degrees; "part" mode (Bambu's smart fill, the "region" rule, defaults to 30)
 MAX_PATH = 4000             # triangles on one brush stroke's path
 MAX_GROW = 20.0             # mm (file units): the most an operation's area grows or shrinks
@@ -93,9 +100,19 @@ MIRROR_KEEP = 0.75          # the score averages the best-matching 75 % of point
 MIRROR_STARTS = 4           # directions refined
 MIRROR_APART = 15.0         # ... at least this many degrees apart
 MIRROR_MAX_ERROR = 0.01     # a mirror plane fits if reflected points land this close (share of the size) on average
+MIRROR_LEVEL = 0.3          # a plane whose normal is this close to level (|n . up|) is upright
+MIRROR_UPRIGHT = 1.5        # ... and wins over a better plane that is not, if no more than this much worse
 MIRROR_MISS = 0.04          # ... and a mirrored spot within this share of the size of the surface
 _FILL_CACHE = 64            # colour-bounded fills kept per object (keyed by the paint state they saw)
 _PAINT_RE = re.compile(r'\s*paint_color="[^"]*"')
+BIG = 1e9                   # `Field.phi` far from the edge (inside: -BIG)
+SOFT_DEPTH = 4              # split levels below a triangle a soft edge is drawn to (1/16 of its sides)
+MAX_SOFT_DEPTH = 8          # ... at most, for a stamp much smaller than its triangles (1/256)
+STAMP_FACING = 0.35         # a stamp paints triangles turned less than ~70 degrees from the view
+STAMP_STEPS = 24            # a stamp's edge is drawn in sub-triangles at most 1/24 of its smaller semi-axis
+WAND_SMOOTH = 4             # wand: averaging passes rounding its triangle-stepped outline (`Topology.outline`)
+SHAPE_SCALE = 0.05          # "Shape map": relief is height over the surface smoothed over this share of the size
+SHAPE_PASSES = 400          # ... in at most this many averaging passes (a dense mesh is smoothed less far)
 
 
 @dataclass(frozen=True)
@@ -110,13 +127,17 @@ class PaintOp:
     mirror: bool = False      # also paint the mirror image across the figure's symmetry plane
     grow: float = 0.0         # widen (> 0) or narrow (< 0) the painted area by this many mm (file units)
     level: int = 0            # "wand": 0 its best answer, -1 / +1 the next smaller / larger (Topology.wand)
+    # "stamp": an ellipse laid on the surface like a decal, (centre, semi-axis u, semi-axis v) as 9 numbers in the
+    # topology's frame (file mm; `Topology.stamp_field`); `face` is the triangle under its centre.
+    stamp: tuple[float, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PaintOp":
         op = cls(int(d["part"]), int(d["face"]), int(d["filament"]), str(d.get("mode", "part")),
                  float(d.get("angle", DEFAULT_ANGLE)), float(d.get("radius", 0.0)),
                  tuple(int(f) for f in d.get("path") or ()), bool(d.get("mirror", False)),
-                 float(d.get("grow", 0.0)), int(d.get("level", 0)))
+                 float(d.get("grow", 0.0)), int(d.get("level", 0)),
+                 tuple(float(x) for x in d.get("stamp") or ()))
         if op.mode not in MODES:
             raise ValueError(f"paint mode must be one of {', '.join(MODES)}, not {op.mode!r}")
         if not (0 <= op.filament <= 64):
@@ -133,6 +154,14 @@ class PaintOp:
             raise ValueError(f"level must be within ±{MAX_LEVEL}")
         if not (abs(op.grow) <= MAX_GROW and np.isfinite(op.grow)):
             raise ValueError(f"grow must be within ±{MAX_GROW:g} mm")
+        if op.mode == "stamp":
+            st = np.asarray(op.stamp, float)
+            if len(st) != 9 or not np.isfinite(st).all() or min(np.linalg.norm(st[3:6]), np.linalg.norm(st[6:9])) <= 0:
+                raise ValueError("a stamp needs its centre and two semi-axes (9 numbers, axes longer than 0)")
+            if abs(float(st[3:6] @ st[6:9])) > 1e-3 * np.linalg.norm(st[3:6]) * np.linalg.norm(st[6:9]):
+                raise ValueError("a stamp's two semi-axes must be at right angles")
+        elif op.stamp:
+            raise ValueError("only a stamp has a stamp shape")
         return op
 
     def to_dict(self) -> dict[str, Any]:
@@ -148,7 +177,38 @@ class PaintOp:
             del d["grow"]
         if not self.level:
             del d["level"]
+        if self.stamp:
+            d["stamp"] = list(self.stamp)
+        else:
+            del d["stamp"]
         return d
+
+
+@dataclass
+class Field:
+    """A painted area with a smooth edge: `phi` per merged vertex of the part's `Topology` (<= 0 inside; near the
+    edge about the distance to it, mm), read linearly across each triangle, so the edge is the zero line of `phi`
+    and cuts through triangles (`paint.overlay` writes it as split paint). Only `faces` are touched."""
+    faces: np.ndarray
+    phi: np.ndarray
+    # The field at any points (k, 3) -> (k,), when it is known between the vertices too (a stamp's ellipse, a
+    # distance to a stroke or an outline): triangles it crosses are then cut along the true curve, not along the
+    # straight line between their corners' values (which bends an ellipse on a big low-poly triangle into a spike).
+    fn: Callable[[np.ndarray], np.ndarray] | None = None
+    small: bool = False         # the area can lie inside one triangle (a small stamp on a low-poly mesh)
+    detail: float | None = None  # mm: split crossed triangles finer than SOFT_DEPTH until this fine (`_depth`)
+
+    def corners(self, topo: "Topology", faces: np.ndarray | None = None) -> np.ndarray:
+        """(k, 3) `phi` at the corners of `faces` (default: all of `self.faces`), in each triangle's corner order."""
+        return np.asarray(self.phi[topo.vfaces[self.faces if faces is None else faces]])
+
+    def inside(self, topo: "Topology") -> np.ndarray:
+        """The faces mostly inside (centre <= 0): the area as whole triangles (counts, areas, mirror matching)."""
+        return np.asarray(self.faces[self.corners(topo).mean(axis=1) <= 0])
+
+    def restricted(self, allowed: np.ndarray) -> "Field":
+        """Only the faces in `allowed` (a mask): another colour's triangles are never touched."""
+        return Field(self.faces[allowed[self.faces]], self.phi, self.fn, self.small, self.detail)
 
 
 @dataclass
@@ -161,8 +221,14 @@ class Topology:
     centroids: np.ndarray      # (n, 3) triangle centres, file mm
     areas: np.ndarray          # (n,) triangle areas, file mm²
     normals: np.ndarray        # (n, 3) unit face normals
+    # Merged vertices (positions, each face's corners in the part's own corner order) and the edge each adjacent
+    # pair shares: soft edges (`Field`) are drawn across triangles on these.
+    verts: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    vfaces: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.int64))
+    pair_edges: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), np.int64))
     _tree: Any = None          # KD-tree of `centroids`, built on first use (`tree`)
     _wall: Any = None          # `wall`, built on first use
+    _vgraph: Any = None        # `_vertex_graph`, built on first use
 
     @property
     def tree(self) -> Any:
@@ -221,42 +287,206 @@ class Topology:
         out = np.where(inside[a[cut]], b[cut], a[cut])
         return np.unique(ins), np.unique(out)
 
-    def grown(self, faces: np.ndarray, mm: float) -> np.ndarray:
-        """`faces` widened along the surface by `mm` (> 0) or narrowed (< 0): the triangles whose centre lies within
-        that distance of the region's edge, walking from triangle to neighbouring triangle (Dijkstra over centre-to-
-        centre steps, so the band follows the surface and never jumps a gap), then one smoothing pass on the new
-        edge. Measured as the union of balls round the edge's triangles instead, the edge came out zigzagged."""
-        if not mm or not len(faces):
-            return faces
+    # ------------------------------------------------------------------ soft edges (sub-triangle paint)
+
+    def edge_length(self) -> float:
+        """Median distance between neighbouring triangle centres (the mesh's resolution), file mm."""
+        if not len(self.pairs):
+            return 1.0
+        d = np.linalg.norm(self.centroids[self.pairs[:, 0]] - self.centroids[self.pairs[:, 1]], axis=1)
+        return float(np.median(d)) or 1.0
+
+    def vertex_graph(self) -> Any:
+        """Merged-vertex adjacency weighted by edge length (CSR), for walks along the surface."""
+        if self._vgraph is None:
+            f = self.vfaces
+            e = np.unique(np.sort(np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]], axis=1), axis=0)
+            w = np.linalg.norm(self.verts[e[:, 0]] - self.verts[e[:, 1]], axis=1) + 1e-12
+            n = len(self.verts)
+            self._vgraph = coo_matrix((np.r_[w, w], (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])),
+                                      shape=(n, n)).tocsr()
+        return self._vgraph
+
+    def _reach(self, start: np.ndarray, limit: float) -> np.ndarray:
+        """Merged vertices within `limit` mm of any of `start` walking along mesh edges (a mask)."""
         from scipy.sparse.csgraph import dijkstra
 
-        inside = np.zeros(self.n_faces, bool)
-        inside[faces] = True
-        rim_in, rim_out = self._rim(inside)
-        start = rim_in if mm > 0 else rim_out
-        # Walk only on the side that changes: outward when growing, inward when shrinking.
-        side = ~inside if mm > 0 else inside
-        a, b = self.pairs[:, 0], self.pairs[:, 1]
-        walk = (side[a] | np.isin(a, start)) & (side[b] | np.isin(b, start))
-        w = np.linalg.norm(self.centroids[a[walk]] - self.centroids[b[walk]], axis=1) + 1e-9
-        g = coo_matrix((w, (a[walk], b[walk])), shape=(self.n_faces, self.n_faces)).tocsr()
-        dist = dijkstra(g, directed=False, indices=start, limit=abs(mm), min_only=True)
-        band = np.isfinite(dist) & side
-        out = inside | band if mm > 0 else inside & ~band
-        return np.nonzero(self._smooth(out, band))[0]
-
-    def _smooth(self, mask: np.ndarray, where: np.ndarray) -> np.ndarray:
-        """One majority pass over the triangles in `where`: each takes the state of most of its edge neighbours (a
-        triangle has three), which removes the one-triangle notches whole-triangle paint leaves on an edge."""
-        a, b = self.pairs[:, 0], self.pairs[:, 1]
-        on = np.bincount(a, weights=mask[b], minlength=self.n_faces) + np.bincount(b, weights=mask[a], minlength=self.n_faces)
-        deg = np.bincount(a, minlength=self.n_faces) + np.bincount(b, minlength=self.n_faces)
-        out = mask.copy()
-        sel = where & (deg > 0)
-        out[sel] = on[sel] * 2 > deg[sel]
-        tie = sel & (on * 2 == deg)
-        out[tie] = mask[tie]
+        out = np.zeros(len(self.verts), bool)
+        if len(start):
+            d = dijkstra(self.vertex_graph(), directed=False, indices=np.unique(start), limit=limit, min_only=True)
+            out[np.isfinite(d)] = True
         return out
+
+    def outline(self, inside: np.ndarray, smooth: int) -> list[tuple[np.ndarray, np.ndarray]]:
+        """The edge of a face region as chains of (points, per-segment normal of the inside triangle), each run with
+        the region on its left (seen from outside). The edge steps from triangle to triangle; `smooth` passes of
+        averaging each point with its two neighbours round it off (a closed chain stays closed; an open one, where
+        the region meets a hole in the mesh, keeps its ends)."""
+        a, b = self.pairs[:, 0], self.pairs[:, 1]
+        cut = inside[a] != inside[b]
+        if not cut.any():
+            return []
+        fin = np.where(inside[a[cut]], a[cut], b[cut])
+        fout = np.where(inside[a[cut]], b[cut], a[cut])
+        uv = self.pair_edges[cut].copy()
+        corners = self.vfaces[fin]
+        # Run each edge the way its inside triangle does: then the region lies on the left of it, whichever way the
+        # triangle is wound (its normal turns with its winding, and the side test uses both).
+        at = np.argmax(corners == uv[:, :1], axis=1)
+        flip = corners[np.arange(len(fin)), (at + 1) % 3] != uv[:, 1]
+        uv[flip] = uv[flip][:, ::-1]
+        # The side test's "up": both triangles on the edge (one of them alone tips over on a sharp fold, a brow's
+        # crease), the outside one turned to agree with the inside one's winding.
+        n_in, n_out = self.normals[fin], self.normals[fout]
+        nrm = n_in + n_out * np.where((n_in * n_out).sum(axis=1) < 0, -1.0, 1.0)[:, None]
+        nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+        succ: dict[int, list[int]] = {}
+        for k, u in enumerate(uv[:, 0].tolist()):
+            succ.setdefault(u, []).append(k)
+        used = np.zeros(len(uv), bool)
+        chains: list[tuple[np.ndarray, np.ndarray]] = []
+        for k0 in range(len(uv)):
+            if used[k0]:
+                continue
+            ks = [k0]
+            used[k0] = True
+            first, cur = int(uv[k0, 0]), int(uv[k0, 1])
+            while cur != first:
+                nxt = next((k for k in succ.get(cur, []) if not used[k]), None)
+                if nxt is None:
+                    break
+                used[nxt] = True
+                ks.append(nxt)
+                cur = int(uv[nxt, 1])
+            closed = cur == first
+            pts = self.verts[uv[ks, 0]]
+            if not closed:
+                pts = np.vstack([pts, self.verts[uv[ks[-1], 1]]])
+            for _ in range(smooth):
+                if closed and len(pts) >= 3:
+                    pts = 0.5 * pts + 0.25 * (np.roll(pts, 1, axis=0) + np.roll(pts, -1, axis=0))
+                elif len(pts) >= 3:
+                    pts[1:-1] = 0.5 * pts[1:-1] + 0.25 * (pts[:-2] + pts[2:])
+            if closed:
+                pts = np.vstack([pts, pts[:1]])
+            chains.append((pts, nrm[ks]))
+        return chains
+
+    def soft(self, inside: np.ndarray, smooth: int, offset: float = 0.0) -> "Field":
+        """A face region (a mask) as a `Field` with a smooth edge: the signed distance (inside < 0) of every vertex
+        near its outline (`outline`, rounded by `smooth` passes) to that outline, minus `offset` mm (> 0 widens the
+        area, < 0 narrows it, that far from the edge measured straight, within a walk along the surface)."""
+        from scipy.spatial import cKDTree
+
+        h = self.edge_length()
+        n = len(self.verts)
+        vin = np.zeros(n, bool)
+        vin[self.vfaces[inside]] = True
+        phi = np.where(vin, -BIG, BIG)
+        chains = self.outline(inside, smooth)
+        if not chains:
+            return Field(np.nonzero(inside)[0], phi - offset)
+        # Dense samples along the outline, each with its direction and the inside triangle's normal.
+        pts, tan, nrm = [], [], []
+        for c, cn in chains:
+            seg = c[1:] - c[:-1]
+            ln = np.linalg.norm(seg, axis=1)
+            k = np.maximum(1, np.ceil(ln / (h / 4))).astype(np.intp)
+            t = (np.arange(int(k.sum())) - np.repeat(np.cumsum(k) - k, k)) / np.repeat(k, k)
+            i = np.repeat(np.arange(len(seg)), k)
+            pts.append(c[i] + seg[i] * t[:, None])
+            tan.append(seg[i] / (ln[i, None] + 1e-12))
+            nrm.append(cn[i])
+        q, tq, nq = np.vstack(pts), np.vstack(tan), np.vstack(nrm)
+        # Only vertices reachable along the surface within the band: a distance across a gap (a finger beside the
+        # body) is not a distance along the figure.
+        cut = inside[self.pairs[:, 0]] != inside[self.pairs[:, 1]]
+        band = self._reach(self.pair_edges[cut].ravel(), abs(offset) * 1.3 + 3 * h)
+        idx = np.nonzero(band)[0]
+        d, j = cKDTree(q).query(self.verts[idx])
+        left = np.cross(nq[j], tq[j])
+        side = ((self.verts[idx] - q[j]) * left).sum(axis=1) > 0
+        # Which side a vertex is on: its own triangles say, unless it has triangles on both sides (on the stepped
+        # outline) or lies by the smoothed one; only there is the side test needed (and right).
+        vout = np.zeros(n, bool)
+        vout[self.vfaces[~inside]] = True
+        sure = (vin[idx] != vout[idx]) & (d > 1.5 * h)
+        side = np.where(sure, vin[idx], side)
+        phi[idx] = np.where(side, -d, d)
+        faces = np.nonzero(inside | band[self.vfaces].any(axis=1))[0]
+        tree = cKDTree(q)
+
+        def exact(pts: np.ndarray) -> np.ndarray:
+            dd, jj = tree.query(pts)
+            inner = ((pts - q[jj]) * np.cross(nq[jj], tq[jj])).sum(axis=1) > 0
+            return np.asarray(np.where(inner, -dd, dd) - offset)
+        return Field(faces, phi - offset, exact)
+
+    def brush_field(self, seeds: list[int], radius: float) -> "Field":
+        """A brush dab or stroke with a round edge: distance from each vertex to the stroke (the seeds' centres,
+        joined) minus `radius`, over the triangles `brush` covers and the ring round them."""
+        faces = self.brush(seeds, radius)
+        centres = self.centroids[np.asarray(seeds, np.int64)]
+        if len(centres) > 1:
+            a, b = centres[:-1], centres[1:]
+            ln = np.linalg.norm(b - a, axis=1)
+            k = np.maximum(1, np.ceil(ln / (radius / 8))).astype(np.intp)
+            k[ln > JOIN_STEPS * radius] = 1          # a jump to another surface (the drag crossed a silhouette)
+            t = (np.arange(int(k.sum())) - np.repeat(np.cumsum(k) - k, k)) / np.repeat(k, k)
+            i = np.repeat(np.arange(len(a)), k)
+            centres = np.vstack([a[i] + (b[i] - a[i]) * t[:, None], centres[-1:]])
+        return self._distance_field(faces, centres, radius)
+
+    def _distance_field(self, faces: np.ndarray, centres: np.ndarray, radius: float) -> "Field":
+        """`Field` of the points within `radius` of `centres`, limited to `faces` and the ring of faces round them."""
+        from scipy.spatial import cKDTree
+
+        ring = np.zeros(self.n_faces, bool)
+        ring[faces] = True
+        a, b = self.pairs[:, 0], self.pairs[:, 1]
+        grown = ring.copy()
+        grown[a[ring[b]]] = True
+        grown[b[ring[a]]] = True
+        cand = np.nonzero(grown)[0]
+        vid = np.unique(self.vfaces[cand])
+        phi = np.full(len(self.verts), BIG)
+        tree = cKDTree(centres)
+        d, _ = tree.query(self.verts[vid])
+        phi[vid] = d - radius
+
+        def exact(pts: np.ndarray) -> np.ndarray:
+            return np.asarray(tree.query(pts)[0] - radius)
+        return Field(cand, phi, exact)
+
+    def stamp_field(self, face: int, centre: np.ndarray, u: np.ndarray, v: np.ndarray) -> "Field":
+        """An ellipse projected onto the surface like a decal: `centre`, semi-axes `u` and `v` (vectors, file mm),
+        seen along u x v. Covers the triangles joined to `face` that face that way, whose centre falls inside the
+        ellipse and lies within its size in front of or behind the centre (not a surface further back)."""
+        a, b = float(np.linalg.norm(u)), float(np.linalg.norm(v))
+        uh, vh = u / (a + 1e-12), v / (b + 1e-12)
+        w = np.cross(uh, vh)
+        w /= np.linalg.norm(w) + 1e-12
+        reach = max(a, b)
+
+        def q(p: np.ndarray) -> np.ndarray:
+            d = p - centre
+            return np.asarray(np.sqrt(((d @ uh) / a) ** 2 + ((d @ vh) / b) ** 2))
+
+        h = self.edge_length()
+        near = np.asarray(self.tree.query_ball_point(centre, reach * 1.5 + 2 * h), np.int64)
+        cen = self.centroids[near]
+        ok = np.zeros(self.n_faces, bool)
+        # Only surfaces facing the view: on a wall seen nearly edge-on (a crease's side) the ellipse's edge projects
+        # into long slivers (seen beside a low-poly eye). The depth window keeps the far side of a thin part out.
+        ok[near] = (((self.normals[near] @ w) > STAMP_FACING) & (np.abs((cen - centre) @ w) <= reach)
+                    & (q(cen) <= 1.0 + 2 * h / min(a, b)))
+        ok[face] = True
+        lab = self._components(ok[self.pairs[:, 0]] & ok[self.pairs[:, 1]])
+        faces = np.nonzero(ok & (lab == lab[face]))[0]
+        vid = np.unique(self.vfaces[faces])
+        phi = np.full(len(self.verts), BIG)
+        phi[vid] = (q(self.verts[vid]) - 1.0) * min(a, b)       # about the distance to the edge, near it
+        return Field(faces, phi, lambda pts: (q(pts) - 1.0) * min(a, b), small=True, detail=min(a, b) / STAMP_STEPS)
 
     def bend(self) -> np.ndarray:
         """Signed bend per face, degrees (> 0 concave): the mean turn of the face normals across its edges after one
@@ -276,6 +506,46 @@ class Topology:
         signed = np.where(concave, turn, -turn)
         face = np.bincount(a, signed, n) + np.bincount(b, signed, n)
         return np.asarray(face / np.maximum(np.bincount(np.r_[a, b], minlength=n), 1))
+
+    def shape_map(self) -> np.ndarray:
+        """(merged vertices, 2) uint8 for the "Shape map" view: how much each spot is a crease (the wand's `wall`,
+        0 = smooth .. 255 = among the strongest 2 %), and its relief (128 = level with the surface round it, lower =
+        sunk, higher = raised: the height over a copy of the surface smoothed over SHAPE_SCALE of its size, scaled by
+        its 98th percentile). Lines of equal relief are drawn from it like a topographic map."""
+        n = len(self.verts)
+        f = self.vfaces
+        w = np.repeat(self.areas, 3)
+        acc = np.bincount(f.ravel(), weights=np.repeat(self.wall(), 3) * w, minlength=n)
+        tot = np.bincount(f.ravel(), weights=w, minlength=n) + 1e-12
+        crease = acc / tot
+        crease = np.clip(crease / (np.percentile(crease, 98) + 1e-9), 0, 1)
+        g = self.vertex_graph().copy()
+        edge = float(np.mean(g.data)) or 1.0
+        g.data[:] = 1.0
+        deg = np.asarray(g.sum(axis=1)).ravel() + 1e-12
+        smooth = self.verts.copy()
+        # Smoothed over about SHAPE_SCALE of the figure's size, whatever its triangles: a pass spreads about one edge.
+        reach = SHAPE_SCALE * float(np.linalg.norm(np.ptp(self.verts, axis=0)))
+        passes = int(np.clip((reach / edge) ** 2 / 0.6, 10, SHAPE_PASSES))
+        # Plain averaging (Taubin's shrink-free smoothing keeps any bump wider than a few edges, the very features
+        # wanted here); it shrinks a rounded body a little, an offset that varies slowly and is taken off below.
+        for _ in range(passes):
+            smooth = smooth + 0.5 * (g @ smooth / deg[:, None] - smooth)
+        vn = np.zeros((n, 3))
+        sm_tri = smooth[f]
+        fn_ = np.cross(sm_tri[:, 1] - sm_tri[:, 0], sm_tri[:, 2] - sm_tri[:, 0])
+        for k in range(3):
+            np.add.at(vn, f[:, k], fn_)
+        vn /= np.linalg.norm(vn, axis=1, keepdims=True) + 1e-12
+        relief = ((self.verts - smooth) * vn).sum(axis=1)
+        trend = relief.copy()
+        for _ in range(4 * passes):                     # the shrink offset: the relief smoothed twice as far
+            trend = trend + 0.5 * (g @ trend / deg - trend)
+        relief = relief - trend
+        for _ in range(4):                              # a decimated sculpt's facets are noise at this scale
+            relief = 0.5 * relief + 0.5 * (g @ relief) / deg
+        relief = np.clip(relief / (np.percentile(np.abs(relief), 98) + 1e-12), -1, 1)
+        return np.stack([np.round(crease * 255), np.round(128 + relief * 127)], axis=1).astype(np.uint8)
 
     def wall(self) -> np.ndarray:
         """How much each face is a feature edge, degrees: concave bend, plus WAND_CONVEX of convex bend."""
@@ -509,8 +779,10 @@ def topology(part: Part) -> Topology:
         convex = np.asarray(m.face_adjacency_convex, bool)
     else:
         angles, convex = np.zeros(0), np.zeros(0, bool)
+    edges = np.asarray(m.face_adjacency_edges, np.int64).reshape(-1, 2) if len(pairs) else np.zeros((0, 2), np.int64)
     return Topology(len(part.faces), pairs, angles, convex, np.asarray(m.triangles_center, np.float64),
-                    np.asarray(m.area_faces, np.float64), np.asarray(m.face_normals, np.float64))
+                    np.asarray(m.area_faces, np.float64), np.asarray(m.face_normals, np.float64),
+                    np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64), edges)
 
 
 def _labels(pairs: np.ndarray, n: int, keep: np.ndarray) -> np.ndarray:
@@ -562,7 +834,8 @@ def _snap(pairs: np.ndarray, n: int, inside: np.ndarray, ok: np.ndarray, wall: n
 
 
 def _majority(pairs: np.ndarray, n: int, mask: np.ndarray, where: np.ndarray) -> np.ndarray:
-    """One majority pass (see `Topology._smooth`) on a graph given as pairs."""
+    """One majority pass on a graph given as pairs: each node in `where` takes the state of most of its neighbours
+    (a triangle has three), which removes the one-triangle notches whole-triangle paint leaves on an edge."""
     a, b = pairs[:, 0], pairs[:, 1]
     on = np.bincount(a, weights=mask[b], minlength=n) + np.bincount(b, weights=mask[a], minlength=n)
     deg = np.bincount(a, minlength=n) + np.bincount(b, minlength=n)
@@ -572,6 +845,33 @@ def _majority(pairs: np.ndarray, n: int, mask: np.ndarray, where: np.ndarray) ->
     tie = sel & (on * 2 == deg)
     out[tie] = mask[tie]
     return out
+
+
+@lru_cache(maxsize=None)
+def _grid(depth: int) -> tuple[np.ndarray, np.ndarray]:
+    """A triangle's split points down to `depth` levels (every corner of its sub-triangles) as (i, j) on the
+    barycentric lattice of 2**depth steps, and their barycentric coordinates."""
+    n = 1 << depth
+    ij = np.array([(i, j) for i in range(n + 1) for j in range(n + 1 - i)], np.intp)
+    return ij, np.column_stack([n - ij.sum(axis=1), ij]).astype(float) / n
+
+
+def _lattice(fn: Callable[[np.ndarray], np.ndarray], corners: np.ndarray, depth: int) -> list[list[float]]:
+    """`fn` at a triangle's split points in one call, as `paint.overlay`'s table (`table[i][j]`)."""
+    ij, bary = _grid(depth)
+    n = 1 << depth
+    out = np.full((n + 1, n + 1), np.nan)
+    out[ij[:, 0], ij[:, 1]] = fn(bary @ corners)
+    return list(out.tolist())
+
+
+def _depth(corners: np.ndarray, detail: float | None) -> int:
+    """Split levels for a triangle: SOFT_DEPTH, or more (up to MAX_SOFT_DEPTH) until its sub-triangles are no
+    longer than `detail` mm (a small stamp on a big low-poly triangle)."""
+    if detail is None or detail <= 0:
+        return SOFT_DEPTH
+    longest = float(np.linalg.norm(corners - np.roll(corners, 1, axis=0), axis=1).max())
+    return int(np.clip(np.ceil(np.log2(max(longest / detail, 1.0))), SOFT_DEPTH, MAX_SOFT_DEPTH))
 
 
 def _iou(x: np.ndarray, y: np.ndarray) -> float:
@@ -621,6 +921,55 @@ class PaintState:
         new = np.asarray([self._id(_with_paint(self.values[u], code)) for u in uniq.tolist()], np.int32)
         self.state[faces] = new[inv.reshape(-1)]
         self._colours = None
+
+    def paint_field(self, topo: Topology, fld: Field, filament: int, over: int | None = None) -> None:
+        """Paint where `fld` is <= 0 with `filament` (0 = remove paint): triangles wholly inside take it whole; the
+        ones its edge crosses are split along it (`paint.overlay`, `SOFT_DEPTH` levels), keeping what they showed
+        on the other side, including split paint they had. With `over` (a filament), only what shows that colour
+        is painted, inside split triangles too (a fill bounded by colour)."""
+        from .paint import attr_paint, encode_tree, overlay, parse_tree
+
+        ph = fld.corners(topo)
+        neg = ph <= 0
+        whole = neg.all(axis=1)
+        mixed = neg.any(axis=1) & ~whole
+        if fld.fn is not None and fld.small:
+            # The true edge can cross a triangle whose corners are all outside (a small stamp inside a big one).
+            tri = topo.verts[topo.vfaces[fld.faces]]
+            longest = np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2).max(axis=1)
+            mixed |= ~whole & (ph.min(axis=1) < longest)
+        only = None
+        if over is not None:
+            # Whole triangles of another colour are left alone; a split one may hold some of the tapped colour (the
+            # other side of an earlier soft edge): it is overlaid leaf by leaf, only where it shows that colour.
+            per_value = [attr_paint(v or "") for v in self.values]
+            split = np.array([fp is not None and fp.whole is None for fp in per_value], bool)[self.state[fld.faces]]
+            same = self.colours()[fld.faces] == over
+            mixed = (mixed | (whole & split)) & (same | split)
+            whole &= ~split & same
+            ext = self.extruder
+
+            def only(st: int) -> bool:
+                return (st or ext) == over
+        self.paint(fld.faces[whole], paint_code(filament) if filament else None)
+        for f, p3 in zip(fld.faces[mixed].tolist(), ph[mixed].tolist()):
+            value = self.values[int(self.state[f])]
+            fp = attr_paint(value or "")
+            tree = parse_tree(fp.code) if fp is not None else 0
+            corners = topo.verts[topo.vfaces[f]]
+            depth = _depth(corners, fld.detail)
+            table = _lattice(fld.fn, corners, depth) if fld.fn is not None else None
+            new = overlay(tree, (p3[0], p3[1], p3[2]), filament, depth, only, table, fld.small)
+            code = None if new == 0 else paint_code(new) if isinstance(new, int) else encode_tree(new)
+            self.state[f] = self._id(_with_paint(value, code))
+        self._colours = None
+
+    def has_splits(self, faces: np.ndarray) -> bool:
+        """Some of `faces` hold split paint (a soft edge)."""
+        from .paint import attr_paint
+
+        split = [i for i, v in enumerate(self.values) if (fp := attr_paint(v or "")) is not None and fp.whole is None]
+        return bool(split) and bool(np.isin(self.state[faces], split).any())
 
     def colours(self) -> np.ndarray:
         """The filament each triangle shows most (its dominant paint, else the part's own)."""
@@ -680,7 +1029,7 @@ def surface_points(tri: np.ndarray, n: int, rng: np.random.Generator) -> np.ndar
     return np.asarray(t[:, 0] + a[:, None] * (t[:, 1] - t[:, 0]) + b[:, None] * (t[:, 2] - t[:, 0]))
 
 
-def mirror_plane(points: np.ndarray, surface: np.ndarray | None = None) -> MirrorPlane:
+def mirror_plane(points: np.ndarray, surface: np.ndarray | None = None, up: np.ndarray | None = None) -> MirrorPlane:
     """The plane `points` (surface samples) mirror best across: every direction of a Fibonacci hemisphere through
     the centre is scored by how far the reflected points land from `surface` (a dense sampling of it; default
     `points`), then the best few are refined by coordinate descent on direction and offset (halving steps).
@@ -729,6 +1078,14 @@ def mirror_plane(points: np.ndarray, surface: np.ndarray | None = None) -> Mirro
             break
     found = [_refine(score, n, centre, size) for n in starts]
     n, c, best = min(found, key=lambda t: t[2])
+    if up is not None:
+        # A figure stands: its plane of symmetry is upright (left | right). A round body with no face mirrors about
+        # as well across a level plane (top | bottom); an upright plane nearly as good as the best wins.
+        upright = [t for t in found if abs(float(t[0] @ up)) < MIRROR_LEVEL]
+        if upright:
+            un, uc, ub = min(upright, key=lambda t: t[2])
+            if ub <= MIRROR_UPRIGHT * best + 1e-9:
+                n, c, best = un, uc, ub
     return MirrorPlane(n, c, best / size, size)
 
 
@@ -762,8 +1119,16 @@ def apply_paint(parts: list[Part], ops: list[PaintOp], topo: "TopologyCache", mi
             continue                       # from another object or orientation of the file: ignore
         code = paint_code(op.filament) if op.filament else None
         # Every side's region is found against the paint before this operation, then all are painted.
-        for pi, faces in op_faces(topo, op, lambda i: states.setdefault(i, PaintState(parts[i]))):
-            states[pi].paint(faces, code)
+        for cov in op_cover(topo, op, lambda i: states.setdefault(i, PaintState(parts[i]))):
+            st = states.setdefault(cov.part, PaintState(parts[cov.part]))
+            if cov.field is None and cov.over is not None:
+                # Every corner inside: the whole triangle, but split ones only where they show the tapped colour.
+                t = topo.part(cov.part)
+                st.paint_field(t, Field(cov.faces, np.full(len(t.verts), -1.0)), op.filament, cov.over)
+            elif cov.field is None:
+                st.paint(cov.faces, code)
+            else:
+                st.paint_field(topo.part(cov.part), cov.field, op.filament, cov.over)
     if min_area > 0:
         for pi, st in states.items():
             faces, colours = topo.part(pi).specks(st.colours(), min_area)
@@ -773,25 +1138,91 @@ def apply_paint(parts: list[Part], ops: list[PaintOp], topo: "TopologyCache", mi
                  p.subtype) for i, p in enumerate(parts)]
 
 
+@dataclass
+class Cover:
+    """What one side of a paint operation covers: whole `faces`, or (with `field`) the area of a soft edge."""
+    part: int
+    faces: np.ndarray
+    field: Field | None = None
+    over: int | None = None          # a fill bounded by colour: the soft edge paints only over this filament
+
+    def inside(self, topo: "TopologyCache") -> np.ndarray:
+        """The covered faces as whole triangles (a soft area: the ones mostly inside it)."""
+        return self.field.inside(topo.part(self.part)) if self.field is not None else self.faces
+
+
 def op_faces(topo: "TopologyCache", op: PaintOp, state: Any) -> list[tuple[int, np.ndarray]]:
-    """(part, faces) an operation paints: its region, and with `mirror` the mirror image's (a spot with no match
-    on the other side is painted on one side only). `state(i)` gives part i's current paint (fills stop at it)."""
+    """(part, faces) an operation paints, as whole triangles (`op_cover`)."""
+    return [(c.part, c.inside(topo)) for c in op_cover(topo, op, state)]
+
+
+def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
+    """What an operation paints: its region, and with `mirror` the mirror image's (a spot with no match on the
+    other side is painted on one side only). `state(i)` gives part i's current paint (fills stop at it).
+
+    The wand, brush and stamp, and any operation grown or shrunk, paint with a soft edge (`Field`): a smooth line
+    through the triangles, not their stepped outline. The other modes follow the mesh's own edges (creases,
+    separate pieces) and paint whole triangles."""
     n = topo.n_faces(op.part)
     sides = [(op.part, op.face, tuple(f for f in op.path if 0 <= f < n))]
     if op.mirror:
         twin = topo.mirrored(op.part, op.face, sides[0][2])
         if twin is not None and twin[:2] != (op.part, op.face):
             sides.append(twin)
-    out: list[tuple[int, np.ndarray]] = []
+    out: list[Cover] = []
     for k, (pi, fi, path) in enumerate(sides):
+        t = topo.part(pi)
+        if op.mode == "stamp":
+            st = np.asarray(op.stamp, float)
+            centre, u, v = st[0:3], st[3:6], st[6:9]
+            if k == 1:
+                # Reflected, the axes' cross product (the way it is seen) would point into the surface: v turns.
+                plane = topo.mirror()
+                centre = plane.reflect(centre[None])[0]
+                u, v = plane.reflect_dir(u[None])[0], -plane.reflect_dir(v[None])[0]
+            if op.grow:
+                a, b = float(np.linalg.norm(u)), float(np.linalg.norm(v))
+                u, v = u * max(a + op.grow, 1e-3) / a, v * max(b + op.grow, 1e-3) / b
+            out.append(Cover(pi, np.zeros(0, np.int64), t.stamp_field(fi, centre, u, v)))
+            continue
+        if op.mode == "brush":
+            fld = t.brush_field([fi, *path], max(op.radius + op.grow, 1e-3))
+            out.append(Cover(pi, fld.faces, fld))
+            continue
         if op.mode == "wand" and k == 1:
             # The twin's candidates differ a little from the tapped side's, so a step number would not pick the
             # same feature there: take the twin candidate nearest the tapped side's area.
-            area = float(topo.part(out[0][0]).areas[out[0][1]].sum())
+            area = float(topo.part(out[0].part).areas[out[0].inside(topo)].sum())
             faces = topo.wand_like(pi, fi, area, state(pi))
         else:
             faces = region_faces(topo, pi, fi, op.mode, op.angle, op.radius, path, state(pi), op.level)
-        out.append((pi, topo.part(pi).grown(faces, op.grow) if op.grow else faces))
+        if op.mode != "wand" and not op.grow:
+            paint = state(pi)
+            over = None
+            if paint is not None and op.mode in BOUNDED and paint.has_splits(faces):
+                over = int(paint.colours()[fi])
+            out.append(Cover(pi, faces, None, over))
+            continue
+        mask = np.zeros(t.n_faces, bool)
+        mask[faces] = True
+        paint = state(pi)
+        over = None
+        if paint is not None and op.mode in BOUNDED:
+            colour = paint.colours()
+            other = colour != colour[fi]
+            if other.any():
+                # Bounded by colour: where the area meets another colour, its edge is that colour's own (painted
+                # before, maybe soft). The field reaches two rings into the other colour there and paints only over
+                # the tapped colour, so it fills up to that edge instead of drawing a second line beside it.
+                over = int(colour[fi])
+                pa, pb = t.pairs[:, 0], t.pairs[:, 1]
+                for _ in range(2):
+                    wider = mask.copy()
+                    wider[pa[mask[pb] & other[pa]]] = True
+                    wider[pb[mask[pa] & other[pb]]] = True
+                    mask = wider
+        fld = t.soft(mask, WAND_SMOOTH, op.grow)
+        out.append(Cover(pi, fld.faces, fld, over))
     return out
 
 
@@ -805,6 +1236,14 @@ class TopologyCache:
         self._fills: dict[tuple[Any, ...], np.ndarray] = {}
         self._mirror: MirrorPlane | None = None
         self._trees: list[Any] | None = None
+        self._up: tuple[float, float, float] | None = None
+
+    def set_up(self, up: np.ndarray) -> None:
+        """The figure's up direction in these parts' frame (its rotation); the mirror plane prefers upright planes."""
+        key = tuple(round(float(x), 6) for x in up)
+        if key != self._up:
+            self._up = (key[0], key[1], key[2])
+            self._mirror = None
 
     def __len__(self) -> int:
         """Parts it covers: the file's own (not the conform step's flat base, which taps cannot paint)."""
@@ -822,7 +1261,8 @@ class TopologyCache:
             # mesh's few triangle centres would be too sparse): a few to reflect, many to land on.
             rng = np.random.default_rng(1)
             self._mirror = mirror_plane(surface_points(tri, MIRROR_SAMPLES, rng),
-                                        surface_points(tri, MIRROR_TARGET, rng))
+                                        surface_points(tri, MIRROR_TARGET, rng),
+                                        None if self._up is None else np.asarray(self._up))
         return self._mirror
 
     def mirrored(self, part: int, face: int, path: tuple[int, ...] = ()) -> tuple[int, int, tuple[int, ...]] | None:

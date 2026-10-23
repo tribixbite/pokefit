@@ -49,7 +49,12 @@ exist only on the original Windows machine (ask the user for the files).
 7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
    automated download). The user downloads, then opens the file.
 8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
-   vertical (a pedestal between the legs).
+   vertical (a pedestal between the legs). Fill where: washer / everywhere / circle / drawn outline (`Params.fill_area`,
+   `fill_shape`). Magnet pads (`Session.pads`): on the washer seat each pocket's walled disc gets the gap fill too, so
+   magnets are walled from the washer up; Downloads Charmander with a 10.7 mm fill circle: both pockets now pass
+   ("Sits on the washer"; before: "only 0.5-0.7 mm walled, glue it"). The raised seat lifts each pocket only as far as
+   its own spot needs (one over the flat base stays on the washer): by design, explained in the seat hint. Pads stay
+   within the cavity's flat floor radius; not checked against a hand-placed pocket outside it (clipped there).
 9. **Big meshes**: Simplify (`pokefit/simplify.py`, `Params.simplify`, Figure card "Simplify mesh", off by default,
    remembered; the analysis shows a "Dense mesh" hint above 300k triangles). 1.45M-triangle MINI EEVEE at 100k,
    local engine (scratchpad `bench_simplify.py`): open + analyse 39.5 -> 11.5 s, prepare paint (mirror) 5.4 -> 1.0 s,
@@ -68,28 +73,26 @@ exist only on the original Windows machine (ask the user for the files).
    (a flat fin on a box) is under-thickened in its first ~half target (smoothed normals tilt into the box; TODO in
    `strengthen()`); (c) low-poly meshes move only their few vertices (the smoke critter reads 33 % "thin": box
    corners), so it suits dense sculpts; (d) measured at the asked height or the largest, not at a slider scale.
-11. **Paint tools** (colorize). Wand (default mode, `Topology.wand`): candidates = closed minimal loops round the
-   tap (polar DP on the tangent plane over a bend field = one-ring-smoothed normals; 9 max radii) + "part" regions
-   at 6 angles; scored by the low quartile of the wall along the edge; edge snapped to the ridge (marker watershed)
-   then one majority pass; Smaller/Larger step through candidates (`PaintOp.level`); a mirrored wand step's twin
-   takes the candidate nearest the tapped side's area. ~0.37 s a tap local on 100k triangles. Also Fill, Mirror,
-   Grow/Shrink, Pick colour, Undo/Redo, keys, "Drop specks under" (`Params.despeckle`, 0.5 mm²).
-   - 303k print-folder Charmander (`printed/obj_2_Charmander mini.stl`) at 100k: wand gives the flame, both eye
-     ovals (one tap + mirror), toe pads; the inner white disc is one or two "Smaller" steps away (its crease is on
-     one side only); the belly comes out but runs over both claws (left off). Export `pokefit_out/charmander_wand4/`
-     (orange, red flame, blue eyes, white discs): 1.99 h, 29.8 g, 25 colour changes. Verified in the local UI: one
-     wand tap with Mirror painted both eyes, Smaller/Larger round-trips, no console errors.
-   - The user's `~/Downloads/Charmander mini.stl` (6,762 triangles, decimated) has NO eye geometry left (only a
-     sliver on each eye's outer edge; normals render showed it): no shape tool can outline its eyes. Its flame
-     separates only partly. TODO: a shape stamp (drag an ellipse) for such files.
-   - Open: (a) wand edges are still slightly rough near the brows; (b) mirror on a shape with two symmetry planes
-     (a sphere-like body without a face) can pick the wrong one; (c) grow/shrink is up to ~15 % short of the asked
-     mm; (d) the Eevee job from 2026-10-22 was not redone with the new tools.
-   - Squirtle in 4 filaments (`pokefit_out/squirtle_4col/`, photo GLB `texture_colours=4`, blue/brown/white/yellow):
-     7.76 h, 117.3 g, 193 colour changes (6.75 h purge; all 4 colours on nearly every layer). Brown flecks on the hand
-     tips and white flecks on the sides come from the texture.
-   - Exports are checked with `scripts/render_export.py` (exact z-buffer). The old splat render in the scratchpad
-     showed speckles that were not in the files.
+11. **Paint tools** (colorize). Wand (default; `Topology.wand`, ~0.4 s a tap on 100k triangles + ~0.1 s for the soft
+   edge), Stamp (drag a box: ellipse decal), Brush, Fill, Mirror, Grow/Shrink, Pick colour, Undo/Redo, "Drop specks
+   under", "Shape map" view (crease shading + relief contours). Wand, brush, stamp and grown steps paint soft edges
+   (`colorize.Field` -> split paint via `paint.overlay`, depth 4, a stamp on big triangles up to 8); a fill bounded
+   by colour fills up to an earlier soft edge. Grow/shrink: within 3-4 % of the asked mm (tests).
+   - Dense Charmander (`printed/obj_2_Charmander mini.stl` at 100k): wand eyes are smooth ovals now (scratchpad
+     `soft3/eyeL.png`); the white disc fills up to the blue's edge. Belly still runs over the claws (left off).
+   - Downloads `Charmander mini.stl` (6.7k triangles): stamps give both eyes + white discs (mirrored), the flame is
+     wand level +4 from the front, +4 from the back and two side stamps. Export `pokefit_out/charmander_lowpoly_stamp/`:
+     1.80 h, 25.3 g, 21 colour changes, 137 split triangles, sliced by Bambu CLI. Open: (a) a crease's inner wall
+     inside an eye's outline faces the view and takes the stamp; from some angles it shows as blue streaks beside the
+     mirrored eye (`scripts/render_export.py --zoom=-3.0,20.5,8`); (b) the wand on this decimated flame is unstable
+     (grow changed which candidate the back tap took).
+   - MINI EEVEE with the wand (`pokefit_out/eevee_wand/`, 100k): one tap each (with Mirror) for ears, eyes, eye
+     highlights, collar; the tail tip has no crease, so a stamp. 1.61 h, 20.4 g, 7 colour changes (the old part/brush
+     job: 1.59 h, 20.1 g, 7).
+   - Open: (c) mirror now prefers an upright plane within 1.5x of the best (`MIRROR_UPRIGHT`; the figure's up from its
+     rotation), so a rotation after painting can change the plane on an ambiguous shape; (d) the Shape map view
+     replaces the paint colours while on; (e) a soft edge's split triangles change the preview's geometry, so a wand
+     tap re-sends the mesh to the view (not only colours).
 12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

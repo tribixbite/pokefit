@@ -7,7 +7,7 @@ const DEFAULTS = {
   rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2, pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2,
   pocket_wall: 0.8, pocket_ceiling: 0.6, pocket_grip: 1.2, pocket_max_seat: 2, pocket_seat: "washer",
   object_id: null, slot: null, settings_source: "reference", process: null, bend: null, flat_base: null,
-  flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, paint_depth: null, filament_map: null, colours: null,
+  flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "washer", fill_shape: null, paint_depth: null, filament_map: null, colours: null,
   paint: null, texture_colours: null, texture_details: 0, strengthen: 0,
 } as Params;
 

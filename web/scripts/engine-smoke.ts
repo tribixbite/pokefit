@@ -177,6 +177,23 @@ const mirror = JSON.parse(api.paint_prepare(dense.session, JSON.stringify(dense.
 const wand = JSON.parse(api.pick_face(dense.session, JSON.stringify(dense.report.params),
   JSON.stringify({ point: [0, 0, 20], normal: [0, 0, 1], mode: "wand", angle: 15, radius: 0 })));
 console.log(`[${secs()} s] simplify: ${JSON.stringify(simp)}; mirror ${JSON.stringify(mirror)}; wand ${wand.faces} faces`);
+// A stamp (an ellipse seen from above) painted with a soft edge: split triangles in the preview; the shape map view.
+const denseParams = dense.report.params;
+const stamp = JSON.parse(api.pick_face(dense.session, JSON.stringify(denseParams),
+  JSON.stringify({ point: [0, 0, 20], normal: [0, 0, 1], mode: "stamp", angle: 15, radius: 0, stamp_axes: [3, 0, 0, 0, 2, 0] })));
+const stamped = JSON.stringify({ ...denseParams, colours: ["#E05028", "#161616"],
+  paint: [{ part: stamp.part, face: stamp.face, filament: 2, mode: "stamp", angle: 15, radius: 0, stamp: stamp.stamp }] });
+const stampRep = JSON.parse(api.run_analyse(dense.session, stamped));
+const stampFaces = JSON.parse(api.faces(dense.session, stamped, "null"));
+const plainFaces = JSON.parse(api.faces(dense.session, JSON.stringify(denseParams), "null"));
+const shapeView = JSON.parse(api.faces(dense.session, JSON.stringify(denseParams), JSON.stringify({ mode: "shape", angle: 0 })));
+const splitShown = atob(stampFaces.parts[0]).length - atob(plainFaces.parts[0]).length;
+console.log(`[${secs()} s] stamp: ${stamp.faces} faces, ${splitShown} sub-triangles shown, status ${stampRep.status}; ` +
+  `shape map ${shapeView.shape?.length ?? 0} part(s)`);
+// A fill outline drawn under the sitting figure, and magnets padded on the washer.
+const outlined = JSON.parse(api.run_analyse(sitting.session, JSON.stringify({ ...sitting.report.params, magnets: 2,
+  fill_area: "shape", fill_shape: [[-6, -5], [6, -5], [6, 5], [-6, 5]] })));
+console.log(`[${secs()} s] fill outline: ${outlined.status}, pockets ${outlined.pockets.length}`);
 
 const problems: string[] = [];
 if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense.report.object.parts[0].faces !== simp.faces_after) {
@@ -184,6 +201,9 @@ if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense
 }
 if (!mirror?.ok) problems.push("mirror plane of a sphere");
 if (!(wand.faces >= 1)) problems.push("wand tap");
+if (stamp.stamp?.length !== 9 || !(stamp.faces > 0) || !(splitShown > 0)) problems.push("stamp with a soft edge");
+if (!(shapeView.shape?.length >= 1) || !(atob(shapeView.shape[0]).length > 0)) problems.push("shape map view");
+if (outlined.params.fill_area !== "shape" || outlined.status === undefined) problems.push("fill outline");
 if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
   problems.push("conform (bend + flat base)");
 }

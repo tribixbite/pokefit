@@ -27,7 +27,8 @@ from shapely.ops import unary_union
 from .ball import Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
-from .conform import DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_NAME, ConformInfo, ConformSpec, conform
+from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FILL_OVERLAP, ConformInfo, ConformSpec,
+                      base_fill, conform, disc_region)
 from .strengthen import StrengthenInfo, strengthen
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
                        apply_paint, centroid_trees, op_faces, pick_face, region_colours)
@@ -69,6 +70,11 @@ COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`)
 AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
+FILL_AREAS = ("washer", "all", "circle", "shape")
+MAX_SHAPE_POINTS = 400        # points of a drawn fill outline
+SHAPE_COLOUR = "#d9dde4"       # "Shape map" view: the figure's colour under its crease and relief shading
+UNIT_STAMP = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]   # a stamp shape for checking the other fields
+PAD_MARGIN = 0.4              # mm a pocket's pad reaches past its walled disc
 
 
 @dataclass
@@ -121,6 +127,11 @@ class Params:
     # frame at scale 1 (file mm, like the figure itself, so it stays put under the figure at any size). Inside
     # it every gap under the figure up to `flat_fill` is filled, connected or not (None = automatic).
     fill_circle: dict[str, float] | None = None
+    # Where gaps are filled: "washer" (round the washer, joined to where the figure stands), "all" (every part
+    # hovering up to `flat_fill` above the bed, anywhere under the figure), "circle" (`fill_circle`) or "shape"
+    # (`fill_shape`: an outline the user drew, [[x, y], ...] in the same frame as `fill_circle`).
+    fill_area: str = "washer"
+    fill_shape: list[list[float]] | None = None
     # Strengthen thin parts (strengthen.py): thin features get this minimum thickness in mm where they join the
     # figure, tapering toward their tips (0 = off). Measured at `figure_height` if set, else the largest size.
     strengthen: float = 0.0
@@ -172,6 +183,20 @@ class Params:
             self.figure_height = float(self.figure_height)
             if not 1 <= self.figure_height <= 1000:
                 raise ValueError("figure_height must be 1..1000 mm (or null for the largest that fits)")
+        if self.fill_area not in FILL_AREAS:
+            raise ValueError(f"fill_area must be one of {', '.join(FILL_AREAS)}, not {self.fill_area!r}")
+        if self.fill_circle is not None and self.fill_area == "washer":
+            self.fill_area = "circle"           # older clients: a circle alone meant "fill inside it"
+        if self.fill_shape is not None:
+            try:
+                pts = [(float(x), float(y)) for x, y in self.fill_shape]
+            except (TypeError, ValueError) as exc:
+                raise ValueError("fill_shape must be a list of [x, y] points in mm") from exc
+            if not 3 <= len(pts) <= MAX_SHAPE_POINTS or not np.isfinite(pts).all():
+                raise ValueError(f"fill_shape needs 3..{MAX_SHAPE_POINTS} finite points")
+            self.fill_shape = [[x, y] for x, y in pts]
+        if self.fill_area == "shape" and self.fill_shape is None:
+            raise ValueError("fill_area 'shape' needs fill_shape")
         if self.fill_circle is not None:
             try:
                 self.fill_circle = {k: float(self.fill_circle[k]) for k in ("x", "y", "d")}
@@ -202,8 +227,11 @@ class Params:
 
     @property
     def spec(self) -> PocketSpec:
+        # On the washer, the gap fill also pads each pocket: small gaps under its walled disc are filled, so the
+        # magnet resting on the washer is walled from the washer up (`pocket_pads`).
+        flush = self.pocket_seat == "washer"
         return PocketSpec(self.pocket_diameter, self.pocket_depth, self.pocket_wall, self.pocket_ceiling,
-                          self.pocket_grip, self.pocket_max_seat, self.pocket_seat == "washer")
+                          self.pocket_grip, self.pocket_max_seat, flush, float(self.flat_fill) if flush else 0.0)
 
 
 @dataclass
@@ -239,6 +267,7 @@ class Session:
     _solved: dict[str, tuple] = field(default_factory=dict)                # shape_key -> `_solve` result
     _undersides: dict[str, dict[str, Any]] = field(default_factory=dict)   # shape_key -> pocket editor data
     _preview: dict[str, Any] = field(default_factory=dict)                 # last `_preview_meshes` result
+    _pads: dict[str, Part | None] = field(default_factory=dict)            # shape_key -> `pocket_pads` (unit scale)
     _pick_trees: dict[tuple, list[Any]] = field(default_factory=dict)      # figure frame -> `centroid_trees`
     _paint_scale: dict[tuple, float] = field(default_factory=dict)         # `paint_scale` per setup
 
@@ -276,22 +305,25 @@ class Session:
         if spec is None:
             return self._orientation(params) + strong
         return self._orientation(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
-                                             spec.fill_circle, round(self.ball_scale(params), 6), params.clearance
-                                             ) + strong
+                                             spec.fill_circle, spec.fill_shape, spec.fill_all,
+                                             round(self.ball_scale(params), 6), params.clearance) + strong
 
     def conform_spec(self, params: Params) -> ConformSpec | None:
         """The conform step's settings, or None when bend and flat base are both off. The default flat-base
         fill is raised (`AUTO_FILLS`) when no magnet pocket fits under the figure with it (`_auto_fill`)."""
         flat = get_washer(params.washer).od if params.flat_base is None else float(params.flat_base)
         bend = None if params.bend is None else float(params.bend)
-        circle = params.fill_circle
+        area = params.fill_area
+        circle = params.fill_circle if area == "circle" else None
+        shape = tuple((float(x), float(y)) for x, y in params.fill_shape) if area == "shape" and params.fill_shape else None
         pressed = flat > 0 and params.flat_depth > 0
-        filled = params.flat_fill > 0 and (flat > 0 or circle is not None)
+        filled = params.flat_fill > 0 and (flat > 0 or area != "washer")
         if bend == 0 and not pressed and not filled:
             return None
         spec = ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill),
-                           fill_circle=(circle["x"], circle["y"], circle["d"]) if circle else None)
-        if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None:
+                           fill_circle=(circle["x"], circle["y"], circle["d"]) if circle else None,
+                           fill_shape=shape, fill_all=area == "all")
+        if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None and area == "washer":
             spec = replace(spec, fill=self._auto_fill(params, spec))
         return spec
 
@@ -450,6 +482,12 @@ class Session:
         if obj.id not in self._topo:
             # Plate frame (build transform applied, not rotated): brush radii are in the units the fit scales.
             self._topo[obj.id] = TopologyCache(world_parts(obj))
+        # Up in the file's frame: the figure is turned by rx, ry, rz, so the file's up is that turn undone on z.
+        _, rx, ry, rz = self._orientation(params)
+        rot = (trimesh.transformations.rotation_matrix(np.radians(rz), [0, 0, 1]) @
+               trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0]) @
+               trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0]))[:3, :3]
+        self._topo[obj.id].set_up(rot.T @ np.array([0.0, 0.0, 1.0]))
         return self._topo[obj.id]
 
     def figure_parts(self, params: Params) -> list[Part]:
@@ -457,7 +495,7 @@ class Session:
         applied (geometry identical), specks under `despeckle` mm² at the print size cleared."""
         parts = self.textured_parts(params)
         if not params.paint:
-            return parts
+            return self._with_pads(params, parts)
         s = self.paint_scale(params) if params.despeckle > 0 else 0.0
         key = (self._key(params), self.texture_count(params), params.texture_details,
                json.dumps(params.paint, sort_keys=True), params.despeckle, round(s, 4))
@@ -466,7 +504,43 @@ class Session:
                 self._painted.clear()
             min_area = params.despeckle / (s * s) if s > 0 else 0.0
             self._painted[key] = apply_paint(parts, params.paint_ops, self.topology(params), min_area)
-        return self._painted[key]
+        return self._with_pads(params, self._painted[key])
+
+    def _with_pads(self, params: Params, parts: list[Part]) -> list[Part]:
+        """`parts` plus the pads under the magnet pockets (`pocket_pads`), in the flat base's filament."""
+        pad = self.pads(params)
+        if pad is None:
+            return parts
+        base = next((p.extruder for p in parts if p.name == FILL_NAME), parts[0].extruder if parts else 1)
+        return [*parts, Part(pad.name, base, pad.vertices, pad.faces, {}, pad.subtype)]
+
+    def pads(self, params: Params) -> Part | None:
+        """Pads under the pockets on the washer (unit scale): every gap up to `flat_fill` under a pocket's walled
+        disc filled to the bed, so a magnet resting on the washer is held all round (the pocket map counts
+        on them: `PocketSpec.pad`). None without magnets, on the raised seat, with the fill off, or where the
+        figure already sits flat over every pocket."""
+        spec = params.spec
+        if not (params.magnets and spec.flush and spec.pad > 0):
+            return None
+        key = shape_key(params)
+        if key not in self._pads:
+            _evict(self._pads)
+            self._pads[key] = None
+            scale, _, pockets, _, off = solved(self, params)
+            if scale > 0 and pockets:
+                washer = get_washer(params.washer)
+                cavity = Cavity(self.ball, self.ball_scale(params), washer, params.clearance)
+                # Only where the cavity's floor is flat (it rises past the washer): a pad there could not collide.
+                reach = float(cavity.allowed_radius(np.array([cavity.floor_z]))[0])
+                centre = (-off[0] / scale, -off[1] / scale)
+                discs = disc_region([(p.x / scale, p.y / scale) for p in pockets],
+                                    (spec.diameter / 2 + spec.wall + PAD_MARGIN) / scale)
+                floor = disc_region([centre], reach / scale)
+                self._pads[key] = base_fill(self.unit_parts(params),
+                                            lambda gx, gy, step: discs(gx, gy, step) & floor(gx, gy, step),
+                                            spec.pad / scale, FILL_CELL / scale, FILL_OVERLAP / scale, 1,
+                                            connected=False)
+        return self._pads[key]
 
     def paint_scale(self, params: Params) -> float:
         """The print scale paint sizes are judged at: the scale chosen, else the height asked for (capped at the
@@ -837,6 +911,17 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
     return s_fit, s_fit, free_pk, free_ch, fit_offset(s_fit)
 
 
+def solved(session: Session, params: Params) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
+    """`_solve` for these settings, cached per shape (`shape_key`): a colour edit reuses it."""
+    skey = shape_key(params)
+    if skey not in session._solved:
+        _evict(session._solved)
+        washer = get_washer(params.washer)
+        cavity = Cavity(session.ball, session.ball_scale(params), washer, params.clearance)
+        session._solved[skey] = _solve(session, params, cavity, washer)
+    return session._solved[skey]
+
+
 def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
     """Max figure scale with each catalogue washer (magnets full / partial / off steel), best first.
 
@@ -895,10 +980,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
 
     t1 = time.time()
     skey = shape_key(params)
-    if skey not in session._solved:
-        _evict(session._solved)
-        session._solved[skey] = _solve(session, params, cavity, washer)
-    scale, s_max, pockets, pchecks, off = session._solved[skey]
+    scale, s_max, pockets, pchecks, off = solved(session, params)
     t["fit"] = time.time() - t1
     fit_dict: dict[str, Any] = {"max_scale": s_max, "scale": scale, "offset": off,
                                 "height_mm": scale * hp.height, "max_height_mm": s_max * hp.height,
@@ -1354,8 +1436,10 @@ class PreviewMeshes:
 def _preview_meshes(session: Session, params: Params, regions: tuple[str, float] | None) -> PreviewMeshes:
     """The preview's parts at scale 1 in the figure frame, cached for the last setting (the
     glTF and the face colours of one view are asked for one after the other)."""
+    pad = None if regions else session.pads(params)
     key = json.dumps([session._key(params), session.texture_count(params), params.texture_details, params.paint,
-                      regions], sort_keys=True, default=str)
+                      regions, digest(pad.vertices, pad.faces).hex() if pad is not None else None],
+                     sort_keys=True, default=str)
     hit = session._preview.get(key)
     if hit is not None:
         return hit
@@ -1366,11 +1450,14 @@ def _preview_meshes(session: Session, params: Params, regions: tuple[str, float]
     if regions:
         # Overlap clipping re-meshes parts and loses the face order the region labels need: skip it here.
         topo = session.topology(params)
-        mode = "part" if regions[0] == "brush" else regions[0]   # a brush has no fixed regions: show parts
+        mode = "part" if regions[0] in ("brush", "stamp") else regions[0]   # no fixed regions: show parts
         for pi, part in enumerate(unit):
             meshes.append((part.vertices, part.faces))
-            keys.append(topo.labels(pi, mode, regions[1]) if pi < len(topo)
-                        else np.full(len(part.faces), -1, np.int64))
+            if mode == "shape":                 # the shape map is drawn per vertex (`preview_faces`)
+                keys.append(np.where(np.arange(len(part.faces)) >= 0, 0 if pi < len(topo) else -1, 0))
+            else:
+                keys.append(topo.labels(pi, mode, regions[1]) if pi < len(topo)
+                            else np.full(len(part.faces), -1, np.int64))
     else:
         for part in clip_overlaps(unit):
             pv, pf, ext = painted_mesh(part, obj.extruder)
@@ -1414,6 +1501,19 @@ def preview_faces(session: Session, params: Params, regions: tuple[str, float] |
     import base64
 
     pm = _preview_meshes(session, params, regions)
+    if regions and regions[0] == "shape":
+        # Shape map: one neutral colour; per vertex, crease and relief bytes the viewer shades and draws lines of.
+        topo = session.topology(params)
+        shape = []
+        for pi, (v, f) in enumerate(pm.meshes):
+            per = np.full((len(v), 2), (0, 128), np.uint8)
+            if pi < len(topo):
+                t = topo.part(pi)
+                per[f.ravel()] = t.shape_map()[t.vfaces.ravel()]
+            shape.append(base64.b64encode(per.tobytes()).decode("ascii"))
+        return {"signature": pm.signature, "colours": [SHAPE_COLOUR, REGION_OTHER],
+                "parts": [base64.b64encode(np.where(k < 0, 1, 0).astype(np.uint8).tobytes()).decode("ascii")
+                          for k in pm.keys], "shape": shape}
     if regions:
         colours = ["#%02x%02x%02x" % tuple(int(c) for c in rgb) for rgb in region_colours(REGION_PALETTE)]
         colours.append(REGION_OTHER)
@@ -1447,16 +1547,16 @@ def prepare_paint(session: Session, params: Params, mode: str = "part", angle: f
     _pick_trees_for(session, params)
     topo = session.topology(params)
     for i in range(len(topo)):
-        if mode == "wand":                     # its bend field, KD-tree and the "part" regions it also offers
-            t = topo.part(i)
-            t.wall()
+        t = topo.part(i)
+        if mode in ("wand", "brush", "stamp"):  # soft edges walk the vertex graph; the stamp and wand use the KD-tree
+            t.vertex_graph()
             _ = t.tree
+        if mode == "wand":                     # its bend field and the "part" regions it also offers
+            t.wall()
             for a in WAND_ANGLES:
                 topo.labels(i, "part", a)
-        elif mode not in ("brush", "face"):
+        elif mode not in ("brush", "face", "stamp"):
             topo.labels(i, mode, angle)
-        else:
-            topo.part(i)
     out: dict[str, Any] = {"parts": len(topo)}
     if mirror:
         out["mirror"] = _mirror_info(topo)
@@ -1472,8 +1572,11 @@ def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
 def pick(session: Session, params: Params, point: list[float], normal: list[float] | None,
          mode: str = "part", angle: float = 15.0, radius: float = 0.0,
          stroke: list[dict[str, Any]] | None = None, mirror: bool = False, grow: float = 0.0,
-         level: int = 0) -> dict[str, Any]:
+         level: int = 0, stamp_axes: list[float] | None = None) -> dict[str, Any]:
     """The triangle under a tap on the 3D preview (figure frame, scale 1) and the size of its region.
+
+    A stamp (`mode` "stamp") is an ellipse centred on `point` with semi-axes `stamp_axes` = [u, v] (6 numbers,
+    figure frame, scale 1, seen along u x v); the answer's `stamp` carries it in the paint operation's own frame.
 
     The answer's part/face go into a colorize paint operation, which then
     paints the same region on every later analysis and export. `stroke` (brush
@@ -1485,9 +1588,11 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     """
     session.use_simplify(params.simplify)
     PaintOp.from_dict({"part": 0, "face": 0, "filament": 0, "mode": mode, "angle": angle, "radius": radius,
-                       "grow": grow, "level": level})
+                       "grow": grow, "level": level, **({"stamp": UNIT_STAMP} if mode == "stamp" else {})})
     if stroke and mode != "brush":
         raise ValueError("only the brush paints strokes")
+    if (mode == "stamp") != (stamp_axes is not None):
+        raise ValueError("a stamp needs its two semi-axes, and only a stamp has them")
     parts = session.unit_parts(params)
     trees = _pick_trees_for(session, params)
 
@@ -1514,7 +1619,11 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
             return None
         return states.setdefault(i, PaintState(figure[i]))
 
-    op = PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow, level)
+    stamp: tuple[float, ...] = ()
+    if stamp_axes is not None:
+        stamp = _stamp_frame(session, params, pi, fi, np.asarray(point, float)[:3], np.asarray(stamp_axes, float))
+    op = PaintOp.from_dict(PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow, level,
+                                   stamp).to_dict())
     sides = op_faces(topo, op, state)
     n = sum(len(f) for _, f in sides)
     area = 0.0
@@ -1526,7 +1635,31 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     shown = fp.majority if fp is not None and fp.majority > 0 else (figure[pi].extruder or session.obj(params).extruder)
     return {"part": pi, "face": fi, "distance": dist, "faces": int(n), "path": path,
             "share": round(len(sides[0][1]) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2),
-            "mirrored": len(sides) > 1, "filament": int(shown)}
+            "mirrored": len(sides) > 1, "filament": int(shown), **({"stamp": list(stamp)} if stamp else {})}
+
+
+def _stamp_frame(session: Session, params: Params, pi: int, fi: int, point: np.ndarray, axes: np.ndarray
+                 ) -> tuple[float, ...]:
+    """A stamp drawn in the figure frame (centre `point` on triangle `fi`, semi-axes `axes` = u, v), in the frame
+    paint operations live in (the file's, before rotation): the centre at the same spot of the same triangle,
+    the axes turned back by the figure's rotation."""
+    if len(axes) != 6 or not np.isfinite(axes).all():
+        raise ValueError("stamp_axes must be 6 numbers (two semi-axes)")
+    fig_tri = session.unit_parts(params)[pi]
+    src = session.topology(params)._parts[pi]
+    a, b, c = fig_tri.vertices[fig_tri.faces[fi]]
+    # Barycentric coordinates of the point in the figure-frame triangle, applied to the same triangle in the file.
+    m = np.column_stack([b - a, c - a])
+    uv, *_ = np.linalg.lstsq(m, point - a, rcond=None)
+    sa, sb, sc = src.vertices[src.faces[fi]]
+    centre = sa + uv[0] * (sb - sa) + uv[1] * (sc - sa)
+    _, rx, ry, rz = session._orientation(params)
+    rot = (trimesh.transformations.rotation_matrix(np.radians(rz), [0, 0, 1]) @
+           trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0]) @
+           trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0]))[:3, :3]
+    u, v = rot.T @ axes[:3], rot.T @ axes[3:]
+    v = v - u * (u @ v) / max(float(u @ u), 1e-12)        # exactly at right angles
+    return tuple(float(x) for x in (*centre, *u, *v))
 
 
 def with_paint_depth(settings: dict | None, params: Params) -> dict | None:

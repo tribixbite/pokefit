@@ -195,7 +195,7 @@ def test_washer_pocket_under_floating_part() -> None:
     (p,) = pockets
     assert p.z == 0.0
     (v,) = validate_pockets([m], pockets, SPEC)
-    assert v.status == "pass" and "Sits on the washer" in v.message and "shows up to 1.0 mm" in v.message
+    assert v.status == "pass" and "Sits on the washer" in v.message and "up to 1.0 mm above the washer here" in v.message
     (new,), _ = cut_pockets([_part(m)], pockets, SPEC)
     assert new.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)
     r = SPEC.diameter / 2
@@ -209,7 +209,7 @@ def test_washer_pocket_short_grip_warns() -> None:
     pockets, _ = auto_pockets([m], SPEC, count=1)
     assert pockets and pockets[0].z == 0.0
     (v,) = validate_pockets([m], pockets, SPEC)
-    assert v.status == "warn" and "Only 0.7 mm" in v.message and "glue" in v.message
+    assert v.status == "warn" and "only 0.7 mm" in v.message and "glue" in v.message
 
 
 def test_washer_too_far_up_fails_with_raised_hint() -> None:

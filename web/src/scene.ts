@@ -72,6 +72,9 @@ export class Viewer {
   /** Colorize brush: called with a stroke's samples when a drag on the figure ends; null = drags orbit. */
   private strokeHandler: ((hits: FigureHit[]) => void) | null = null;
   private stroke: Stroke | null = null;
+  /** Colorize stamp: called with the figure point under a dragged box's centre and the ellipse's semi-axes. */
+  private stampHandler: ((hit: FigureHit, axes: number[]) => void) | null = null;
+  private stampDrag: { id: number; x: number; y: number; box: HTMLDivElement } | null = null;
   private raycaster = new THREE.Raycaster();
 
   constructor(private host: HTMLElement) {
@@ -118,6 +121,17 @@ export class Viewer {
     // OrbitControls (on the canvas) sees it; presses beside the figure, a second finger or the right button still
     // turn the view.
     host.addEventListener("pointerdown", (e) => {
+      if (this.stampHandler && e.target === canvas && e.isPrimary && e.button === 0 && this.hitFigure(e.clientX, e.clientY)) {
+        // Stamp: a drag that starts on the figure draws the ellipse's box instead of turning the view.
+        e.stopPropagation();
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* the drag still ends on its pointerup */ }
+        const box = document.createElement("div");
+        box.className = "stamp-box";
+        host.appendChild(box);
+        this.stampDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, box };
+        this.placeStampBox(e.clientX, e.clientY);
+        return;
+      }
       if (!this.strokeHandler || e.target !== canvas || !e.isPrimary || e.button !== 0) {
         if (this.stroke && !e.isPrimary) this.endStroke(false);      // a pinch started: no stroke
         return;
@@ -133,6 +147,7 @@ export class Viewer {
       this.startStroke(e.pointerId, e.clientX, e.clientY, hit);
     }, { capture: true });
     canvas.addEventListener("pointermove", (e) => {
+      if (this.stampDrag && e.pointerId === this.stampDrag.id) this.placeStampBox(e.clientX, e.clientY);
       const s = this.stroke;
       if (!s || e.pointerId !== s.id) return;
       // At most one raycast per STROKE_MS (a 300k-triangle figure takes several ms each); by time, not by animation
@@ -141,6 +156,7 @@ export class Viewer {
       this.sampleStroke(s, e.clientX, e.clientY);
     });
     const finish = (e: PointerEvent) => {
+      if (this.stampDrag && e.pointerId === this.stampDrag.id) this.endStamp(e);
       const s = this.stroke;
       if (!s || e.pointerId !== s.id) return;
       if (e.type === "pointerup") this.sampleStroke(s, e.clientX, e.clientY);     // where the drag ended
@@ -156,6 +172,50 @@ export class Viewer {
     if (!fn && this.stroke) this.endStroke(false);
     // While strokes take one-finger / left drags on the figure, the right button turns the view too.
     this.controls.mouseButtons.RIGHT = fn ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  }
+
+  /** Stamp mode: a drag on the figure draws a box; on release the ellipse in it is stamped (null = drags orbit). */
+  setStampHandler(fn: ((hit: FigureHit, axes: number[]) => void) | null): void {
+    this.stampHandler = fn;
+    if (!fn && this.stampDrag) { this.stampDrag.box.remove(); this.stampDrag = null; }
+    this.controls.mouseButtons.RIGHT = fn || this.strokeHandler ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  }
+
+  /** The stamp box from the press to (x, y), in the host's coordinates. */
+  private placeStampBox(x: number, y: number): void {
+    const d = this.stampDrag;
+    if (!d) return;
+    const r = this.host.getBoundingClientRect();
+    Object.assign(d.box.style, {
+      left: `${Math.min(d.x, x) - r.left}px`, top: `${Math.min(d.y, y) - r.top}px`,
+      width: `${Math.abs(x - d.x)}px`, height: `${Math.abs(y - d.y)}px`,
+    });
+  }
+
+  /** Release: the ellipse inscribed in the box, centred where its centre meets the figure, as semi-axes along the
+   * screen's right and up at that depth (figure frame, scale 1). */
+  private endStamp(e: PointerEvent): void {
+    const d = this.stampDrag;
+    this.stampDrag = null;
+    if (!d) return;
+    d.box.remove();
+    const w = Math.abs(e.clientX - d.x), h = Math.abs(e.clientY - d.y);
+    if (e.type !== "pointerup" || w < 6 || h < 6 || !this.stampHandler || !this.figure) return;
+    const hit = this.hitFigure((e.clientX + d.x) / 2, (e.clientY + d.y) / 2);
+    if (!hit) return;
+    const world = new THREE.Vector3(...hit.point).applyMatrix4(this.figure.matrixWorld);
+    const cam = this.camera;
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    const forward = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 2).negate().normalize();
+    const depth = world.clone().sub(cam.position).dot(forward);
+    const perPx = (2 * depth * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / this.renderer.domElement.clientHeight;
+    const inv = new THREE.Matrix4().copy(this.figure.matrixWorld).invert();
+    const p = new THREE.Vector3(...hit.point);
+    const axis = (dir: THREE.Vector3, px: number) =>
+      world.clone().addScaledVector(dir, (px / 2) * perPx).applyMatrix4(inv).sub(p);
+    const u = axis(right, w), v = axis(up, h);
+    this.stampHandler(hit, [u.x, u.y, u.z, v.x, v.y, v.z]);
   }
 
   /** Add the figure point under (x, y) to the stroke, if it moved far enough on screen and hits the figure. */
@@ -287,10 +347,17 @@ export class Viewer {
     this.faceMaterials = faces.colours.map((c) => new THREE.MeshStandardMaterial({
       color: new THREE.Color(c), side: THREE.DoubleSide, metalness: 0, roughness: 0.75,
     }));
+    if (faces.shape) this.faceMaterials[0] = shapeMaterial(this.faceMaterials[0]);
     faces.parts.forEach((b64, i) => {
       const mesh = this.figure?.getObjectByName(`p${i}`) as THREE.Mesh | undefined;
       const order = mesh?.isMesh ? this.faceOrder.get(mesh.geometry) : undefined;
       if (!mesh || !order) return;
+      const shape = faces.shape?.[i] ? base64Bytes(faces.shape[i]) : null;
+      if (shape && shape.length === mesh.geometry.getAttribute("position").count * 2) {
+        mesh.geometry.setAttribute("shape", new THREE.BufferAttribute(shape, 2, true));
+      } else if (mesh.geometry.getAttribute("shape")) {
+        mesh.geometry.deleteAttribute("shape");
+      }
       const colour = base64Bytes(b64);
       if (colour.length * 3 !== order.length) return;   // another geometry: the next full load fixes it
       const { index, groups } = groupFaces(order, colour, this.faceMaterials.length);
@@ -478,6 +545,36 @@ export class Viewer {
       );
     }
   }
+}
+
+/**
+ * The shape map's material: `base` shaded per vertex from the engine's `shape` attribute (crease, relief): creases
+ * darken, raised spots turn warm and sunk ones cool, and lines of equal relief are drawn like a topographic map's
+ * contours (anti-aliased by screen-space derivatives, so they stay thin at any zoom).
+ */
+function shapeMaterial(base: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  base.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec2 shape;\nvarying vec2 vShape;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvShape = shape;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vShape;")
+      .replace("#include <color_fragment>", `#include <color_fragment>
+      {
+        float crease = vShape.x;
+        float relief = vShape.y * 2.0 - 1.0;
+        vec3 c = relief > 0.0 ? mix(diffuseColor.rgb, vec3(0.86, 0.36, 0.26), min(relief, 1.0) * 0.6)
+                              : mix(diffuseColor.rgb, vec3(0.25, 0.45, 0.90), min(-relief, 1.0) * 0.6);
+        float lv = relief * 6.0;
+        float line = 1.0 - smoothstep(0.0, 1.5 * fwidth(lv), abs(fract(lv - 0.5) - 0.5));
+        c = mix(c, vec3(0.1), line * 0.5);
+        c *= 1.0 - 0.8 * smoothstep(0.15, 0.9, crease);
+        diffuseColor.rgb = c;
+      }`);
+  };
+  base.customProgramCacheKey = () => "shape-map";
+  base.needsUpdate = true;
+  return base;
 }
 
 function dot(p: number[], colour: number, r: number): THREE.Mesh {

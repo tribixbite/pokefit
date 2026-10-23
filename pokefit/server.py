@@ -470,7 +470,8 @@ class Handler(BaseHTTPRequestHandler):
             mode, angle = str(body.get("mode", "part")), float(body.get("angle", 15.0))
             with lock:
                 res = pick(s, params, point, normal, mode, angle, float(body.get("radius", 0.0)), body.get("stroke"),
-                           bool(body.get("mirror", False)), float(body.get("grow", 0.0)), int(body.get("level", 0)))
+                           bool(body.get("mirror", False)), float(body.get("grow", 0.0)), int(body.get("level", 0)),
+                           [float(v) for v in body["stamp_axes"]] if body.get("stamp_axes") else None)
         except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(400, f"bad pick: {exc}") from exc
         self._json(res)

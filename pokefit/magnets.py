@@ -33,6 +33,10 @@ Rules (both modes):
   * (raised, automatic placement) z <= `max_seat`: higher up, the magnet is
     too far from the steel to hold much.
 
+On the washer with `pad` > 0 (the gap fill's height), gaps up to `pad` under a
+pocket's walled disc count as filled: the pipeline adds a pad of flat base there
+(`pipeline.Session.pads`), so the magnet is walled from the washer up.
+
 Up to three pockets are placed automatically: spread as far apart as possible
 (stability), deep inside the valid area (thicker walls), low (a magnet any
 distance above the steel holds much less) and, on the washer, where the
@@ -84,6 +88,8 @@ class PocketSpec:
     grip: float = 1.2          # min. height of the pocket surrounded by wall
     max_seat: float = 2.0      # raised, auto placement: highest pocket opening above the washer (the hold fades fast)
     flush: bool = True         # True: every pocket opens on the washer (z = 0); False: raised into floating parts
+    pad: float = 0.0           # on the washer: gaps up to this high under a pocket's walled disc are filled by a pad
+                               # (`pocket_pads`), so the magnet is walled from the washer up (0 = no pads)
 
 
 @dataclass
@@ -144,6 +150,13 @@ class HeightField:
     def scaled(self, s: float) -> "HeightField":
         """The same underside after scaling the solid by s about the origin."""
         return HeightField(self.x0 * s, self.y0 * s, self.step * s, self.z1 * s, self.z2 * s)
+
+    def padded(self, gap: float) -> "HeightField":
+        """The underside with every gap up to `gap` mm under material filled to the bed (what a pocket pad does
+        under its own disc: `pocket_pads`)."""
+        if gap <= 0:
+            return self
+        return HeightField(self.x0, self.y0, self.step, np.where(self.z1 <= gap, 0.0, self.z1), self.z2)
 
     def xy(self) -> tuple[np.ndarray, np.ndarray]:
         ny, nx = self.z1.shape
@@ -305,7 +318,13 @@ def _raised(z_hi: np.ndarray, walls: np.ndarray, cover: np.ndarray, spec: Pocket
     return seat, np.isfinite(z_hi) & (walls >= top - eps) & (cover >= top + spec.ceiling - eps)
 
 
+def _seen(f: HeightField, spec: PocketSpec) -> HeightField:
+    """The underside a pocket meets: on the washer with pads, its small gaps filled."""
+    return f.padded(spec.pad) if spec.flush else f
+
+
 def pocket_map(f: HeightField, spec: PocketSpec) -> PocketMap:
+    f = _seen(f, spec)
     r = spec.diameter / 2 / f.step
     rw = (spec.diameter / 2 + spec.wall) / f.step
     z_hi = _disc_filter(f.z1, rw, "max", np.inf)              # highest underside point under the walled disc
@@ -489,7 +508,7 @@ def choose_pockets(pm: PocketMap, spec: PocketSpec, count: int = 2, ring: Ring |
 def seat_of(f: HeightField, x: float, y: float, spec: PocketSpec) -> float:
     """Seat of a pocket at (x, y): 0 on the washer, else the lowest that keeps `grip` mm of it walled
     (≥ 0; inf without material)."""
-    _, z1, _ = f.window(x, y, spec.diameter / 2 + spec.wall)
+    _, z1, _ = _seen(f, spec).window(x, y, spec.diameter / 2 + spec.wall)
     z1 = z1[np.isfinite(z1)]
     if not len(z1):
         return float("inf")
@@ -505,6 +524,7 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
                      spec: PocketSpec) -> list[Check]:
     """Measured wall, ceiling and seat of each pocket, plus the spacing between them."""
     f = source if isinstance(source, HeightField) else height_field(source, margin=spec.diameter / 2 + spec.wall)
+    f = _seen(f, spec)
     r = spec.diameter / 2
     checks = []
     for i, p in enumerate(pockets):
@@ -546,12 +566,18 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
                     (" (too far to hold much)." if seat > spec.max_seat else
                      " (weaker hold)." if seat > LOW_SEAT else "."))
             proud = float(z1[solid].max() - seat) if solid.any() else 0.0
+            # The magnet always rests on the washer (or its raised seat); what can be missing is wall round its
+            # lower side, where the figure's underside lies above the washer and nothing fills the gap.
+            rise = float(z1[walled].max() - seat) if walled.any() else 0.0
+            where = "the washer" if spec.flush else "the pocket's opening"
+            fix = (" Raise “Fill gaps up to” to at least that to wall it in." if spec.flush and rise <= 10 else "")
             if grip < spec.grip - 1e-6:
-                msg += (f" Only {max(grip, 0.0):.1f} mm of the pocket is walled (grip {spec.grip:.1f} mm): the "
-                        "underside rises here, so the magnet shows below it — glue it in.")
+                msg += (f" The figure's underside is up to {rise:.1f} mm above {where} round it, so only "
+                        f"{max(grip, 0.0):.1f} mm of the magnet is walled (grip {spec.grip:.1f} mm): glue it in."
+                        + fix)
             elif proud > 0.05:
-                msg += (f" The magnet shows up to {min(proud, spec.depth - spec.grip):.1f} mm below the figure "
-                        "here (the underside is above the washer).")
+                msg += (f" The figure's underside is up to {proud:.1f} mm above {where} here, so the magnet's "
+                        f"lower side shows by that much (it still rests on the washer)." + fix)
         if status == "fail":
             msg += " Not cut."
         checks.append(Check(f"pocket:{i + 1}", f"Pocket {i + 1}", status, msg, round(wall, 2),
