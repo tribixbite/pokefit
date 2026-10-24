@@ -106,8 +106,9 @@ class FigureObject:
     transform: np.ndarray               # build item transform (4x4), first instance
     loader: Callable[[], list[Part]] | None = None
     n_faces: int | None = None          # known without parsing (counted in the XML)
-    simplify: int | None = None         # triangle budget the parts are simplified to when loaded (simplify.py)
+    simplify: float | None = None       # triangle budget (simplify.Budget) the parts are cut to when loaded
     simplified: Any = None              # simplify.SimplifyInfo once that happened (None: nothing to cut)
+    repaired: Any = None                # repair.RepairInfo when loading fixed the mesh (None: nothing to fix)
 
     @property
     def parts(self) -> list[Part]:
@@ -121,6 +122,11 @@ class FigureObject:
                 cut, info = simplify_parts(parts, self.simplify)
                 if info.faces_after < info.faces_before:
                     parts, self.simplified = cut, info
+            # Like Bambu Studio's "Fix model": every edge joins exactly two faces before anything is cut or painted.
+            from .repair import repair_parts
+
+            parts, fixed = repair_parts(parts)
+            self.repaired = fixed or None
             self._parts, self.loader = parts, None
         return self._parts
 
@@ -258,7 +264,7 @@ def _model_settings(z: zipfile.ZipFile) -> dict[str, dict]:
     return out
 
 
-def read_project(path: str | Path, simplify: int | None = None) -> Project:
+def read_project(path: str | Path, simplify: float | None = None) -> Project:
     """Load a 3MF project, a glTF/GLB scene (one part, its colours as paint; see gltf.py)
     or an STL/OBJ mesh (one object, one part). `simplify`: cut each figure to about this many triangles
     when its meshes load (simplify.py; None = as in the file)."""

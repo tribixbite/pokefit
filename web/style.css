@@ -232,6 +232,11 @@ svg.underside.drawing { cursor: crosshair; touch-action: none; }
 .pocket-list .warn { color: var(--warn); }
 .seat-row { gap: 10px; flex-wrap: wrap; }
 .seat-row .seg button { padding: 0 12px; }
+.simplify { margin-top: 8px; }
+.simplify-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.simplify-row input[type="range"] { flex: 1 1 180px; min-width: 0; }
+.simplify-count { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+.simplify-count input { width: 12ch; }
 label.off { opacity: .45; }
 
 /* Colorize */

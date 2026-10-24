@@ -207,10 +207,19 @@
             <select id="strengthenSelect"><option value="0">Off</option><option value="1.2">1.2 mm</option>
               <option value="1.6">1.6 mm</option><option value="2">2 mm</option><option value="2.5">2.5 mm</option>
               <option value="3">3 mm</option><option value="4">4 mm</option></select></label>
-          <label title="Cut a dense mesh down to about this many triangles when it loads (like Bambu Studio's Simplify): painting, the analysis and slicing get several times faster, and noisy sculpts paint in cleaner regions. The surface moves by at most 0.1 % of the figure's size (about 0.03 mm), so it stops early where the shape needs the triangles. Changing it clears paint steps (they name triangles).">Simplify mesh
-            <select id="simplifySelect"><option value="">Off (as in the file)</option><option value="400000">400k triangles</option>
-              <option value="200000">200k triangles</option><option value="100000">100k triangles</option>
-              <option value="50000">50k triangles</option><option value="25000">25k triangles</option></select></label>
+        </div>
+        <div class="simplify" title="Cut a dense mesh down when it loads (like Bambu Studio's Simplify): painting, the analysis and slicing get several times faster, and noisy sculpts paint in cleaner regions. The surface moves by at most 0.1 % of the figure's size (about 0.03 mm), so it stops early where the shape needs the triangles. Changing it clears paint steps (they name triangles).">
+          <div class="row seat-row">
+            <span class="muted">Simplify mesh</span>
+            <div class="seg" id="simplifyLevel" role="radiogroup" aria-label="Simplify level">
+              <button role="radio" data-level="Low" title="Keep 7 % of the file's triangles">Low</button><button role="radio" data-level="Medium" title="Keep 20 % of the file's triangles">Medium</button><button role="radio" data-level="High" title="Keep 50 % of the file's triangles">High</button><button role="radio" data-level="Off" title="Every triangle, as in the file">Off</button>
+            </div>
+          </div>
+          <div class="simplify-row">
+            <input id="simplifySlider" type="range" min="0" max="1000" step="1" value="1000" list="simplifyTicks" aria-label="Share of the file's triangles to keep" />
+            <label class="unit simplify-count"><input id="simplifyCount" type="number" min="1000" step="1000" inputmode="numeric" aria-label="Triangles to keep" /> <span id="simplifyOf" class="muted"></span></label>
+          </div>
+          <datalist id="simplifyTicks"></datalist>
         </div>
         <p id="simplifyInfo" class="hint" hidden></p>
         <p id="conformInfo" class="hint" hidden></p>

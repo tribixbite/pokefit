@@ -44,6 +44,9 @@ CHOICES = (25_000, 50_000, 100_000, 200_000, 400_000)   # triangle budgets the U
 # Eevee at 100k: longest edge p95 0.93 -> 0.52 mm, p99 1.54 -> 0.60 mm, surface change 0.007 -> 0.021 mm (of 40).
 OPTIONS = 64
 MISS_SHARE = 0.1      # ... unless it stops this far above the target (`simplify_indices`)
+# A simplify budget (Params.simplify): a triangle count (>= 1,000), or a share of the file's triangles (0 < b < 1),
+# so a level such as "medium" means the same on a 30k and a 1.4M mesh.
+Budget = float
 
 
 class _Wasm:
@@ -169,15 +172,19 @@ def _simplify(v: np.ndarray, f: np.ndarray, target: int, error: float, options: 
 
 
 def clean(faces: np.ndarray) -> np.ndarray:
-    """Faces without degenerate triangles and without folds: an edge collapse can leave two triangles on the same
-    three corners (a zero-volume fin, measured: 2-9 non-manifold edges per 100k triangles); both copies of a
-    reversed pair go, one of a repeated one stays."""
-    f = faces[(faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])]
+    """Faces without degenerate triangles and without folds (`clean_index`)."""
+    return faces[clean_index(faces)]
+
+
+def clean_index(faces: np.ndarray) -> np.ndarray:
+    """Indices (ascending) of the faces to keep: no degenerate triangles and no folds. An edge collapse can leave
+    two triangles on the same three corners (a zero-volume fin, measured: 2-9 non-manifold edges per 100k
+    triangles); both copies of a reversed pair go, one of a repeated one stays."""
+    ok = np.nonzero((faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2]))[0]
+    f = faces[ok]
     if not len(f):
-        return f
-    key = np.sort(f, axis=1)
-    _, first, group, counts = np.unique(key, axis=0, return_index=True, return_inverse=True, return_counts=True)
-    group = group.reshape(-1)
+        return ok
+    group, first, counts = group_rows(np.sort(f, axis=1))
     order = np.argsort(f, axis=1)
     # Winding as a parity (the permutation that sorts the corners is even or odd), as in gltf.two_sided.
     parity = ((order[:, 0] > order[:, 1]).astype(np.int64) + (order[:, 0] > order[:, 2]) + (order[:, 1] > order[:, 2])) % 2
@@ -185,7 +192,40 @@ def clean(faces: np.ndarray) -> np.ndarray:
     mixed = (odd > 0) & (odd < counts)                      # both windings present: a fin
     keep = np.zeros(len(f), bool)
     keep[first[~mixed]] = True
-    return f[np.sort(np.nonzero(keep)[0])]
+    return ok[np.sort(np.nonzero(keep)[0])]
+
+
+def group_rows(rows: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(group, first, counts) of equal integer rows, as `np.unique(rows, axis=0, return_inverse, return_index,
+    return_counts)` gives them (groups in sorted order, first = lowest index), by one lexsort: several times faster
+    than `unique` on rows (1.5 s -> 0.3 s for 1.4M triangles)."""
+    n = len(rows)
+    if not n:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0, np.int64)
+    # Fold neighbouring columns into one int64 key while their ranges fit 62 bits: sorting one key is ~7x faster
+    # than lexsort over three (triangle corners always fold into one; positions on a 1e-6 grid into two).
+    lo = rows.min(axis=0)
+    span = rows.max(axis=0) - lo + 1
+    keys: list[np.ndarray] = []
+    cur, size = np.zeros(n, np.int64), 1
+    for c in range(rows.shape[1]):
+        if size * int(span[c]) >= 1 << 62:
+            keys.append(cur)
+            cur, size = np.zeros(n, np.int64), 1
+        cur = cur * int(span[c]) + (rows[:, c] - lo[c])
+        size *= int(span[c])
+    keys.append(cur)
+    order = np.argsort(keys[0], kind="stable") if len(keys) == 1 else np.lexsort(keys[::-1])
+    new = np.empty(n, bool)
+    new[0] = True
+    new[1:] = False
+    for k in keys:
+        srt = k[order]
+        new[1:] |= srt[1:] != srt[:-1]
+    group = np.empty(n, np.int64)
+    group[order] = np.cumsum(new) - 1
+    starts = np.nonzero(new)[0]
+    return group, order[starts], np.diff(np.append(starts, n))
 
 
 def compact(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -204,9 +244,15 @@ class SimplifyInfo:
         return {"faces_before": self.faces_before, "faces_after": self.faces_after, "error": self.error}
 
 
-def budgets(counts: list[int], target: int) -> list[int | None]:
-    """Each part's triangle budget for `target` over all of them (None = leave the part as it is): shared in
+def resolve(budget: Budget, faces: int) -> int:
+    """Triangles a budget asks for on a mesh of `faces` triangles (a share of them, or the count itself)."""
+    return max(1, round(budget * faces)) if budget < 1 else int(budget)
+
+
+def budgets(counts: list[int], budget: Budget) -> list[int | None]:
+    """Each part's triangle budget for `budget` over all of them (None = leave the part as it is): shared in
     proportion to size among the parts above MIN_FACES; nothing changes when the total is within the target."""
+    target = resolve(budget, sum(counts))
     big = [n if n >= MIN_FACES else 0 for n in counts]
     small = sum(counts) - sum(big)
     if sum(counts) <= target or not sum(big):
@@ -239,10 +285,10 @@ def simplify_part(part: "Part", target: int, error: float = ERROR) -> tuple["Par
     return Part(part.name, part.extruder, v, f, extra, part.subtype), rel * extent
 
 
-def simplify_parts(parts: list["Part"], target: int, error: float = ERROR) -> tuple[list["Part"], SimplifyInfo]:
-    """`parts` with about `target` triangles in all (modifier and negative parts, and small parts, unchanged)."""
+def simplify_parts(parts: list["Part"], budget: Budget, error: float = ERROR) -> tuple[list["Part"], SimplifyInfo]:
+    """`parts` cut to `budget` triangles in all (modifier and negative parts, and small parts, unchanged)."""
     counts = [len(p.faces) if p.subtype == "normal_part" else 0 for p in parts]
-    want = budgets(counts, target)
+    want = budgets(counts, budget)
     out: list[Part] = []
     worst = 0.0
     for p, b in zip(parts, want):

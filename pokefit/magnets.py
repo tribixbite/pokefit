@@ -56,6 +56,7 @@ from shapely.ops import unary_union
 from .geom import mf
 from .model3mf import Part, digest, remesh_part
 from .planar import regions
+from .repair import repaired
 from .report import Check, Status
 from .shell import from_manifold, to_manifold
 
@@ -621,7 +622,9 @@ def _cut(part: Part, pockets: list[Pocket], spec: PocketSpec) -> tuple[np.ndarra
     out: tuple[np.ndarray, np.ndarray, float] | None = None
     if abs(cut.volume() - body.volume()) >= 1e-6:
         m = from_manifold(cut)
-        out = (np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64), body.volume() - cut.volume())
+        # Welded where surfaces touch (a pocket's rim on a pressed base): separate them again (repair.py).
+        v, f = repaired(np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
+        out = (v, f, body.volume() - cut.volume())
     while len(_CUTS) >= CUT_CACHE:
         _CUTS.pop(next(iter(_CUTS)))
     _CUTS[key] = out

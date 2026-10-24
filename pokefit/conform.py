@@ -38,6 +38,7 @@ import numpy as np
 
 from .ball import Cavity
 from .fit import max_scale, prepare_points
+from .repair import repaired
 from .magnets import HeightField, height_field
 from .model3mf import Part
 
@@ -412,5 +413,6 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
     import trimesh
     mesh = trimesh.Trimesh(verts, np.array(faces), process=True)
     mesh.fix_normals()
-    return Part(FILL_NAME, extruder, np.asarray(mesh.vertices, np.float64), np.asarray(mesh.faces, np.int64), {},
-                "normal_part")
+    # Cells meeting only at a corner share a wall edge four ways (non-manifold): separate them (repair.py).
+    v, f = repaired(np.asarray(mesh.vertices, np.float64), np.asarray(mesh.faces, np.int64))
+    return Part(FILL_NAME, extruder, v, f, {}, "normal_part")

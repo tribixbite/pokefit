@@ -30,8 +30,12 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   surface's relief, the structure the wand follows. Mirror paints both sides at once
   (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
   are dropped. Exported as Bambu paint;
-- **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: a 1.45M-triangle sculpt
-  at 100k opens 3x faster, paints and exports 10-25x faster, with the surface moved by under 0.02 mm;
+- **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: Low / Medium / High keep
+  7 / 20 / 50 % of the file's triangles, or drag the slider or type any count; a 1.45M-triangle sculpt at Low
+  (~100k) opens 3x faster, paints and exports 10-25x faster, with the surface moved by under 0.02 mm;
+- **repairs meshes** like Bambu Studio's "Fix model": on loading and after every cut, edges shared by more than two
+  triangles are separated, holes closed, inside-out triangles turned and points where surfaces touch moved apart,
+  so the exported file has no non-manifold edges;
 - **remembers your settings** (ball, washer, magnets, height, shape, simplify) in your browser, and lets you set them before
   opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;

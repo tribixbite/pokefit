@@ -56,7 +56,13 @@ exist only on the original Windows machine (ask the user for the files).
    its own spot needs (one over the flat base stays on the washer): by design, explained in the seat hint. Pads stay
    within the cavity's flat floor radius; not checked against a hand-placed pocket outside it (clipped there).
 9. **Big meshes**: Simplify (`pokefit/simplify.py`, `Params.simplify`, Figure card "Simplify mesh", off by default,
-   remembered; the analysis shows a "Dense mesh" hint above 300k triangles). 1.45M-triangle MINI EEVEE at 100k,
+   remembered; the analysis shows a "Dense mesh" hint above 300k triangles). UI: Low / Medium / High = 7 / 20 / 50 %
+   of the file's triangles (`web/src/simplify.ts`; `Params.simplify` < 1 is a share), log slider 1-100 %, typed count.
+   Mesh repair (`pokefit/repair.py`) runs on every load and boolean: the user's site export of MINI EEVEE at 100k had
+   65 edges on >2 faces after welding (Bambu offered to repair it), every level now 0 open / 0 over / 0 flipped in the
+   exported 3MF (scratchpad `manifold_check.py`); 100k export slices (0.42 h, 1.3 g at 25.4 mm). DamagedHelmet.glb:
+   fully closed after load repair (was "not a valid solid"). Repair cost: 2.2 s on the 1.45M-triangle mesh unsimplified
+   (0.15 s at 100k) on top of loading; not timed in Pyodide (smoke test passes). 1.45M-triangle MINI EEVEE at 100k,
    local engine (scratchpad `bench_simplify.py`): open + analyse 39.5 -> 11.5 s, prepare paint (mirror) 5.4 -> 1.0 s,
    tap 0.80 -> 0.03 s, re-analysis after a paint step 3.7 -> 0.3 s, export 13.5 -> 1.4 s (19.3 -> 2.5 MB); surface
    change 0.017 mm at 25.4 mm tall (exact closest-point check, rtree: max 0.024 mm of 40 before RegularizeLight).

@@ -69,7 +69,8 @@ export interface Params {
   strengthen: number;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
-  /** Simplify the mesh to about this many triangles when it loads (shape within 0.1 % of its size); null = as in the file. */
+  /** Simplify the mesh when it loads (shape within 0.1 % of its size): a share of the file's triangles (0..1, the
+   *  Low / Medium / High levels) or a triangle count (>= 1,000); null = as in the file. */
   simplify: number | null;
   /** Painted patches smaller than this (mm² at the print size) take the colour around them; 0 = keep all. */
   despeckle: number;
@@ -126,6 +127,10 @@ export interface ObjectInfo {
   faces: number;
   /** Triangles before / after the import's simplify step and the largest surface change (file mm); null = not simplified. */
   simplified: { faces_before: number; faces_after: number; error: number } | null;
+  /** Triangles in the file itself (before any simplifying): what the Simplify levels are shares of. */
+  file_faces: number;
+  /** What loading repaired (pokefit/repair.py, like Bambu Studio's Fix model); null = the mesh was sound. */
+  repaired: { removed: number; split: number; flipped: number; filled: number; open_edges: number; pinched: number } | null;
   parts: { name: string; extruder: number; faces: number; painted: number }[];
   colours: string[];
   /** The file's own colours (before colorize changes). */

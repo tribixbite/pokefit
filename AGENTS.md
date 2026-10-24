@@ -93,7 +93,8 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `gltf.py` | GLB/glTF → one part with colour as split Bambu paint; `TextureColours` re-cuts the palette (`Params.texture_colours`, plus `texture_details` high-contrast detail filaments). Module doc explains the algorithm. |
 | `paint.py` | Bambu `paint_color` (TriangleSelector) format: decode, remap states, split trees (`parse_tree`/`encode_tree`/`split_children`/`leaves`/`remap_tree`). |
 | `colorize.py` | Tap-to-paint: magic wand (`Topology.wand`: loop + part candidates on a bend field, watershed-snapped edge, `PaintOp.level`), soft edges (`Field`: per-vertex signed distance, `Topology.soft`/`brush_field`/`stamp_field`, written by `PaintState.paint_field` via `paint.overlay` as split paint, exact field on a split lattice), stamp (`PaintOp.stamp`), `Topology.shape_map` (crease + relief bytes for the "Shape map" view), topology (convex/concave edges), regions by mode (wand/part/region/piece/fill/brush/face/stamp), brush strokes (`PaintOp.path`, gaps joined), fills bounded by paint (`PaintState`, bucket fill), `PaintOp.mirror` (`mirror_plane`: distance field of the surface + Fibonacci scan + refine), `PaintOp.grow` (Dijkstra band + majority smoothing), `Topology.specks` (`Params.despeckle` mm² at print size), `apply_paint` / `op_faces`. |
-| `simplify.py` | Import-time simplification (`Params.simplify` triangles): meshoptimizer's WASM (`vendor/`, npm 1.3.0) via wasmtime locally and the worker's WebAssembly in Pyodide (identical output); `meshopt_SimplifyRegularizeLight`, 0.1 % error cap, fold cleanup; paint carried per nearest triangle, glTF colour sampled after (`read_gltf(path, simplify)`). `Session.use_simplify` reloads the file when the setting changes. |
+| `repair.py` | Mesh repair like Bambu Studio's "Fix model" (`repair`, `repair_part`, `repaired`): run on load (`FigureObject.parts`, `read_gltf` with `TextureColours.reindexed`) and on every boolean result (pocket cut, overlap clip, flat base). Index-sound meshes keep their topology (only coincident vertices are nudged apart, `_unpinch`); broken ones are welded, folds dropped, edges on >2 faces paired by angle (`_pairs`), fans split (`_separate`), winding two-coloured (`_consistent`), holes fanned (`_fill`), inside-out shells turned. `RepairInfo` -> report `object.repaired` + "Mesh repaired" check. |
+| `simplify.py` | Import-time simplification (`Params.simplify`: a triangle count, or a share of the file's 0..1 = the UI levels, `simplify.resolve`): meshoptimizer's WASM (`vendor/`, npm 1.3.0) via wasmtime locally and the worker's WebAssembly in Pyodide (identical output); `meshopt_SimplifyRegularizeLight`, 0.1 % error cap, fold cleanup; paint carried per nearest triangle, glTF colour sampled after (`read_gltf(path, simplify)`). `Session.use_simplify` reloads the file when the setting changes. |
 | `strengthen.py` | Strengthen thin parts (`Params.strengthen` mm): voxel parity fill + EDT local thickness at print size, taper from the join (full target) to the tip (`TIP`), necks get the full target; vertices move only. Runs in `Session._conformed` after conform. |
 | `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball, max-scale fit (Nelder–Mead with restarts), washer-seat shell. |
 | `magnets.py` | Height field of the underside, pocket maps, auto/manual placement, seat modes `washer` (default) / `raised`. |
@@ -106,6 +107,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 | `src/main.ts` | UI state (`state.params` mirrors `Params`), cards, analyse/export flow. |
 | `src/scene.ts` | three.js viewer, ball/figure/pockets, tap picking. |
 | `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, brush strokes (scene.ts `setStrokeHandler`), stamp drags (`setStampHandler`: box -> ellipse semi-axes at the hit depth), "Shape map" view (scene.ts `shapeMaterial`: per-vertex crease/relief shader), Mirror, Pick colour, Grow/Shrink last step, Undo/Redo, keyboard shortcuts, GLB "Filaments" slider; `prepare` builds tap structures (and the mirror plane) when painting starts. |
+| `src/simplify.ts` | Simplify control maths: levels (`LEVELS`, shares), log-scale slider <-> share, typed count -> budget. |
 | `src/prefs.ts` | Remembered settings (localStorage `pokefit.prefs.v1`): only changed, whitelisted, type-checked params; defaults before a file is open. |
 | `src/slotpicker.ts`, `src/colour.ts` | "Prints from" slot dropdown with swatches, closest first (ΔE = the engine's CIE76); colour helpers. |
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
@@ -141,6 +143,10 @@ summary + Bambu slice: time, grams, colour changes, purge).
 - Relief for the shape map: Taubin (lambda|mu) smoothing deliberately keeps any bump wider than a few edges, so
   height over a Taubin-smoothed copy read features inverted; plain averaging plus subtracting the smoothed relief
   (the shrink offset) works (`Topology.shape_map`).
+- manifold3d's output is sound by index but can hold distinct vertices at one position (surfaces a boolean leaves
+  touching, e.g. two boxes meeting along an edge): welding it (trimesh `process=True`, as `from_manifold` did) made
+  edges on four faces that Bambu Studio flagged as non-manifold. `from_manifold` keeps the topology; `repair` nudges
+  such vertices apart. Test exports with `tests/conftest.edge_stats` (index AND welded).
 - Soft paint edges read the field at split-lattice points (`colorize._lattice`), not linearly from the corners:
   an ellipse interpolated across a big low-poly triangle came out as a spike.
 - Real figures are messy (non-manifold, floating parts). Checks report, they don't block; `planar._xor`

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import trimesh
 
+from conftest import CLEAN, edge_stats
 from pokefit.ball import Cavity, load_ball
 from pokefit.conform import FILL_NAME, ConformSpec, conform, lift_curve
 from pokefit.model3mf import Part
@@ -210,6 +211,18 @@ def test_magnets_on_the_washer_get_pads_so_they_are_walled_from_the_washer_up(tm
     raised = Params(magnets=2, flat_fill=4, fill_circle={"x": 0.0, "y": 0.0, "d": 1.0}, pocket_seat="raised")
     assert s.pads(raised) is None
     assert all(p["z"] > 0 for p in analyse(s, raised)[0].to_dict()["pockets"])
+
+
+def test_exported_parts_have_no_non_manifold_edges(tmp_path: Path) -> None:
+    """Pockets cut beside a pressed base, pads and a drawn fill (grid cells meeting at corners): every exported
+    part's edges join exactly two faces, also after welding by position (Bambu Studio's check)."""
+    s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
+    for params in (Params(magnets=2, flat_fill=4, fill_circle={"x": 0.0, "y": 0.0, "d": 1.0}),
+                   Params(magnets=2, flat_fill=3, fill_area="shape",
+                          fill_shape=[[-5.0, -3.5], [5.0, -3.2], [0.4, 3.5]])):
+        _, final = analyse(s, params)
+        for p in final:
+            assert edge_stats(p.vertices, p.faces) == {"index": CLEAN, "welded": CLEAN}, p.name
 
 
 def test_fill_everywhere_and_a_drawn_shape(tmp_path: Path) -> None:

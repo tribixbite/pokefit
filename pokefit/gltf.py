@@ -44,6 +44,7 @@ import trimesh
 
 from .model3mf import DEFAULT_COLOURS, FigureObject, Part, Project
 from .paint import Tree, encode_tree, split_children
+from .repair import repair
 from .simplify import SimplifyInfo, budgets, clean, simplify_indices
 
 GLTF_SUFFIXES = (".glb", ".gltf")
@@ -279,6 +280,25 @@ class TextureColours:
             self._leaves[key] = (groups, self._despeckle(to_group[self.labels], len(groups)))
         return self._leaves[key]
 
+    def reindexed(self, src: np.ndarray, turned: np.ndarray, area: np.ndarray, adjacency: np.ndarray
+                  ) -> "TextureColours":
+        """The same colours on a repaired mesh (repair.py): face i takes old face src[i]'s sub-triangles, mirrored
+        for a turned face (its corners 1 and 2 swapped); a face closing a hole (src -1) takes the commonest colour."""
+        n_leaf = self.labels.shape[1]
+        depth = int(round(np.log(n_leaf) / np.log(4)))
+        centre = leaf_barycentrics(depth).mean(axis=1)                       # (leaves, 3) barycentric centres
+        # Leaf j of a turned face lies where the old face's leaf with corners 1 and 2 swapped lies.
+        d = np.linalg.norm(centre[:, None, [0, 2, 1]] - centre[None], axis=2)
+        mirror = np.argmin(d, axis=1)
+        common = int(np.bincount(self.labels.ravel()).argmax())
+        labels = np.full((len(src), n_leaf), common, self.labels.dtype)
+        old = src >= 0
+        rows = self.labels[src[old]]
+        rows[turned[old]] = rows[turned[old]][:, mirror]
+        labels[old] = rows
+        return TextureColours(labels, self.lab, self.rgb, self.weight, np.asarray(area, np.float64),
+                              np.asarray(adjacency, np.int64), self.exact)
+
     def paint(self, count: int | None = None, details: int = 0) -> tuple[list[str], dict[int, str], int]:
         """(palette hex colours, tri_extra paint per face, base filament) for a palette size (+ details)."""
         key = (count, details)
@@ -419,7 +439,7 @@ def two_sided(v: np.ndarray, f: np.ndarray) -> np.ndarray:
     return pair & (odd[group] == 1)                             # exactly one of the two is reversed
 
 
-def read_gltf(path: Path, simplify: int | None = None) -> Project:
+def read_gltf(path: Path, simplify: float | None = None) -> Project:
     """A glTF/GLB scene as one single-part figure whose colours are paint (module doc).
     The project's `texture` re-cuts the palette to another size (TextureColours.paint). `simplify`: cut the
     scene to about this many triangles first (simplify.py), so colour is sampled on the triangles that print."""
@@ -509,9 +529,18 @@ def read_gltf(path: Path, simplify: int | None = None) -> Project:
     y_up = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], np.float64)
     part = Part(path.stem, base, np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64),
                 extra).transformed(y_up @ np.diag([unit, unit, unit, 1.0]))
+    # Repair (repair.py) carries the texture's per-face colours along, so other palette sizes land right too.
+    v2, f2, src, turned, repaired = repair(part.vertices, part.faces)
+    if repaired:
+        m2 = trimesh.Trimesh(v2, f2, process=False)
+        texture = texture.reindexed(src, turned, m2.area_faces / unit ** 2, m2.face_adjacency)
+        colours, extra, base = texture.paint(None)
+        part = Part(part.name, base, v2, f2, dict(extra), part.subtype)
     obj = FigureObject("1", path.stem, base, [part], np.eye(4), n_faces=before, simplify=simplify)
     if after < before:
         obj.simplified = SimplifyInfo(before, after, worst * unit)
+    if repaired:
+        obj.repaired = repaired
     return Project(path, "mesh", [obj], colours, None, texture=texture)
 
 

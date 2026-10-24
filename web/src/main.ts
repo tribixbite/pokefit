@@ -6,6 +6,9 @@ import { formatDuration, pct } from "./geometry";
 import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { PrinterCard } from "./printer";
 import { Viewer } from "./scene";
+import {
+  budgetCount, budgetShare, countBudget, LEVELS, levelName, shareToSlider, SLIDER_MAX, sliderBudget,
+} from "./simplify";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
@@ -403,7 +406,7 @@ function syncControls(): void {
   $<HTMLInputElement>("flatFill").value = String(p.flat_fill);
   $<HTMLSelectElement>("paintDepth").value = p.paint_depth === null ? "" : String(p.paint_depth);
   $<HTMLSelectElement>("strengthenSelect").value = String(p.strengthen);
-  $<HTMLSelectElement>("simplifySelect").value = p.simplify ? String(p.simplify) : "";
+  showSimplify(p.simplify);
   $<HTMLSelectElement>("despeckleSelect").value = String(p.despeckle);
   document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
     b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === p.magnets)));
@@ -438,6 +441,39 @@ function drawFillShape(on: boolean): void {
     toast("Drag round the area to fill in the underside view; let go to close the outline.");
   }
   syncFillCircle();
+}
+
+/** Triangles in the open file (the Simplify levels are shares of it); null before a file is open. */
+let fileFaces: number | null = null;
+
+/** Show a simplify budget (`Params.simplify`) on its control: level, slider, triangle count. `dragging`: the
+ *  slider is moving, so it keeps its own position. */
+function showSimplify(budget: number | null, dragging = false): void {
+  const share = budgetShare(budget, fileFaces);
+  if (!dragging) $<HTMLInputElement>("simplifySlider").value = String(shareToSlider(share));
+  const level = levelName(budget);
+  document.querySelectorAll<HTMLButtonElement>("#simplifyLevel button").forEach((b) =>
+    b.setAttribute("aria-checked", String(b.dataset.level === level)));
+  const count = budgetCount(budget, fileFaces);
+  $<HTMLInputElement>("simplifyCount").value = count === null ? "" : String(count);
+  $("simplifyOf").textContent = fileFaces
+    ? `of ${fileFaces.toLocaleString()} (${share >= 1 ? "all" : `${Math.max(1, Math.round(share * 100))} %`})`
+    : budget && budget < 1 ? `triangles (${Math.round(budget * 100)} % of the file's)` : "triangles";
+}
+
+/** Use another simplify budget: the engine loads the file again with fewer triangles. Paint steps name triangles,
+ *  so they go; a glTF's colours are sampled again on the new triangles, so its palette follows the file again. */
+function setSimplify(budget: number | null): void {
+  const p = state.params;
+  showSimplify(budget);
+  if (budget === p.simplify) return;
+  p.simplify = budget;
+  if (p.paint?.length) toast("Paint steps cleared: they belong to the old triangles.");
+  colorize.dropPaint();
+  if (state.report?.object.texture_colours) p.colours = null;
+  p.figure_scale = null;
+  p.pockets = null;
+  void runAnalyse();
 }
 
 async function runAnalyse(): Promise<void> {
@@ -491,6 +527,8 @@ function show(rep: Report): void {
       `moved by at most ${scale ? `${Math.max(0.001, simp.error * scale).toFixed(3)} mm at this size` : `${simp.error.toFixed(3)} mm`}.`
     : state.params.simplify ? `${rep.object.faces.toLocaleString()} triangles: already within ${state.params.simplify.toLocaleString()}.` : "";
   $("simplifyInfo").hidden = !$("simplifyInfo").textContent;
+  fileFaces = rep.object.file_faces;
+  showSimplify(state.params.simplify);
   renderStatus(rep);
 
   const pill = $("fitPill");
@@ -1065,19 +1103,17 @@ function bind(): void {
     state.params.pockets = null;
     void runAnalyse();
   });
-  // Simplify: the engine loads the file again with fewer triangles. Paint steps name triangles, so they go; a
-  // glTF's colours are sampled again on the new triangles, so its palette follows the file again.
-  $<HTMLSelectElement>("simplifySelect").addEventListener("change", (e) => {
-    const v = (e.target as HTMLSelectElement).value;
-    const p = state.params;
-    p.simplify = v ? +v : null;
-    if (p.paint?.length) toast("Paint steps cleared: they belong to the old triangles.");
-    colorize.dropPaint();
-    if (state.report?.object.texture_colours) p.colours = null;
-    p.figure_scale = null;
-    p.pockets = null;
-    void runAnalyse();
-  });
+  // Simplify: a level, the slider (a share of the file's triangles) or a typed count (simplify.ts).
+  document.querySelectorAll<HTMLButtonElement>("#simplifyLevel button").forEach((b) =>
+    b.addEventListener("click", () =>
+      setSimplify(LEVELS.find((l) => l.name === b.dataset.level)?.share ?? null)));
+  const simpSlider = $<HTMLInputElement>("simplifySlider");
+  simpSlider.addEventListener("input", () => showSimplify(sliderBudget(+simpSlider.value), true));
+  simpSlider.addEventListener("change", () => setSimplify(sliderBudget(+simpSlider.value)));
+  $<HTMLInputElement>("simplifyCount").addEventListener("change", (e) =>
+    setSimplify(countBudget(+(e.target as HTMLInputElement).value, fileFaces)));
+  $("simplifyTicks").replaceChildren(...[...LEVELS.map((l) => shareToSlider(l.share)), SLIDER_MAX].map((v) =>
+    Object.assign(document.createElement("option"), { value: String(v) })));
   // Specks: only colours change (the shape work is reused), so the preview recolours and the analysis is quick.
   $<HTMLSelectElement>("despeckleSelect").addEventListener("change", (e) => {
     state.params.despeckle = +(e.target as HTMLSelectElement).value;

@@ -45,3 +45,21 @@ def write_inline_3mf(path: Path, mesh: trimesh.Trimesh, transform: np.ndarray,
 @pytest.fixture
 def box_feet() -> trimesh.Trimesh:
     return two_footed()
+
+
+CLEAN = {"open": 0, "over": 0, "same": 0}
+
+
+def edge_stats(v: np.ndarray, f: np.ndarray) -> dict[str, dict[str, int]]:
+    """Open edges, edges on more than two faces and edges whose two faces run the same way, by index and after
+    welding by position (what a slicer that welds sees: Bambu Studio's "non-manifold edges")."""
+    from pokefit.repair import weld
+
+    out = {}
+    for name, (vv, ff) in (("index", (v, f)), ("welded", weld(v, f))):
+        e = np.concatenate([ff[:, [0, 1]], ff[:, [1, 2]], ff[:, [2, 0]]])
+        _, inv, cnt = np.unique(np.sort(e, axis=1), axis=0, return_inverse=True, return_counts=True)
+        fwd = np.bincount(inv.reshape(-1), weights=(e[:, 0] < e[:, 1]), minlength=len(cnt))
+        out[name] = {"open": int((cnt == 1).sum()), "over": int((cnt > 2).sum()),
+                     "same": int(((cnt == 2) & (fwd != 1)).sum())}
+    return out

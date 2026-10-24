@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import trimesh
 from PIL import Image
 from trimesh.visual.material import PBRMaterial
@@ -89,6 +90,19 @@ def test_a_file_loads_simplified_and_the_session_reloads_on_change(tmp_path: Pat
     assert abs(rep2.fit["max_scale"] - rep.fit["max_scale"]) / rep.fit["max_scale"] < 0.01
     rep3, _ = analyse(s, Params(magnets=0))                             # back to the file's own triangles
     assert rep3.object["parts"][0]["faces"] == 81_920
+    # A level: a share of the file's own triangles (the UI's Low / Medium / High).
+    rep4, _ = analyse(s, Params(magnets=0, simplify=0.2))
+    assert 0.18 * 81_920 <= rep4.object["parts"][0]["faces"] <= 0.2 * 81_920
+    assert rep4.object["file_faces"] == 81_920 and rep4.params["simplify"] == 0.2
+
+
+def test_simplify_takes_a_share_or_a_count() -> None:
+    assert Params(simplify=0.2).simplify == 0.2
+    assert Params(simplify=100_000.0).simplify == 100_000
+    assert Params(simplify=1).simplify is None and Params(simplify=0).simplify is None
+    for bad in (500, 1.5, 12_345.5, 20_000_000):
+        with pytest.raises(ValueError, match="simplify"):
+            Params(simplify=bad)
 
 
 def test_a_dense_mesh_suggests_simplify(tmp_path: Path) -> None:

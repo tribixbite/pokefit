@@ -45,6 +45,7 @@ from .remap import SlotMatch, match_slots, remap_parts, used_filaments
 from .report import Check, worst
 from . import toolchange as tc
 from .shell import flat_spot, from_manifold, to_manifold
+from .repair import repaired
 from .slicer import (SliceResult, adapt_settings, default_slot, grid_positions, reference_settings,
                      resize_filaments, slice_3mf)
 from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
@@ -69,6 +70,7 @@ COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "
                          "texture_colours", "texture_details", "despeckle"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`)
+SIMPLIFY_LOW = 0.07           # the UI's "Low" Simplify level (web/src/simplify.ts LEVELS), a share of the file
 AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
 FILL_AREAS = ("washer", "all", "circle", "shape")
 MAX_SHAPE_POINTS = 400        # points of a drawn fill outline
@@ -140,9 +142,10 @@ class Params:
     # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
     # still appear on the same layers); only how much of each colour, and of the base, is used.
     paint_depth: float | None = None
-    # Simplify dense meshes to about this many triangles when the file loads (simplify.py; None = as in the file).
+    # Simplify dense meshes when the file loads (simplify.py; None = as in the file): to about this many triangles
+    # (>= 1,000), or to this share of the file's triangles (0 < x < 1: the UI's low / medium / high levels).
     # The shape moves by at most 0.1 % of the figure's size; fewer triangles make every later step faster.
-    simplify: int | None = None
+    simplify: float | None = None
     # Painted patches smaller than this (mm² at the print size) take the colour around them: a stray dab costs a
     # filament change on every layer it spans (colorize.Topology.specks). 0 = keep every patch.
     despeckle: float = 0.5
@@ -212,9 +215,16 @@ class Params:
         if not 0 <= self.despeckle <= 20:
             raise ValueError("despeckle must be 0..20 mm² (0 = off)")
         if self.simplify is not None:
-            self.simplify = int(self.simplify) or None
-            if self.simplify is not None and not 1_000 <= self.simplify <= 10_000_000:
-                raise ValueError("simplify must be 1,000..10,000,000 triangles (or null for the file's own)")
+            b = float(self.simplify)
+            if 0 < b < 1:
+                self.simplify = round(b, 4)               # a share of the file's triangles
+            elif b in (0, 1):
+                self.simplify = None                      # 0 % / 100 %: as in the file
+            elif 1_000 <= b <= 10_000_000 and b == int(b):
+                self.simplify = int(b)
+            else:
+                raise ValueError("simplify must be a share of the file's triangles (0..1), 1,000..10,000,000 "
+                                 "triangles, or null for the file's own")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -242,7 +252,7 @@ class Session:
     ball: Ball
     reference: dict | None
     presets: PresetLibrary | None = None        # Bambu presets the user imported (presets.py)
-    simplify: int | None = None                 # triangle budget `project` was loaded with (Params.simplify)
+    simplify: float | None = None               # triangle budget `project` was loaded with (Params.simplify)
     # Filaments loaded in the user's printer (printer.py, via beambam): when set, the figure's colours are
     # matched to these slots instead of the reference project's.
     ams: list[AmsSlot] | None = None
@@ -274,7 +284,7 @@ class Session:
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
 
-    def use_simplify(self, target: int | None) -> None:
+    def use_simplify(self, target: float | None) -> None:
         """Load the file again simplified to `target` triangles (None = as in the file) if it was loaded with
         another budget. Every cached result belongs to the old triangles, so all are dropped (paint steps name
         triangles too: the UI clears them when this setting changes)."""
@@ -652,7 +662,7 @@ def scaled(parts: list[Part], s: float) -> list[Part]:
 
 def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
                  reference_path: str | Path | None = DEFAULT_REFERENCE, work_dir: str | Path | None = None,
-                 simplify: int | None = None) -> Session:
+                 simplify: float | None = None) -> Session:
     path = Path(path)
     proj = read_project(path, simplify)
     sid = uuid.uuid4().hex[:12]
@@ -709,6 +719,13 @@ def input_checks(session: Session, params: Params) -> list[Check]:
         checks: list[Check] = []
         for p in obj.parts:
             checks.extend(mesh_checks(p))
+        if obj.repaired:
+            # What loading fixed (repair.py), as Bambu Studio reports its own repairs.
+            sound = all(c.status == "pass" for c in checks if c.id.startswith("watertight:"))
+            checks.insert(0, Check("repaired", "Mesh repaired", "info",
+                                   f"Repaired as it loaded (like Bambu Studio's Fix model): {obj.repaired.text()}. "
+                                   + ("Every edge now joins exactly two faces." if sound else
+                                      "Some problems are left (below)."), obj.repaired.split))
         session.input_checks[obj.id] = checks
     return session.input_checks[obj.id]
 
@@ -1275,10 +1292,11 @@ def _dense_hint(obj: FigureObject, params: Params) -> Check | None:
     """A mesh far denser than a print shows, not simplified: say what Simplify would save."""
     if params.simplify or obj.face_count <= DENSE_FACES:
         return None
+    low = round(obj.face_count * SIMPLIFY_LOW)
     return Check("dense", "Dense mesh", "info",
-                 f"{obj.face_count:,} triangles, far more than a print this size shows. Simplify (Model card) to "
-                 "100,000 makes painting, the analysis and Bambu Studio several times faster; the surface moves "
-                 "by at most 0.1 % of the figure's size (about 0.03 mm).", obj.face_count)
+                 f"{obj.face_count:,} triangles, far more than a print this size shows. Simplify (Model card) at "
+                 f"Low (about {low:,} triangles) makes painting, the analysis and Bambu Studio several times faster; "
+                 "the surface moves by at most 0.1 % of the figure's size (about 0.03 mm).", obj.face_count)
 
 
 def _units_hint(height: float) -> Check | None:
@@ -1307,8 +1325,12 @@ def _extents(parts: list[Part]) -> list[float]:
 
 def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, Any]:
     return {"id": obj.id, "name": obj.name, "faces": obj.face_count,
+            # Triangles in the file itself: the UI's Simplify levels are shares of this.
+            "file_faces": obj.simplified.faces_before if obj.simplified else obj.face_count,
             # Triangles before and after the import's simplify step, and how far the surface moved (file mm).
             "simplified": obj.simplified.to_dict() if obj.simplified else None,
+            # What the import's repair fixed (repair.RepairInfo), None when the mesh was sound.
+            "repaired": obj.repaired.to_dict() if obj.repaired else None,
             "parts": [{"name": p.name, "extruder": p.extruder or obj.extruder, "faces": len(p.faces),
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
@@ -1399,7 +1421,7 @@ def _clipped_geometry(parts: list[Part]) -> list[tuple[np.ndarray, np.ndarray] |
                         man = man - pman
                 if abs(man.volume() - base.volume()) > 1e-6:
                     m = from_manifold(man)
-                    res = (np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
+                    res = repaired(np.asarray(m.vertices, np.float64), np.asarray(m.faces, np.int64))
                 done.append((part, base))
             except RuntimeError:
                 pass

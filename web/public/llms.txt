@@ -41,12 +41,21 @@
   largest that fits is used, with a note. Settings that are changed (ball, washer, magnets, pockets, height, shape,
   strengthen, simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the
   footer clears them. Settings set before a file is opened are used for its first analysis.
-- Simplify mesh: a dense mesh (sculpts and scans of hundreds of thousands to millions of triangles) is cut to a
-  triangle budget (400k to 25k) when it loads, like Bambu Studio's Simplify: quadric edge collapse with even
+- Simplify mesh: a dense mesh (sculpts and scans of hundreds of thousands to millions of triangles) is cut when it
+  loads, like Bambu Studio's Simplify: levels Low / Medium / High keep 7 / 20 / 50 % of the file's triangles (the
+  setting is a share, so a level means the same on every file), a log-scale slider picks any share from 1 % up,
+  and any triangle count can be typed (from 1,000). Quadric edge collapse with even
   triangle sizes (meshoptimizer's own WebAssembly build, the same in the browser and the local version), never
   moving the surface by more than 0.1 % of the figure's size. A glTF's colours are sampled on the new triangles;
   a painted 3MF keeps one colour per triangle. Measured on a 1.45M-triangle Eevee at 100k: open 39.5 -> 11.5 s,
   a paint tap 0.8 -> 0.03 s, export 13.5 -> 1.4 s, surface change 0.017 mm at 25 mm tall.
+- Mesh repair (like Bambu Studio's "Fix model", automatic): when a file loads, and after every boolean (magnet
+  pockets, overlapping parts, the flat base), every part is made so each edge joins exactly two triangles, also
+  after welding vertices by position (Bambu Studio's "non-manifold edges" check): vertices welded, degenerate and
+  folded triangles dropped, edges shared by more than two triangles separated into pairs (by angle about the edge,
+  each pair enclosing solid), stray extra triangles dropped, neighbours turned to agree and inside-out shells
+  turned, holes closed by fans, and points where separate surfaces touch moved apart by 0.001 mm. The analysis
+  says what loading repaired ("Mesh repaired"). Paint and a glTF's colours follow their triangles.
 - GLB / glTF (single file): every mesh node is baked in and Y-up metres become Z-up mm (a scene over 10 units is
   kept as mm). Its colour (a texture, including the emissive slot some AI generators use; vertex colours; or flat
   materials) is sampled on sub-triangles laid out as Bambu's paint brush splits them, clustered into a few filament

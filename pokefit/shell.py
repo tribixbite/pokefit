@@ -56,9 +56,12 @@ def to_manifold(m: trimesh.Trimesh) -> mf.Manifold:
 
 
 def from_manifold(man: mf.Manifold) -> trimesh.Trimesh:
+    """manifold3d -> trimesh, its topology as it is: every edge joins two faces by index. Welding by position
+    (trimesh's `process`) would fuse surfaces a boolean leaves touching with no thickness between them into edges
+    on four faces (repair.py moves such vertices apart instead)."""
     mesh = man.to_mesh()
     return trimesh.Trimesh(np.asarray(mesh.vert_properties[:, :3], np.float64),
-                           np.asarray(mesh.tri_verts, np.int64), process=True)
+                           np.asarray(mesh.tri_verts, np.int64), process=False)
 
 
 def cap_height(radius: float, chord_diameter: float) -> float:
