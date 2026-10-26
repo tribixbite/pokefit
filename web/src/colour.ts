@@ -40,3 +40,15 @@ export type MatchLevel = "good" | "close" | "far";
 export function matchLevel(de: number): MatchLevel {
   return de <= 10 ? "good" : de <= 25 ? "close" : "far";
 }
+
+/** The candidate that stands out most from every colour in `palette` (largest smallest ΔE), for a new filament:
+ * a colour only slightly unlike one already in use (near-black beside black) would hide what it marks. */
+export function distinctColour(palette: string[], candidates: readonly string[]): string {
+  let best = candidates[0];
+  let score = -1;
+  for (const c of candidates) {
+    const d = palette.length ? Math.min(...palette.map((p) => deltaE(c, p))) : Infinity;
+    if (d > score) { best = c; score = d; }
+  }
+  return best;
+}

@@ -255,6 +255,7 @@
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
         <div class="row" id="paintColourRow">
           <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
+          <button id="paintSplit" class="btn" title="Give each separate patch of this colour its own filament (white eyes and a white tail become three colours, each changeable on its own). The largest patch keeps this colour; patches under the speck size stay as they are. Undo takes it back in one step.">Split by piece</button>
         </div>
         <div id="slotMapBox" class="slot-map-box" hidden>
           <div class="h-row sub">
@@ -382,7 +383,7 @@
 
       <section class="card">
         <h2>Export</h2>
-        <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell.</p>
+        <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell, and the figure as a coloured STL (one closed solid, a colour per triangle: read by MeshLab, VisCAM and SolidView; Bambu Studio and most slicers load its shape but not its colours, so print colour from the 3MF).</p>
         <div class="row">
           <label class="btn" for="refInput" title="A Bambu Studio project you print from (its filament slots and printer settings), or presets exported from Bambu Studio (File › Export › Export Preset Bundle: .bbscfg, .bbsflmt, or a presets .zip)">Project or presets…</label>
           <input id="refInput" type="file" accept=".3mf,.json,.bbscfg,.bbsflmt,.zip" hidden />

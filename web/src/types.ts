@@ -164,6 +164,17 @@ export interface PaintOp {
   level?: number;
   /** Stamp: the ellipse (centre, semi-axis u, semi-axis v; 9 numbers in the file's frame), from `PickResult.stamp`. */
   stamp?: number[];
+  /** UI only (the engine ignores it): steps made together ("Split by piece") share it and undo as one. */
+  group?: number;
+}
+
+/** One connected patch of a colour (`pipeline.pieces_of_colour`): a "fill" step at (part, face) covers it. */
+export interface ColourPiece {
+  part: number;
+  face: number;
+  /** Area at the print size, mm². */
+  area_mm2: number;
+  faces: number;
 }
 
 /** Colour the preview by what a tap would paint. */

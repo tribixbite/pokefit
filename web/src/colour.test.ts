@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { deltaE, matchLevel, textOn } from "./colour";
+import { deltaE, distinctColour, matchLevel, textOn } from "./colour";
 
 describe("colour", () => {
   it("matches the engine's CIE76 ΔE (pokefit/remap.py delta_e)", () => {
@@ -15,6 +15,13 @@ describe("colour", () => {
     expect(matchLevel(10)).toBe("good");
     expect(matchLevel(18)).toBe("close");
     expect(matchLevel(25.1)).toBe("far");
+  });
+
+  it("offers a new colour unlike every one in the palette", () => {
+    const offer = ["#161616", "#FFFFFF", "#E05028", "#2850E0"];
+    expect(distinctColour(["#000000", "#FFFFFF", "#E7D5B4"], offer)).toBe("#2850E0");
+    expect(distinctColour(["#2850E0"], offer)).not.toBe("#2850E0");
+    expect(distinctColour([], offer)).toBe("#161616");
   });
 
   it("picks readable text on light and dark swatches", () => {

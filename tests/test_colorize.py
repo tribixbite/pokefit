@@ -6,10 +6,12 @@ import pytest
 import trimesh
 
 from conftest import BALL_3MF, two_footed, write_inline_3mf
-from pokefit.colorize import PaintOp, TopologyCache, apply_paint, paint_code, pick_face, region_faces, topology
+from pokefit.colorize import (PaintOp, TopologyCache, apply_paint, colour_pieces, paint_code, pick_face, region_faces,
+                              topology)
 from pokefit.model3mf import Part, read_project
 from pokefit.paint import attr_paint, decode_majority, leaves, parse_tree
-from pokefit.pipeline import BUNDLED_REFERENCE, Params, analyse, export, open_session, pick, preview_faces, preview_glb
+from pokefit.pipeline import (BUNDLED_REFERENCE, Params, analyse, export, open_session, pick, pieces_of_colour,
+                              preview_faces, preview_glb)
 from pokefit.slicer import resize_filaments
 
 
@@ -518,3 +520,38 @@ def test_the_mirror_plane_prefers_an_upright_one() -> None:
     assert abs(plain.normal[2]) > 0.95                                 # level (z = 0) is the best fit
     upright = mirror_plane(pts, dense, up=np.array([0.0, 0.0, 1.0]))
     assert abs(upright.normal[2]) < 0.3 and upright.error <= 1.5 * plain.error + 1e-9 or upright.normal[2] > 0.95
+
+
+def test_split_by_piece_gives_each_patch_of_a_colour_its_own_filament() -> None:
+    """Three soft brush dabs of one colour on a ball are three patches, largest first; a "fill" step at each seed
+    moves exactly that patch to a new filament, the slivers its soft edge left in neighbouring triangles included."""
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    dabs = [PaintOp(0, _face_at(part, p, p), 2, "brush", radius=r)
+            for p, r in (([0, 0, 10], 3.0), ([10, 0, 0], 2.5), ([0, 0, -10], 2.0))]
+    (painted,) = apply_paint([part], dabs, topo)
+    pieces = colour_pieces(topo, [painted], 2)
+    assert len(pieces) == 3
+    assert [round(p.area / (np.pi * r * r), 1) for p, r in zip(pieces, (3.0, 2.5, 2.0))] == [1.0, 1.0, 1.0]
+    split = [PaintOp(0, p.face, n, "fill") for p, n in zip(pieces[1:], (3, 4))]
+    (out,) = apply_paint([part], [*dabs, *split], topo)
+    for state, alone in ((2, dabs[0]), (3, dabs[1]), (4, dabs[2])):
+        (one,) = apply_paint([part], [PaintOp(alone.part, alone.face, state, "brush", radius=alone.radius)], topo)
+        assert _painted_area(out, state) == pytest.approx(_painted_area(one, state), rel=1e-9)
+    # The part's own colour splits too: two separate cubes are two pieces of filament 1.
+    boxes = _part(_two_boxes())
+    assert [p.faces for p in colour_pieces(TopologyCache([boxes]), [boxes], 1)] == [12, 12]
+    assert colour_pieces(TopologyCache([boxes]), [boxes], 5) == []
+
+
+def test_pieces_of_colour_reports_print_areas(critter: Path, tmp_path: Path) -> None:
+    s = open_session(critter, BALL_3MF, None, tmp_path / "w")
+    params = Params(washer="US1/4x1")
+    res = pieces_of_colour(s, params, 1)
+    scale = s.paint_scale(params)
+    total = sum(float(p.mesh().area) for p in s.figure_parts(params)[:len(s.topology(params))])
+    assert res["filament"] == 1 and res["pieces"]
+    assert sum(p["area_mm2"] for p in res["pieces"]) == pytest.approx(total * scale * scale, rel=1e-3)
+    with pytest.raises(ValueError):
+        pieces_of_colour(s, params, 0)

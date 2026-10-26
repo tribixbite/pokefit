@@ -103,6 +103,7 @@ MIRROR_MAX_ERROR = 0.01     # a mirror plane fits if reflected points land this 
 MIRROR_LEVEL = 0.3          # a plane whose normal is this close to level (|n . up|) is upright
 MIRROR_UPRIGHT = 1.5        # ... and wins over a better plane that is not, if no more than this much worse
 MIRROR_MISS = 0.04          # ... and a mirrored spot within this share of the size of the surface
+SLIVER_RINGS = 8            # a bucket fill follows a soft edge's split triangles this many rings out of its region
 _FILL_CACHE = 64            # colour-bounded fills kept per object (keyed by the paint state they saw)
 _PAINT_RE = re.compile(r'\s*paint_color="[^"]*"')
 BIG = 1e9                   # `Field.phi` far from the edge (inside: -BIG)
@@ -983,6 +984,32 @@ class PaintState:
             self._colours = np.asarray(per_value, np.int32)[self.state]
         return self._colours
 
+    def shown(self) -> list[frozenset[int]]:
+        """Per distinct value (`state` indexes it), the filaments a triangle with it shows anywhere: its paint, both
+        sides of a soft edge (an unpainted side is the part's own filament)."""
+        from .paint import attr_paint, decode_weights
+
+        out = []
+        for v in self.values:
+            fp = attr_paint(v or "")
+            if fp is None:
+                out.append(frozenset({self.extruder}))
+            elif fp.whole is not None:
+                out.append(frozenset({fp.whole or self.extruder}))
+            else:
+                out.append(frozenset(st or self.extruder for st in decode_weights(fp.code)))
+        return out
+
+    def holds(self, faces: np.ndarray, filament: int) -> np.ndarray:
+        """Which of `faces` show `filament` somewhere (whole, or on one side of a soft edge)."""
+        per_value = np.asarray([filament in s for s in self.shown()], bool)
+        return per_value[self.state[faces]]
+
+    def split(self) -> np.ndarray:
+        """Per triangle: a soft edge between two colours crosses it."""
+        per_value = np.asarray([len(s) > 1 for s in self.shown()], bool)
+        return per_value[self.state]
+
     def key(self) -> str:
         """A digest of the per-triangle colours (what a colour-bounded fill depends on)."""
         import hashlib
@@ -1199,6 +1226,26 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
         if op.mode != "wand" and not op.grow:
             paint = state(pi)
             over = None
+            if paint is not None and op.mode == "fill":
+                # A bucket fill also takes the tapped colour's side of the soft edges round it: a triangle a soft edge
+                # crosses that shows mostly the other colour is not in the region, yet holds a sliver of this one
+                # (a soft edge can run through several such triangles in a row: followed while they hold it).
+                c = int(paint.colours()[fi])
+                inside = np.zeros(t.n_faces, bool)
+                inside[faces] = True
+                sliver = paint.split() & paint.holds(np.arange(t.n_faces), c) & ~inside
+                pa, pb = t.pairs[:, 0], t.pairs[:, 1]
+                grown = inside.copy()
+                for _ in range(SLIVER_RINGS):
+                    ring = np.zeros(t.n_faces, bool)
+                    ring[pa[grown[pb]]] = True
+                    ring[pb[grown[pa]]] = True
+                    ring &= sliver & ~grown
+                    if not ring.any():
+                        break
+                    grown |= ring
+                if (grown & ~inside).any():
+                    faces = np.flatnonzero(grown)
             if paint is not None and op.mode in BOUNDED and paint.has_splits(faces):
                 over = int(paint.colours()[fi])
             out.append(Cover(pi, faces, None, over))
@@ -1352,6 +1399,42 @@ def region_faces(topo: TopologyCache, part: int, face: int, mode: str, angle: fl
         return topo.fill(part, face, mode, angle, paint)
     lab = topo.labels(part, mode, angle)
     return np.nonzero(lab == lab[face])[0]
+
+
+@dataclass(frozen=True)
+class Piece:
+    """One connected patch of a colour: a "fill" step tapped at (`part`, `face`) covers it."""
+    part: int
+    face: int
+    area: float          # file mm²
+    faces: int
+
+
+def colour_pieces(topo: TopologyCache, parts: list[Part], filament: int, default_extruder: int = 1) -> list[Piece]:
+    """Every connected patch of the figure showing `filament` (each triangle by its dominant colour; patches meeting
+    only at a corner are separate), largest first: white eyes and a white tail are three. Each seed is the patch's
+    largest triangle showing the filament whole, so a "fill" step from it recolours exactly that patch. A part with
+    no filament of its own (0) prints in `default_extruder`, the object's."""
+    out: list[Piece] = []
+    for i in range(min(len(parts), len(topo))):
+        st = PaintState(parts[i])
+        colour = st.colours()
+        sel = (colour == filament) | ((colour == 0) & (filament == default_extruder))
+        if not sel.any():
+            continue
+        t = topo.part(i)
+        lab = t._components(sel[t.pairs[:, 0]] & sel[t.pairs[:, 1]])
+        idx = np.flatnonzero(sel)
+        labs = lab[idx]
+        area = np.bincount(labs, weights=t.areas[idx])
+        count = np.bincount(labs)
+        # Seed per patch: whole (not split) triangles first, then the largest.
+        order = np.lexsort((-t.areas[idx], st.split()[idx], labs))
+        first = np.ones(len(order), bool)
+        first[1:] = labs[order][1:] != labs[order][:-1]
+        for f in idx[order][first].tolist():
+            out.append(Piece(i, int(f), float(area[lab[f]]), int(count[lab[f]])))
+    return sorted(out, key=lambda pc: -pc.area)
 
 
 def centroid_trees(parts: list[Part]) -> list[Any]:

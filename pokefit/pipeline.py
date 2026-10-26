@@ -31,7 +31,7 @@ from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FIL
                       base_fill, conform, disc_region)
 from .strengthen import StrengthenInfo, strengthen
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
-                       apply_paint, centroid_trees, op_faces, pick_face, region_colours)
+                       apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
 from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
@@ -46,6 +46,7 @@ from .report import Check, worst
 from . import toolchange as tc
 from .shell import flat_spot, from_manifold, to_manifold
 from .repair import repaired
+from .stlcolour import write_coloured_stl
 from .slicer import (SliceResult, adapt_settings, default_slot, grid_positions, reference_settings,
                      resize_filaments, slice_3mf)
 from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
@@ -1585,6 +1586,20 @@ def prepare_paint(session: Session, params: Params, mode: str = "part", angle: f
     return out
 
 
+def pieces_of_colour(session: Session, params: Params, filament: int) -> dict[str, Any]:
+    """The connected patches of one colour (`colorize.colour_pieces`), largest first, for "Split by piece": the UI
+    keeps the largest in the colour and gives each other one a new filament with a "fill" step at its seed.
+    Areas are at the print size (mm²; the file's mm when nothing fits)."""
+    session.use_simplify(params.simplify)
+    if not 1 <= filament <= 64:
+        raise ValueError(f"filament must be 1-64, not {filament}")
+    s = session.paint_scale(params) or 1.0
+    found = colour_pieces(session.topology(params), session.figure_parts(params), filament,
+                          session.obj(params).extruder or 1)
+    return {"filament": filament, "pieces": [{"part": p.part, "face": p.face, "area_mm2": round(p.area * s * s, 3),
+                                              "faces": p.faces} for p in found]}
+
+
 def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
     plane = topo.mirror()
     return {"ok": plane.error <= MIRROR_MAX_ERROR, "error": round(plane.error, 4),
@@ -1707,7 +1722,8 @@ def safe_stem(name: str) -> str:
 
 
 def export(session: Session, params: Params, out_dir: str | Path, ball_model: Path | None = None) -> dict[str, Any]:
-    """Write the figure 3MF, its import variant, the washer-seat shell STL and a JSON report.
+    """Write the figure 3MF, its import variant, a coloured STL (`stlcolour`), the washer-seat shell STL and a
+    JSON report.
 
     `<stem>_pokefit_<pct>.3mf` opens as a project (File > Open). `..._import.3mf`
     is for dragging into an open project with "Import geometry only": its
@@ -1739,9 +1755,13 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
         parts, ext = remap_parts(final, obj.extruder, matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
                             settings=session.reference)
+    # The same figure as one STL with a colour per triangle, for tools that take STL (Bambu Studio ignores it).
+    cstl, cnote = write_coloured_stl(out_dir / f"{stem}_pokefit_{pct}_colour.stl", final, obj.extruder,
+                                     session.colours(params))
+    shell_note = "; ".join(n for n in (shell_note, cnote) if n)
     rpath = out_dir / f"{stem}_pokefit_{pct}.json"
     rpath.write_text(json.dumps(rep.to_dict(), indent=1), encoding="utf-8")
-    return {"figure_3mf": str(f3), "import_3mf": str(imp) if imp else None,
+    return {"figure_3mf": str(f3), "import_3mf": str(imp) if imp else None, "colour_stl": str(cstl),
             "shell_stl": str(shell_path) if shell_path else None, "report": str(rpath),
             "note": shell_note, "status": rep.status, "import_map": [m.to_dict() for m in matches]}
 

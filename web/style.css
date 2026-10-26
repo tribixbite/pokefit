@@ -92,6 +92,18 @@ button, select, input { font: inherit; color: inherit; }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .card h2 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; color: #b7c2d3; }
+/* Collapsible cards (collapse.ts): the heading is a toggle; collapsed, only the heading row shows. */
+.card-toggle {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin: -6px 0; padding: 0 6px 0 0;
+  background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
+  cursor: pointer; text-align: left;
+}
+.card-toggle .chev {
+  width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; flex: none;
+}
+.card.collapsed .card-toggle .chev { transform: rotate(-45deg); }
+.card.collapsed > :not(h2):not(.h-row) { display: none !important; }
 .h-row { display: flex; align-items: center; justify-content: space-between; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .row label { flex: 1; }
@@ -206,6 +218,11 @@ svg.underside.drawing { cursor: crosshair; touch-action: none; }
   .top { gap: 10px; padding: 8px 12px; }
   .brand span { display: none; }
   .summary .big { font-size: 34px; }
+  /* The page scrolls on a phone and takes the view with it: the busy pill stays on screen. */
+  .busy {
+    position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; right: auto; transform: translateX(-50%);
+    z-index: 30; max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+  }
 }
 
 /* Figure picker for files holding several figures. */

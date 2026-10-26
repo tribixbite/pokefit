@@ -29,7 +29,8 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   ellipse dragged over the spot, like a decal. "Shape map" shades creases and draws contour lines of the
   surface's relief, the structure the wand follows. Mirror paints both sides at once
   (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
-  are dropped. Exported as Bambu paint;
+  are dropped. "Split by piece" gives every separate patch of a colour its own filament (white eyes and a white
+  tail become three colours, each changeable on its own). Exported as Bambu paint;
 - **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: Low / Medium / High keep
   7 / 20 / 50 % of the file's triangles, or drag the slider or type any count; a 1.45M-triangle sculpt at Low
   (~100k) opens 3x faster, paints and exports 10-25x faster, with the surface moved by under 0.02 mm;
@@ -40,7 +41,8 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
-  filament slots for *Import geometry only*;
+  filament slots for *Import geometry only*, and a **coloured STL** (one closed solid, a colour per triangle in the
+  VisCAM/SolidView format; Bambu Studio and most slicers read its shape but not its colours);
 - **shows what colours cost to print**: estimated filament changes, time and purge for the figure and for
   every palette size (on a two-nozzle X2D/H2D, two colours need no filament changes at all), from a model
   calibrated on Bambu slices;

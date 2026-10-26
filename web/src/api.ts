@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
+  ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -200,6 +200,15 @@ export async function preparePaint(session: string, params: Params,
   req: { mode: string; angle: number; mirror?: boolean }): Promise<PrepareResult> {
   if (mode === "local") return postJson<PrepareResult>("/api/paint_prepare", { session, params, ...req });
   return json<PrepareResult>(await call("paintPrepare", [session, JSON.stringify(params), JSON.stringify(req)]));
+}
+
+/** The connected patches of filament `filament`, largest first ("Split by piece"). */
+export async function colourPieces(session: string, params: Params, filament: number): Promise<ColourPiece[]> {
+  if (mode === "local") {
+    return (await postJson<{ pieces: ColourPiece[] }>("/api/colour_pieces", { session, params, filament })).pieces;
+  }
+  return json<{ pieces: ColourPiece[] }>(await call("colourPieces", [session, JSON.stringify(params),
+    JSON.stringify({ filament })])).pieces;
 }
 
 export async function exportFiles(session: string, params: Params): Promise<ExportResponse> {

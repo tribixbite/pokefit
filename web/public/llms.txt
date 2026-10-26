@@ -88,13 +88,20 @@
   spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
   0.2 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
   specks under" (default 0.5 mm²) gives tiny painted patches the colour around them, since each would cost a
-  filament change on every layer it spans. Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
+  filament change on every layer it spans. "Split by piece" gives each separate patch of the selected colour its own
+  filament (white eyes and a white tail: three colours); the largest keeps the colour, patches under 0.5 mm² (or the
+  speck size) stay, new filaments take the colour most unlike the palette, and Undo takes it back in one step. Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
   swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"
   when nothing loaded is close); the palette swatches carry the slot they print from. "Paint depth"
   sets how far colours reach into the figure (Bambu's segmented-region width; inside is the main filament): it
   changes how much of each colour is used, not the print time or the colour changes.
+- Export: the Bambu 3MF (and its import variant), the washer-seat shell STL, a JSON report, and a coloured STL: the
+  figure and its flat base joined into one closed solid (every edge on two triangles, vertices matched exactly),
+  soft paint edges written as their sub-triangles, each triangle's colour in the STL attribute word (VisCAM /
+  SolidView: bit 15 set, 5 bits each of red, green, blue). MeshLab, VisCAM and SolidView show the colours; Bambu
+  Studio and most slicers load the shape only.
 - Washers: catalogue of steel washers (DIN 9021 M5/M6/M8, US #10 × 3/4", US 1/4" × 1" fender) or a custom size;
   a comparison table shows the largest figure each allows with the magnets on steel. Stainless steel is not magnetic.
 - Orientation: rotate about X, Y and Z by any angle; the lowest point lands on the bed.

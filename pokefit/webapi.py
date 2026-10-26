@@ -13,8 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, prepare_paint, preview_faces,
-                       preview_glb, safe_stem, washer_table)
+from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, pieces_of_colour,
+                       prepare_paint, preview_faces, preview_glb, safe_stem, washer_table)
 from .presets import PresetLibrary, load_settings_file
 
 WORK = Path("/tmp/pokefit")
@@ -141,10 +141,16 @@ def paint_prepare(sid: str, params_json: str, req_json: str) -> str:
                                bool(req.get("mirror", False))))
 
 
+def colour_pieces(sid: str, params_json: str, req_json: str) -> str:
+    """The connected patches of one colour (`pipeline.pieces_of_colour`): req = {filament}."""
+    req = json.loads(req_json)
+    return _dump(pieces_of_colour(_session(sid), Params.from_dict(json.loads(params_json)), int(req["filament"])))
+
+
 def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:
     """(result JSON, [(file name, bytes)]) — the files are offered as downloads by the page."""
     s = _session(sid)
     out = WORK / "out" / uuid.uuid4().hex[:8] / safe_stem(s.project.path.name)
     res = export(s, Params.from_dict(json.loads(params_json)), out, ball_model=_ball_model)
-    files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["shell_stl"], res["report"]) if p]
+    files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["colour_stl"], res["shell_stl"], res["report"]) if p]
     return _dump(res), [(f.name, f.read_bytes()) for f in files]

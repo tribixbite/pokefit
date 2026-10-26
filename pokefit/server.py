@@ -14,6 +14,7 @@ API (all JSON unless noted):
   POST /api/preview_faces {session, params, regions?}              -> {signature, colours, parts} (its face colours)
   POST /api/pick        {session, params, point, normal, mode, angle, radius, stroke?} -> {part, face, path, faces, ...}
   POST /api/paint_prepare {session, params, mode, angle} -> builds tap structures before the first tap
+  POST /api/colour_pieces {session, params, filament} -> {pieces: [{part, face, area_mm2, faces}]}
   POST /api/slice       {session, params, x10}                     -> {job}
   GET  /api/job         ?id                                        -> {state, result|error}
   POST /api/export      {session, params}                          -> {files: [{name, url}], ...}
@@ -41,8 +42,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
                        input_checks,
-                       open_session, pick, prepare_paint, preview_faces, preview_glb, safe_stem, slice_variants,
-                       washer_table)
+                       open_session, pick, pieces_of_colour, prepare_paint, preview_faces, preview_glb, safe_stem,
+                       slice_variants, washer_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
@@ -485,6 +486,18 @@ class Handler(BaseHTTPRequestHandler):
                                 bool(body.get("mirror", False)))
         self._json(res)
 
+    def post_colour_pieces(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        try:
+            filament = int(body["filament"])
+            with lock:
+                res = pieces_of_colour(s, params, filament)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ApiError(400, f"bad request: {exc}") from exc
+        self._json(res)
+
     def post_slice(self, q: dict[str, str]) -> None:
         body = self._json_body()
         s, lock = _session(body.get("session"))
@@ -522,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
         out = OUT_DIR / safe_stem(s.project.path.name)
         with lock:
             res = export(s, params, out)
-        files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["shell_stl"], res["report"]) if p]
+        files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["colour_stl"], res["shell_stl"], res["report"]) if p]
         res["files"] = [{"name": f.name, "path": str(f),
                          "url": "/api/download?file=" + quote(str(f.relative_to(OUT_DIR)).replace("\\", "/"))}
                         for f in files]

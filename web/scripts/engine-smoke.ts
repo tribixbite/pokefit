@@ -194,6 +194,26 @@ console.log(`[${secs()} s] stamp: ${stamp.faces} faces, ${splitShown} sub-triang
 const outlined = JSON.parse(api.run_analyse(sitting.session, JSON.stringify({ ...sitting.report.params, magnets: 2,
   fill_area: "shape", fill_shape: [[-6, -5], [6, -5], [6, 5], [-6, 5]] })));
 console.log(`[${secs()} s] fill outline: ${outlined.status}, pockets ${outlined.pockets.length}`);
+// "Split by piece": the sitting figure's body and two legs are separate shells, three patches of its one colour.
+// Its export joins the figure and the flat base into one coloured STL (manifold-3d's WASM union): closed, every
+// edge on two triangles with vertices matched exactly, as Bambu Studio reads an STL.
+const pieces = JSON.parse(api.colour_pieces(sitting.session, JSON.stringify(sitting.report.params),
+  JSON.stringify({ filament: 1 }))).pieces;
+const [, sitFiles] = api.run_export(sitting.session, JSON.stringify(sitting.report.params)).toJs({ create_proxies: false });
+const colourStl = (sitFiles as [string, Uint8Array][]).find(([n]) => n.endsWith("_colour.stl"));
+if (colourStl) pyodide.FS.writeFile("/tmp/sitting_colour.stl", colourStl[1]);
+const stlEdges = colourStl ? pyodide.runPython(`
+import numpy as np
+data = open("/tmp/sitting_colour.stl", "rb").read()
+n = int(np.frombuffer(data[80:84], "<u4")[0])
+rec = np.frombuffer(data[84:84 + n * 50], np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")]))
+_, inv = np.unique(rec["v"].reshape(-1, 3).view(np.uint32).reshape(-1, 3), axis=0, return_inverse=True)
+f = inv.reshape(-1, 3)
+e = np.sort(np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+_, cnt = np.unique(e, axis=0, return_counts=True)
+f"{n} triangles, {int((cnt != 2).sum())} edges not on two"
+`) as string : "missing";
+console.log(`[${secs()} s] split by piece: ${pieces.length} patches; coloured STL ${stlEdges}`);
 
 const problems: string[] = [];
 if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense.report.object.parts[0].faces !== simp.faces_after) {
@@ -204,6 +224,8 @@ if (!(wand.faces >= 1)) problems.push("wand tap");
 if (stamp.stamp?.length !== 9 || !(stamp.faces > 0) || !(splitShown > 0)) problems.push("stamp with a soft edge");
 if (!(shapeView.shape?.length >= 1) || !(atob(shapeView.shape[0]).length > 0)) problems.push("shape map view");
 if (outlined.params.fill_area !== "shape" || outlined.status === undefined) problems.push("fill outline");
+if (pieces.length !== 3) problems.push(`split by piece (${pieces.length} patches, expected 3)`);
+if (!stlEdges.endsWith(", 0 edges not on two")) problems.push(`coloured STL (${stlEdges})`);
 if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
   problems.push("conform (bend + flat base)");
 }

@@ -1,5 +1,6 @@
 /** pokefit web UI: wires the panel controls, the 3D view and the underside editor to the API. */
 import * as api from "./api";
+import { makeCollapsible } from "./collapse";
 import { ColorizePanel } from "./colorize";
 import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
@@ -91,6 +92,7 @@ const colorize = new ColorizePanel({
       ...(stroke?.length ? { stroke } : {}), ...(mirror ? { mirror } : {}),
       ...(stampAxes ? { stamp_axes: stampAxes } : {}) }),
   prepare: (mode, angle, mirror) => api.preparePaint(state.session ?? "", state.params, { mode, angle, mirror }),
+  pieces: (filament) => api.colourPieces(state.session ?? "", state.params, filament),
   setPicking: (fn) => viewer.setPickHandler(fn),
   setStroking: (fn) => viewer.setStrokeHandler(fn),
   setStamping: (fn) => viewer.setStampHandler(fn),
@@ -1391,6 +1393,7 @@ function bind(): void {
   $("washerCompare").addEventListener("click", () => void compareWashers());
 }
 
+makeCollapsible($("panel"));
 bind();
 colorize.render();
 void init();

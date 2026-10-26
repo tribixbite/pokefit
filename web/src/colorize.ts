@@ -11,10 +11,10 @@
  * State lives in the shared `Params` (`colours`, `paint`), so analysis and
  * export see exactly what the preview shows.
  */
-import { textOn } from "./colour";
+import { distinctColour, textOn } from "./colour";
 import { formatDuration } from "./geometry";
 import type { FigureHit } from "./scene";
-import type { PaintMode, PaintOp, Params, PickResult, PrepareResult, RegionView, Report } from "./types";
+import type { ColourPiece, PaintMode, PaintOp, Params, PickResult, PrepareResult, RegionView, Report } from "./types";
 
 export interface ColorizeHost {
   params(): Params;
@@ -26,6 +26,8 @@ export interface ColorizeHost {
        stampAxes?: number[]): Promise<PickResult>;
   /** Build the engine's tap structures now (painting started), so the first tap is as quick as the rest. */
   prepare(mode: PaintMode, angle: number, mirror: boolean): Promise<PrepareResult>;
+  /** The connected patches of a filament, largest first (each covered by a "fill" step at its triangle). */
+  pieces(filament: number): Promise<ColourPiece[]>;
   /** Turn tap-to-pick on the 3D view on or off. */
   setPicking(fn: ((hit: FigureHit) => void) | null): void;
   /** Brush: a drag that starts on the figure paints a stroke (null = drags turn the view). */
@@ -45,8 +47,12 @@ export interface ColorizeHost {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-/** Colour offered for a newly added filament: the first of these not already in the palette. */
+/** Colours offered for a newly added filament: the one that stands out most from the palette (`distinctColour`). */
 const NEW_COLOURS = ["#161616", "#FFFFFF", "#E05028", "#2850E0", "#0ACC38", "#FFF144", "#A03CF7", "#F98C36", "#F5A3C7", "#7A4A2A"];
+/** The most colours the palette takes (the engine allows 32; Bambu projects with more get unwieldy). */
+const MAX_COLOURS = 16;
+/** "Split by piece": a patch smaller than this (print mm², or the speck size if larger) keeps its colour. */
+const SPLIT_MIN_MM2 = 0.5;
 /** Grow / Shrink step, print mm along the surface. */
 const GROW_STEP = 0.2;
 /** The engine's limit on an operation's grow, file mm (colorize.MAX_GROW). */
@@ -73,6 +79,8 @@ export class ColorizePanel {
   private sampling = false;
   /** Undone steps, last undone at the end (Redo puts them back; a new step clears them). */
   private undone: PaintOp[] = [];
+  /** Palettes before and after each "Split by piece" (by its steps' `group`): Undo / Redo restore them. */
+  private splits = new Map<number, { before: string[]; after: string[] }>();
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
@@ -88,6 +96,7 @@ export class ColorizePanel {
       void this.reload();
       this.render();
     });
+    $("paintSplit").addEventListener("click", () => void this.splitColour());
     $("paintUndo").addEventListener("click", () => this.undo());
     $("paintRedo").addEventListener("click", () => this.redo());
     $("paintClear").addEventListener("click", () => {
@@ -160,6 +169,7 @@ export class ColorizePanel {
     p.colours = null;
     p.paint = null;
     this.undone = [];
+    this.splits.clear();
     this.filament = 1;
     this.host.changed();
     void this.reload();
@@ -186,6 +196,7 @@ export class ColorizePanel {
     this.mirror = false;
     this.sampling = false;
     this.undone = [];
+    this.splits.clear();
     this.setPainting(false);
   }
 
@@ -193,6 +204,7 @@ export class ColorizePanel {
   dropPaint(): void {
     this.host.params().paint = null;
     this.undone = [];
+    this.splits.clear();
     this.render();
   }
 
@@ -235,6 +247,7 @@ export class ColorizePanel {
     pal.replaceChildren(...cols.map((c, i) => this.swatch(i + 1, c)), this.swatch(0, ""), this.addButton());
     $<HTMLInputElement>("paintColour").value = this.filament ? cols[this.filament - 1].slice(0, 7) : "#000000";
     $("paintColourRow").hidden = this.filament === 0;
+    ($("paintSplit") as HTMLButtonElement).disabled = this.busy;
     // "Prints from": mark the selected colour's row.
     document.querySelectorAll<HTMLElement>("#importMap .slot-row").forEach((r) =>
       r.classList.toggle("sel", r.dataset.n === String(this.filament)));
@@ -313,9 +326,8 @@ export class ColorizePanel {
     b.setAttribute("aria-label", b.title);
     b.addEventListener("click", () => {
       const cols = this.colours();
-      if (cols.length >= 16) { this.host.toast("16 colours at most."); return; }
-      const have = new Set(cols.map((c) => c.toUpperCase().slice(0, 7)));
-      cols.push(NEW_COLOURS.find((c) => !have.has(c)) ?? "#808080");
+      if (cols.length >= MAX_COLOURS) { this.host.toast(`${MAX_COLOURS} colours at most.`); return; }
+      cols.push(distinctColour(cols, NEW_COLOURS));
       this.host.params().colours = cols;
       this.filament = cols.length;
       this.host.changed();
@@ -466,16 +478,106 @@ export class ColorizePanel {
     this.edit((p) => [...p.slice(0, -1), next]);
   }
 
+  /**
+   * Split by piece: every separate patch of the selected colour after the largest gets a new filament (a "fill" step
+   * at its triangle, so later steps still apply), all as one step for Undo. Each new filament takes the colour that
+   * stands out most from the palette, so the patches show apart at once; recolour each with the colour box.
+   */
+  private async splitColour(): Promise<void> {
+    if (this.busy || this.filament < 1) return;
+    this.busy = true;
+    this.render();
+    $("paintInfo").textContent = "Finding the separate patches of this colour…";
+    try {
+      const p = this.host.params();
+      const before = this.colours();
+      const min = Math.max(SPLIT_MIN_MM2, p.despeckle ?? 0);
+      const pieces = await this.host.pieces(this.filament);
+      const big = pieces.filter((x) => x.area_mm2 >= min);
+      if (big.length < 2) {
+        const rest = pieces.length - 1;
+        this.host.toast(pieces.length
+          ? `Filament ${this.filament} is one connected patch${rest > 0 ? ` (plus ${rest} under ${min} mm², left as they are)` : ""}: nothing to split.`
+          : `Nothing on the figure prints in filament ${this.filament}.`);
+        $("paintInfo").textContent = "";
+        return;
+      }
+      const room = MAX_COLOURS - before.length;
+      if (room < 1) {
+        this.host.toast(`${MAX_COLOURS} colours at most: remove one first.`);
+        $("paintInfo").textContent = "";
+        return;
+      }
+      const split = big.slice(1, 1 + room);
+      const after = [...before];
+      const group = Date.now();
+      const ops: PaintOp[] = split.map((piece) => {
+        after.push(distinctColour(after, NEW_COLOURS));
+        return { part: piece.part, face: piece.face, filament: after.length, mode: "fill", angle: 15, radius: 0, group };
+      });
+      p.colours = after;
+      this.splits.set(group, { before, after });
+      p.paint = [...(p.paint ?? []), ...ops];
+      this.undone = [];
+      const left = big.length - 1 - split.length;
+      const small = pieces.length - big.length;
+      $("paintInfo").textContent = `Split into ${split.length + 1} colours (filaments ${this.filament}, ` +
+        `${split.map((_, i) => before.length + 1 + i).join(", ")})` +
+        (left ? `; ${left} more patch${left > 1 ? "es" : ""} kept: ${MAX_COLOURS} colours at most` : "") +
+        (small ? `; ${small} patch${small > 1 ? "es" : ""} under ${min} mm² kept` : "");
+      $("paintInfo").dataset.sticky = "1";
+      this.host.changed();
+      this.host.coloursChanged();
+      await this.reload();
+    } catch (e) {
+      this.host.toast((e as Error).message);
+      $("paintInfo").textContent = "";
+    } finally {
+      this.busy = false;
+      this.render();
+      delete $("paintInfo").dataset.sticky;
+    }
+  }
+
+  /** How many steps at the end were made together with the last one (a split's), else 1 (0 when there are none). */
+  private lastGroup(ops: PaintOp[]): number {
+    const g = ops[ops.length - 1]?.group;
+    if (g === undefined) return Math.min(1, ops.length);
+    let n = 0;
+    while (n < ops.length && ops[ops.length - 1 - n].group === g) n++;
+    return n;
+  }
+
   private undo(): void {
     const ops = this.host.params().paint ?? [];
-    if (!ops.length) return;
-    this.undone.push(ops[ops.length - 1]);
-    this.edit((p) => p.slice(0, -1));
+    const n = this.lastGroup(ops);
+    if (!n) return;
+    const taken = ops.slice(ops.length - n);
+    this.undone.push(...[...taken].reverse());
+    const g = taken[0].group;
+    const pal = g !== undefined ? this.splits.get(g) : undefined;
+    // The palette goes back too, unless colours were added since (then the added filaments stay, unused).
+    if (pal && this.colours().length === pal.after.length) {
+      this.host.params().colours = [...pal.before];
+      if (this.filament > pal.before.length) this.filament = 1;
+      this.host.coloursChanged();
+    }
+    this.edit((p) => p.slice(0, -n));
   }
 
   private redo(): void {
     const op = this.undone.pop();
-    if (op) this.edit((p) => [...p, op]);
+    if (!op) return;
+    const back = [op];
+    while (op.group !== undefined && this.undone.length && this.undone[this.undone.length - 1].group === op.group) {
+      back.push(this.undone.pop() as PaintOp);
+    }
+    const pal = op.group !== undefined ? this.splits.get(op.group) : undefined;
+    if (pal && this.colours().length === pal.before.length) {
+      this.host.params().colours = [...pal.after];
+      this.host.coloursChanged();
+    }
+    this.edit((p) => [...p, ...back]);
   }
 
   /** Keyboard shortcuts while a figure is open (ignored while typing in a field). */

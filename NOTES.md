@@ -99,7 +99,21 @@ exist only on the original Windows machine (ask the user for the files).
      rotation), so a rotation after painting can change the plane on an ambiguous shape; (d) the Shape map view
      replaces the paint colours while on; (e) a soft edge's split triangles change the preview's geometry, so a wand
      tap re-sends the mesh to the view (not only colours).
-12. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+12. **Split by piece + coloured STL** (2026-10-26). Split: `colorize.colour_pieces` -> `pipeline.pieces_of_colour` ->
+   `POST /api/colour_pieces` / worker `colourPieces`; the UI (`colorize.ts splitColour`) appends one "fill" step per
+   extra patch (shared `group`, undone/redone as one, palette restored) with the colour most unlike the palette
+   (`colour.distinctColour`). A bucket fill now also takes its colour's slivers in split triangles round it
+   (`SLIVER_RINGS`), so a split patch moves whole. Measured (scratchpad `real_split_stl.py`): Eevee multicolour 3MF
+   black = 5 patches over 0.5 mm², each new filament's area equals its patch to 0.001 mm²; Manex GLB grey 11 patches;
+   MINI EEVEE (single colour) 2 shells. Coloured STL (`pokefit/stlcolour.py`, `<stem>_colour.stl` in every export):
+   parts joined (manifold union), 0 open / 0 over edges with exact float32 matching on all three files, Bambu CLI
+   slices it; export +~5 s on the 1M-triangle Eevee (888k STL triangles). Open: (a) the STL's colours are read by
+   MeshLab/VisCAM/SolidView, not by Bambu/Orca/Prusa (they want the 3MF); a coloured OBJ would carry colour into
+   Bambu Studio 2.x / PrusaSlicer if the user wants that; (b) not opened in MeshLab here (decoder in
+   `stlcolour.read_coloured_stl` + trimesh only); (c) split steps are "fill" steps at a triangle: a later Simplify
+   change drops them like any paint. UI: every panel card collapses (`collapse.ts`, remembered); the busy pill is
+   fixed at the top on phones (desktop: in the view, which never scrolls).
+13. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
