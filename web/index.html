@@ -94,6 +94,9 @@
     <input id="fileInput" type="file" accept=".3mf,.stl,.obj,.glb,.gltf" hidden />
   </header>
 
+  <!-- Busy pill: a child of the page, fixed to the window (style.css .busy), so no scrolling hides it. -->
+  <div id="busy" class="busy" role="status" aria-live="polite" hidden><span class="spinner"></span><span id="busyText">Analysing…</span></div>
+
   <main class="layout">
     <section class="viewport" id="viewport">
       <div class="view-tools" role="toolbar" aria-label="View">
@@ -114,7 +117,6 @@
           <p id="photosRow" class="drop-sub" hidden><button id="photosBtn" class="btn">Make one from photos…</button></p>
         </div>
       </div>
-      <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Analysing…</span></div>
     </section>
 
     <aside class="panel" id="panel">
@@ -255,6 +257,7 @@
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
         <div class="row" id="paintColourRow">
           <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
+          <button id="paintRemove" class="btn" title="Delete this colour from the palette: what prints in it (the file's own colour and paint steps) takes the closest remaining colour, and the filaments after it move down one. Undo brings it back.">Remove colour</button>
           <button id="paintSplit" class="btn" title="Give each separate patch of this colour its own filament (white eyes and a white tail become three colours, each changeable on its own). The largest patch keeps this colour; patches under the speck size stay as they are. Undo takes it back in one step.">Split by piece</button>
         </div>
         <div id="slotMapBox" class="slot-map-box" hidden>

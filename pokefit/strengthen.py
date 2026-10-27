@@ -24,6 +24,12 @@ like conform.py):
    keeps the larger of its own push and SPREAD × its neighbours' mean), then a few smoothing passes:
    the thickened part meets its body with a taper, which is where a join is weakest.
 
+Only across: a vertex is pushed only where its inward ray leaves the solid again within about its own thickness
+(ACROSS), so the push widens the feature across its thin direction. On a rim, an edge or a point (an ear's tip,
+the point of a lightning-bolt tail, the edge of a flat fin) "outward" runs along the feature: the ray runs down
+it and leaves far away. Pushing those grew the point outward and rounded it into a knob (worst at 2.5-4 mm);
+they now keep their place, and the sheet behind them still thickens.
+
 Limits: the thickness is measured at one print size (the height asked for, else the largest that
 fits); a smaller print has thinner features. Pushing out the two sides of a narrow gap (a claw
 against the body) can make them touch; the slicer unions them. Nothing moves below the bed.
@@ -41,6 +47,7 @@ from .model3mf import Part, row_ids
 
 VOXEL = 0.15         # mm at print size
 SAMPLES = 12         # steps along the inward normal when measuring a vertex's local radius
+ACROSS = (1.5, 3.0)  # full push where the inward ray leaves the solid within 1.5 x the thickness, none past 3 x
 REACH = 1.5          # ...up to this many targets deep (a 90-degree corner's distance grows only as depth / sqrt 3)
 BLEND = 1.0          # the push blends out over this many target thicknesses of surface
 SPREAD = 0.9         # per pass, a vertex takes this share of its neighbours' mean push (if larger than its own)
@@ -64,9 +71,10 @@ class StrengthenInfo:
 
 
 def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points: np.ndarray,
-                 inward: np.ndarray, reach: float, voxel: float) -> np.ndarray:
-    """Per point (on the surface), the largest distance to the surface found along `inward` up to `reach`
-    (all in the same units): about half the local thickness, capped near `reach` for thick material."""
+                 inward: np.ndarray, reach: float, voxel: float) -> tuple[np.ndarray, np.ndarray]:
+    """Per point (on the surface): the largest distance to the surface found along `inward` up to `reach` (about
+    half the local thickness, capped near `reach` for thick material), and how far along `inward` the solid ends
+    (`reach` when it does not end within it). All in the same units."""
     tri = np.vstack([v[f] for v, f in zip(meshes_v, meshes_f)]).astype(np.float64)
     lo, hi = tri.reshape(-1, 3).min(axis=0), tri.reshape(-1, 3).max(axis=0)
     h = voxel
@@ -83,13 +91,21 @@ def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points:
     inside = (np.cumsum(acc, axis=1)[:, :-1] > 0).reshape(len(ys), len(xs), len(zs))
     dist = ndimage.distance_transform_edt(inside, sampling=h).astype(np.float32)
     r = np.zeros(len(points))
-    for t in np.linspace(h, reach, SAMPLES):
+    exit_at = np.full(len(points), reach)
+    entered = np.zeros(len(points), bool)
+    # Steps of one voxel (at least SAMPLES, at most 64): where the far side is must be known to a voxel or two.
+    for t in np.linspace(h, reach, int(np.clip(np.ceil(reach / h), SAMPLES, 64))):
         p = points - inward * t
         j = np.clip(np.round((p[:, 0] - xs[0]) / h).astype(np.intp), 0, len(xs) - 1)
         i = np.clip(np.round((p[:, 1] - ys[0]) / h).astype(np.intp), 0, len(ys) - 1)
         k = np.clip(np.round((p[:, 2] - zs[0]) / h).astype(np.intp), 0, len(zs) - 1)
         r = np.maximum(r, dist[i, j, k])
-    return r
+        ins = inside[i, j, k]
+        # The first sample outside after one inside: the far side (a first sample just outside is the surface).
+        leave = entered & ~ins & (exit_at >= reach)
+        exit_at[leave] = t
+        entered |= ins
+    return r, exit_at
 
 
 class _Graph:
@@ -158,14 +174,18 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
     # normals: a vertex's own normal beside a sharp convex edge runs along the wall and reads a solid box as thin.
     # TODO: a sharp 90-degree join (a flat fin on a box) then reads thick for its first ~half target (smoothed
     # normals tilt into the box there); sculpted figures join smoothly, so this is left as is.
-    radius = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
-                          np.vstack([graphs[i].pos for i in solid]), np.vstack([normals[i] for i in solid]),
-                          REACH * t_unit, vox)
+    radius, exits = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
+                                 np.vstack([graphs[i].pos for i in solid]), np.vstack([normals[i] for i in solid]),
+                                 REACH * t_unit, vox)
     out = list(parts)
     start, thin_n, total, push_max = 0, 0, 0, 0.0
     for i in solid:
         g, nrm = graphs[i], normals[i]
         thick = 2 * radius[start:start + g.n]
+        # Pushed only across the feature (module doc): 1 where the solid ends within ACROSS[0] x its thickness
+        # along the inward ray, 0 past ACROSS[1] x (a rim, an edge or a point: the ray runs along the feature).
+        across = np.clip((ACROSS[1] * thick - exits[start:start + g.n]) / ((ACROSS[1] - ACROSS[0]) * thick + 1e-12),
+                         0.0, 1.0)
         start += g.n
         thin = thick < t_unit
         thin_n += int(thin.sum())
@@ -195,16 +215,25 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
         necks = np.bincount(pairs[:, 0], minlength=comp.max() + 1) >= 2 if len(pairs) else np.zeros(comp.max() + 1, bool)
         frac[necks[comp]] = 0.0
         want = t_unit * (1 - (1 - TIP) * np.clip(frac, 0, 1))
-        push = np.where(thin, np.clip((want - thick) / 2, 0.0, t_unit / 2), 0.0)
+        # The across share varies from vertex to vertex near a rim: averaged over about a quarter target of surface
+        # first, or neighbours pushed and not pushed would leave spikes.
+        raw = across
+        for _ in range(int(np.clip((t_unit / 4 / max(g.edge, 1e-9)) ** 2, 2, NORMAL_ROUNDS))):
+            across = 0.5 * across + 0.5 * (g.mean @ across)
+        across = np.minimum(across, raw + 0.25)          # ... but a fine point keeps (nearly) its own: no push
+        gate = np.where(thin, across, 1.0)
+        push = np.where(thin, np.clip((want - thick) / 2, 0.0, t_unit / 2) * across, 0.0)
         # Denoise over about half a target of surface (a noisy sculpt measures unevenly; passes grow with the
         # mesh's density), then spread it over ~BLEND targets, fading: a spread keeps its peaks, so a join gets
         # its full push and a fillet round it. A few last passes round off the spread's steps.
         for _ in range(int(np.clip((t_unit / 2 / max(g.edge, 1e-9)) ** 2, SMOOTH, NORMAL_ROUNDS))):
             push = 0.5 * push + 0.5 * (g.mean @ push)
+        push *= gate                                       # denoising carried it onto rims and points too
         for _ in range(int(np.clip(round(BLEND * t_unit / max(g.edge, 1e-9)), 1, 60))):
-            push = np.maximum(push, SPREAD * (g.mean @ push))
+            push = np.maximum(push, SPREAD * (g.mean @ push) * gate)   # not out onto rims and points
         for _ in range(SMOOTH):
             push = 0.5 * push + 0.5 * (g.mean @ push)
+        push *= gate                                       # ... and so did the last rounding passes
         v = parts[i].vertices + (nrm * push[:, None])[g.ids]
         v[:, 2] = np.maximum(v[:, 2], parts[i].vertices[:, 2].min())     # nothing below the bed
         push_max = max(push_max, float(push.max()))

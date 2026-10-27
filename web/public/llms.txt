@@ -34,7 +34,9 @@
   vertices move, so paint and texture colour are kept. Settings: bend Auto/Off/Slight/Medium/Follow the sphere,
   flat base diameter (default the washer's), press depth, fill height, fill where.
 - Strengthen thin parts (off by default; 1.2 / 1.6 / 2 mm): local thickness is measured at the print size (voxels
-  and a distance transform); a thin feature (ear, tail tip, flame) gets the minimum where it joins the figure,
+  and a distance transform); only across a feature (where the inward ray leaves the solid within ~1.5-3 x its
+  thickness), so points and rims (ear tips, a lightning-bolt tail's point) keep their shape instead of swelling into
+  knobs; a thin feature (ear, tail tip, flame) gets the minimum where it joins the figure,
   tapering to 40 % of it at its tip, and a thin neck between two thick parts gets it all along. Vertices move
   out along smoothed normals, blended into the surface around, so colours are kept.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
@@ -90,7 +92,14 @@
   specks under" (default 0.5 mm²) gives tiny painted patches the colour around them, since each would cost a
   filament change on every layer it spans. "Split by piece" gives each separate patch of the selected colour its own
   filament (white eyes and a white tail: three colours); the largest keeps the colour, patches under 0.5 mm² (or the
-  speck size) stay, new filaments take the colour most unlike the palette, and Undo takes it back in one step. Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
+  speck size) stay, new filaments take the colour most unlike the palette, and Undo takes it back in one step.
+  "Remove colour" deletes the selected colour from the palette: the file's own colour and paint steps in it take the
+  closest remaining colour (CIE76) and later filaments move down one (Params.colour_map renumbers the file's
+  filaments before paint steps); Undo restores it.
+- Re-opening an export: pokefit's own pockets are found from their shape (a flat round ceiling over vertical walls
+  facing its axis all round, joined across parts), filled in, and the magnets placed there again as pockets placed by
+  hand; the export's "flat base" parts are dropped (made again from the settings). Checked on 7 round trips (found
+  within 0.001 mm) and 5 original figures (none found). Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
   swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"

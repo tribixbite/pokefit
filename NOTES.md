@@ -79,6 +79,13 @@ exist only on the original Windows machine (ask the user for the files).
    (a flat fin on a box) is under-thickened in its first ~half target (smoothed normals tilt into the box; TODO in
    `strengthen()`); (c) low-poly meshes move only their few vertices (the smoke critter reads 33 % "thin": box
    corners), so it suits dense sculpts; (d) measured at the asked height or the largest, not at a slider scale.
+   2026-10-27, user saw knobs on Pikachu (`Downloads/Pikachu_3MF(2)+gjhkddkhhfjljgmkdgfhjk.3mf`): the code had not
+   changed since it was added (bit-identical output at 2e0c3c1, 35dc094 and HEAD, scratchpad `strengthen_cmp.py`);
+   the knob was the push growing points and rims outward (lightning-bolt tail point from 1.6 mm, ear tips at 3 mm),
+   worse at the 2.5-4 mm options added on request. Fix: push only across (`ACROSS`, exit distance along the inward
+   ray), gated through the blend. Pikachu 3 mm: ear-tip move 0.89 -> 0.26 mm, surface moved 28 -> 25 %, largest push
+   1.08 -> 0.87 mm; renders scratchpad `pikachu_ears.png`, `strengthen_before_after.png`. Open: (e) a fine point
+   still rises up to 0.22 mm at 4 mm (tests/test_strengthen cone); (f) the Eevee nose grows a little at 3 mm.
 11. **Paint tools** (colorize). Wand (default; `Topology.wand`, ~0.4 s a tap on 100k triangles + ~0.1 s for the soft
    edge), Stamp (drag a box: ellipse decal), Brush, Fill, Mirror, Grow/Shrink, Pick colour, Undo/Redo, "Drop specks
    under", "Shape map" view (crease shading + relief contours). Wand, brush, stamp and grown steps paint soft edges
@@ -113,7 +120,17 @@ exist only on the original Windows machine (ask the user for the files).
    `stlcolour.read_coloured_stl` + trimesh only); (c) split steps are "fill" steps at a triangle: a later Simplify
    change drops them like any paint. UI: every panel card collapses (`collapse.ts`, remembered); the busy pill is
    fixed at the top on phones (desktop: in the view, which never scrolls).
-13. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+13. **Remove colour + re-opening exports** (2026-10-27). Remove colour: `Params.colour_map` (file filament n ->
+   colour_map[n-1], applied in `Session.mapped_parts` before paint; `Session.extruder` = renumbered object filament
+   everywhere a file is written), UI `colorize.ts removeColour` (closest by CIE76, later ones move down, paint steps
+   and "Prints from" choices renumbered; Undo restores while nothing changed since; no Redo for it). Old pockets:
+   `pokefit/oldpockets.py`; round trips (export with pockets, reopen) on 7 figures found every pocket within 0.001 mm,
+   the refilled meshes closed; the user's old exports: Eevee_pokefit_60 (2), MINI EEVEE 30k (1), Manex (3 at 2.09 mm);
+   no false finds on 5 originals. Open: (a) a pocket cut by an older pokefit with a different shape (none known)
+   would not be found; (b) a found pocket's diameter sets the pocket size for the session (the Manex export used
+   2.09 mm); (c) more than 3 found pockets: the first 3 are placed. Busy pill: a child of `body`, `position: fixed`
+   at every width (style.css `.busy`).
+14. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)

@@ -91,3 +91,26 @@ def test_the_pipeline_strengthens_on_request(tmp_path: Path) -> None:
     assert any(c["id"] == "strengthen" for c in d["checks"])
     with pytest.raises(ValueError, match="strengthen"):
         Params(strengthen=6)          # 0..5 mm
+
+
+def _cone_on_block() -> trimesh.Trimesh:
+    """A pointed ear: a cone (1.6 mm across at its base, 5 mm tall) on a block."""
+    block = trimesh.creation.box((10, 10, 6)).apply_translation([0, 0, 3])
+    cone = trimesh.creation.cone(radius=0.8, height=5.0, sections=48).apply_translation([0, 0, 5.9])
+    m = trimesh.boolean.union([block, cone], engine="manifold").subdivide_to_size(0.2)
+    assert isinstance(m, trimesh.Trimesh)
+    return m
+
+
+@pytest.mark.parametrize("target", [1.6, 3.0, 4.0])
+def test_a_pointed_end_keeps_its_shape(target: float) -> None:
+    """No ball on the end of an ear or a nose: the point stays where it was and the feature only narrows towards
+    it (each section no wider than the one below), while its base still thickens."""
+    m = _cone_on_block()
+    _, out = _strengthened(m, target)
+    after = trimesh.Trimesh(out.vertices, out.faces, process=False)
+    assert after.vertices[:, 2].max() == pytest.approx(m.vertices[:, 2].max(), abs=0.25)  # the point stays (0.22 mm up at 4 mm, 0.05 at 3)
+    # Above the first ~1.5 mm: this join is a sharp 90-degree corner, which reads thick there (strengthen() TODO).
+    widths = [_width(after, z) for z in (7.5, 8.5, 9.5, 10.3)]
+    assert all(a >= b - 0.02 for a, b in zip(widths, widths[1:])), widths
+    assert widths[0] > _width(m, 7.5) + 0.2

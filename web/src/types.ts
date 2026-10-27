@@ -43,6 +43,8 @@ export interface Params {
   colours: string[] | null;
   /** Colorize paint operations, applied in order. */
   paint: PaintOp[] | null;
+  /** Colours removed: the file's filament n prints as colour_map[n - 1] (before `paint`); null = as in the file. */
+  colour_map?: number[] | null;
   /** GLB/glTF colour (texture, vertex colours): filaments to reduce it to; null = automatic. */
   texture_colours: number | null;
   /** GLB: extra filaments for small, high-contrast details (eyes), 0..3 (gltf.TextureColours._details). */
@@ -131,6 +133,9 @@ export interface ObjectInfo {
   file_faces: number;
   /** What loading repaired (pokefit/repair.py, like Bambu Studio's Fix model); null = the mesh was sound. */
   repaired: { removed: number; split: number; flipped: number; filled: number; open_edges: number; pinched: number } | null;
+  /** Magnet pockets of an earlier pokefit export, filled as it loaded (pokefit/oldpockets.py): centres in the figure
+   * frame at scale 1 (times `fit.scale` = print mm), their diameter. Empty when there were none. */
+  old_pockets?: { x: number; y: number; diameter: number }[];
   parts: { name: string; extruder: number; faces: number; painted: number }[];
   colours: string[];
   /** The file's own colours (before colorize changes). */

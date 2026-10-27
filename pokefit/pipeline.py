@@ -38,7 +38,7 @@ from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets
 from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
                        remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
-from .paint import attr_paint, leaves, parse_tree
+from .paint import attr_paint, leaves, parse_tree, remap_states
 from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
@@ -67,7 +67,8 @@ SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 SHAPE_CACHE = 4             # fit / underside / printability results kept per session (recent shapes)
 # Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
-COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "paint_depth",
+COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "colour_map",
+                         "paint_depth",
                          "texture_colours", "texture_details", "despeckle"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`)
@@ -112,6 +113,10 @@ class Params:
     # (colorize.PaintOp dicts, applied in order).
     colours: list[str] | None = None
     paint: list[dict[str, Any]] | None = None
+    # Colours removed from the palette: the file's own filament n (its paint, part and object filaments; for a glTF,
+    # at the chosen count) prints as filament colour_map[n - 1]. Applied before `paint`, whose steps use the new
+    # numbers. None = as in the file.
+    colour_map: list[int] | None = None
     # glTF colour (texture, vertex colours, materials): how many filaments to reduce it to
     # (None = automatic, see gltf.py). Ignored for other files.
     texture_colours: int | None = None
@@ -165,6 +170,12 @@ class Params:
                 raise ValueError("at most 32 colours")
         for d in self.paint or []:
             PaintOp.from_dict(d)          # raises ValueError on a malformed operation
+        if self.colour_map is not None:
+            if not isinstance(self.colour_map, list) or len(self.colour_map) > 64:
+                raise ValueError("colour_map must be a list of at most 64 filament numbers")
+            self.colour_map = [int(n) for n in self.colour_map]
+            if not all(1 <= n <= 64 for n in self.colour_map):
+                raise ValueError("colour_map entries must be filament numbers 1-64")
         if self.texture_colours is not None:
             self.texture_colours = int(self.texture_colours)
             if not 1 <= self.texture_colours <= MAX_PICK:
@@ -269,6 +280,7 @@ class Session:
     _auto: dict[tuple, Any] = field(default_factory=dict)
     _topo: dict[str, TopologyCache] = field(default_factory=dict)       # object id -> colorize topology
     _painted: dict[tuple, list[Part]] = field(default_factory=dict)     # (orientation, paint) -> parts
+    _mapped: dict[tuple, list[Part]] = field(default_factory=dict)      # (orientation, colour_map) -> parts
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
     _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
     _settings: dict[tuple, dict] = field(default_factory=dict)          # (presets version, process) -> settings
@@ -501,14 +513,49 @@ class Session:
         self._topo[obj.id].set_up(rot.T @ np.array([0.0, 0.0, 1.0]))
         return self._topo[obj.id]
 
-    def figure_parts(self, params: Params) -> list[Part]:
-        """`unit_parts` with the file's colour (glTF: at the chosen count) and the colorize paint
-        applied (geometry identical), specks under `despeckle` mm² at the print size cleared."""
+    def old_pockets(self, params: Params) -> list[dict[str, float]]:
+        """An earlier export's pockets (`FigureObject.old_pockets`) in the figure frame at scale 1: the plate frame
+        turned like the figure and moved like `unit_parts`. None while the figure is turned about X or Y (its
+        underside is somewhere else then)."""
+        obj = self.obj(params)
+        if not obj.old_pockets or params.rotate_x % 360 or params.rotate_y % 360:
+            return []
+        okey = self._orientation(params)
+        self.unit_parts(params)
+        world = world_parts(obj)[0].vertices[0]
+        a = np.radians(okey[3])
+        rot = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        shift = self._oriented[okey][0].vertices[0][:2] - rot @ world[:2]
+        out = []
+        for pk in obj.old_pockets:
+            x, y = rot @ np.array([pk.x, pk.y]) + shift
+            out.append({"x": round(float(x), 3), "y": round(float(y), 3), "diameter": round(2 * pk.radius, 3)})
+        return out
+
+    def extruder(self, params: Params) -> int:
+        """The object's own filament, renumbered by `Params.colour_map` (removed colours)."""
+        return map_filament(self.obj(params).extruder or 1, params.colour_map)
+
+    def mapped_parts(self, params: Params) -> list[Part]:
+        """`textured_parts` with the file's filaments renumbered by `Params.colour_map` (`remap_filaments`)."""
         parts = self.textured_parts(params)
+        if not params.colour_map:
+            return parts
+        key = (self._key(params), self.texture_count(params), params.texture_details, tuple(params.colour_map))
+        if key not in self._mapped:
+            if len(self._mapped) > 8:
+                self._mapped.clear()
+            self._mapped[key] = remap_filaments(parts, params.colour_map, self.obj(params).extruder or 1)
+        return self._mapped[key]
+
+    def figure_parts(self, params: Params) -> list[Part]:
+        """`unit_parts` with the file's colour (glTF: at the chosen count, renumbered by `colour_map`) and the
+        colorize paint applied (geometry identical), specks under `despeckle` mm² at the print size cleared."""
+        parts = self.mapped_parts(params)
         if not params.paint:
             return self._with_pads(params, parts)
         s = self.paint_scale(params) if params.despeckle > 0 else 0.0
-        key = (self._key(params), self.texture_count(params), params.texture_details,
+        key = (self._key(params), self.texture_count(params), params.texture_details, json.dumps(params.colour_map),
                json.dumps(params.paint, sort_keys=True), params.despeckle, round(s, 4))
         if key not in self._painted:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
@@ -619,10 +666,10 @@ class Session:
             return []
         obj = self.obj(params)
         ukey = (f"{obj.id}:{self.texture_count(params)}:{params.texture_details}:{params.despeckle}:"
-                f"{json.dumps(params.paint, sort_keys=True)}")
+                f"{json.dumps(params.colour_map)}:{json.dumps(params.paint, sort_keys=True)}")
         if ukey not in self._used:
             parts = self.figure_parts(params)
-            self._used[ukey] = used_filaments(parts, obj.extruder)
+            self._used[ukey] = used_filaments(parts, self.extruder(params))
         manual = {int(k): int(v) for k, v in (params.filament_map or {}).items()}
         used = self._used[ukey]
         colours = self.colours(params)
@@ -720,6 +767,14 @@ def input_checks(session: Session, params: Params) -> list[Check]:
         checks: list[Check] = []
         for p in obj.parts:
             checks.extend(mesh_checks(p))
+        if obj.old_pockets:
+            n = len(obj.old_pockets)
+            base = (f" Its flat base ({obj.old_bases} part{'s' if obj.old_bases > 1 else ''}) was taken off too: the "
+                    "settings make it again." if obj.old_bases else "")
+            checks.insert(0, Check("old_pockets", "Pockets from an earlier export", "info",
+                                   f"This figure has {n} magnet pocket{'s' if n > 1 else ''} from an earlier export: "
+                                   f"{'they were' if n > 1 else 'it was'} filled in and the magnets placed there again "
+                                   "(Magnets card: drag to move, change the count, or Auto place)." + base, n))
         if obj.repaired:
             # What loading fixed (repair.py), as Bambu Studio reports its own repairs.
             sound = all(c.status == "pass" for c in checks if c.id.startswith("watertight:"))
@@ -1138,7 +1193,7 @@ def toolchange_info(session: Session, params: Params, final: list[Part], scale: 
     if len(colours) < 2 or scale <= 0:
         return {}
     obj = session.obj(params)
-    info = _tc_estimate(final, obj.extruder, colours, st)
+    info = _tc_estimate(final, session.extruder(params), colours, st)
     rows = colour_rows(session, params, scale)
     if rows:
         info["by_count"] = rows
@@ -1332,7 +1387,10 @@ def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, 
             "simplified": obj.simplified.to_dict() if obj.simplified else None,
             # What the import's repair fixed (repair.RepairInfo), None when the mesh was sound.
             "repaired": obj.repaired.to_dict() if obj.repaired else None,
-            "parts": [{"name": p.name, "extruder": p.extruder or obj.extruder, "faces": len(p.faces),
+            # Pockets of an earlier export, filled as it loaded: centres in the figure frame at scale 1 (x, y; the UI
+            # places the magnets there, times the scale). Empty when the figure is turned off its base.
+            "old_pockets": session.old_pockets(params),
+            "parts": [{"name": p.name, "extruder": p.extruder or session.extruder(params), "faces": len(p.faces),
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
             # glTF colour: the automatic filament count and the count in use (None for other files).
@@ -1373,6 +1431,30 @@ def face_colours(part: Part, colours: list[str], default_extruder: int) -> np.nd
         if fp is not None and fp.majority > 0:
             ext[i] = fp.majority
     return ext
+
+
+def map_filament(n: int, colour_map: list[int] | None) -> int:
+    """Filament `n` of the file as it prints after colours were removed (`Params.colour_map`)."""
+    return colour_map[n - 1] if colour_map and 1 <= n <= len(colour_map) else n
+
+
+def remap_filaments(parts: list[Part], colour_map: list[int], default_extruder: int) -> list[Part]:
+    """Copies of `parts` with every filament number n (paint states, split paint exactly; the part's filament,
+    made explicit) replaced by `colour_map[n - 1]`."""
+    mapping = {n: m for n, m in enumerate(colour_map, start=1) if m != n}
+    out = []
+    for p in parts:
+        ext = map_filament(p.extruder or default_extruder, colour_map)
+        extra: dict[int, str] = {}
+        done: dict[str, str] = {}
+        for i, attrs in p.tri_extra.items():
+            if attrs not in done:
+                fp = attr_paint(attrs)
+                done[attrs] = attrs if fp is None or not mapping else attrs.replace(
+                    f'paint_color="{fp.code}"', f'paint_color="{remap_states(fp.code, mapping)}"')
+            extra[i] = done[attrs]
+        out.append(Part(p.name, ext, p.vertices, p.faces, extra, p.subtype))
+    return out
 
 
 def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1483,7 +1565,7 @@ def _preview_meshes(session: Session, params: Params, regions: tuple[str, float]
                             else np.full(len(part.faces), -1, np.int64))
     else:
         for part in clip_overlaps(unit):
-            pv, pf, ext = painted_mesh(part, obj.extruder)
+            pv, pf, ext = painted_mesh(part, session.extruder(params))
             meshes.append((pv, pf))
             keys.append(ext)
     sig = hashlib.blake2b(b"".join(digest(v, f) for v, f in meshes), digest_size=12).hexdigest()
@@ -1595,7 +1677,7 @@ def pieces_of_colour(session: Session, params: Params, filament: int) -> dict[st
         raise ValueError(f"filament must be 1-64, not {filament}")
     s = session.paint_scale(params) or 1.0
     found = colour_pieces(session.topology(params), session.figure_parts(params), filament,
-                          session.obj(params).extruder or 1)
+                          session.extruder(params))
     return {"filament": filament, "pieces": [{"part": p.part, "face": p.face, "area_mm2": round(p.area * s * s, 3),
                                               "faces": p.faces} for p in found]}
 
@@ -1669,7 +1751,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
         area += float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum() / 2)
     attrs = figure[pi].tri_extra.get(fi)
     fp = attr_paint(attrs) if attrs else None
-    shown = fp.majority if fp is not None and fp.majority > 0 else (figure[pi].extruder or session.obj(params).extruder)
+    shown = fp.majority if fp is not None and fp.majority > 0 else (figure[pi].extruder or session.extruder(params))
     return {"part": pi, "face": fi, "distance": dist, "faces": int(n), "path": path,
             "share": round(len(sides[0][1]) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2),
             "mirrored": len(sides) > 1, "filament": int(shown), **({"stamp": list(stamp)} if stamp else {})}
@@ -1738,7 +1820,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     # File tag: the ball's print percentage, or its inner diameter when that was given.
     pct = f"d{params.ball_diameter:.0f}mm" if params.ball_diameter else str(int(round(ball_s * 100)))
     stem = safe_stem(session.project.path.name)
-    f3 = write_project(session.project, obj.name, obj.extruder, final, out_dir / f"{stem}_pokefit_{pct}.3mf",
+    f3 = write_project(session.project, obj.name, session.extruder(params), final, out_dir / f"{stem}_pokefit_{pct}.3mf",
                        settings=export_settings(session, params))
     shell_path = out_dir / f"shell_washerseat_{pct}_{safe_stem(params.washer)}.stl"
     shell_note = ""
@@ -1752,11 +1834,11 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     imp = None
     matches = [m for m in session.slot_matches(params) if m.used]
     if matches and session.reference:
-        parts, ext = remap_parts(final, obj.extruder, matches)
+        parts, ext = remap_parts(final, session.extruder(params), matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
                             settings=session.reference)
     # The same figure as one STL with a colour per triangle, for tools that take STL (Bambu Studio ignores it).
-    cstl, cnote = write_coloured_stl(out_dir / f"{stem}_pokefit_{pct}_colour.stl", final, obj.extruder,
+    cstl, cnote = write_coloured_stl(out_dir / f"{stem}_pokefit_{pct}_colour.stl", final, session.extruder(params),
                                      session.colours(params))
     shell_note = "; ".join(n for n in (shell_note, cnote) if n)
     rpath = out_dir / f"{stem}_pokefit_{pct}.json"
@@ -1791,7 +1873,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     out: dict[str, Any] = {}
     stem = safe_stem(session.project.path.name)
     for name, sup in (("off", False), ("auto", True)):
-        f = write_project(session.project, obj.name, obj.extruder, final, root / f"{name}.3mf",
+        f = write_project(session.project, obj.name, session.extruder(params), final, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))
         out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{name}.gcode.3mf").to_dict()
     needs = out["auto"].get("support_seconds", 0) > 0
@@ -1811,7 +1893,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
         if pos is None:
             out["x10"] = SliceResult(False, error="10 copies do not fit on one plate", copies=10).to_dict()
         else:
-            f = write_project(session.project, obj.name, obj.extruder, final, root / "x10.3mf",
+            f = write_project(session.project, obj.name, session.extruder(params), final, root / "x10.3mf",
                               positions=pos, settings=st)
             out["x10"] = slice_3mf(f, copies=10, work_dir=root / "x10").to_dict()
     return out

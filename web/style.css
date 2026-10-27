@@ -83,9 +83,13 @@ button, select, input { font: inherit; color: inherit; }
 .drop-title { font-size: 20px; font-weight: 650; margin: 0 0 8px; }
 .drop-sub { color: var(--muted); max-width: 440px; margin: 0 auto; line-height: 1.45; }
 
+/* Fixed to the window, never to the page: it stays on screen however far the page or the panel is scrolled. Over the
+   middle of the 3D view, just below the header; on a phone, at the top of the screen. */
 .busy {
-  position: absolute; top: 10px; right: 10px; z-index: 4; display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; border-radius: 10px; background: rgba(22, 29, 39, .92); border: 1px solid var(--line); font-size: 13px;
+  position: fixed; top: max(66px, env(safe-area-inset-top)); left: calc((100vw - var(--panel-w)) / 2);
+  transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px);
+  padding: 8px 12px; border-radius: 10px; background: rgba(22, 29, 39, .95); border: 1px solid var(--line); font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
 }
 .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #3a4a63; border-top-color: var(--accent); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -218,11 +222,7 @@ svg.underside.drawing { cursor: crosshair; touch-action: none; }
   .top { gap: 10px; padding: 8px 12px; }
   .brand span { display: none; }
   .summary .big { font-size: 34px; }
-  /* The page scrolls on a phone and takes the view with it: the busy pill stays on screen. */
-  .busy {
-    position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; right: auto; transform: translateX(-50%);
-    z-index: 30; max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
-  }
+  .busy { top: max(8px, env(safe-area-inset-top)); left: 50%; }
 }
 
 /* Figure picker for files holding several figures. */

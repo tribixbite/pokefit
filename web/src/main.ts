@@ -39,7 +39,7 @@ let defaults: Params = {
   pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
   pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
   process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "washer", fill_shape: null, paint_depth: null,
-  filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0, strengthen: 0,
+  filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5,
 };
 /** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
@@ -302,7 +302,7 @@ function engineStatus(text: string): void {
 async function load(fn: (params: Params) => Promise<import("./types").LoadResponse>, name: string): Promise<void> {
   busy(true, `Loading ${name}…`);
   const fresh: Params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
-    object_id: null, filament_map: null, colours: null, paint: null, texture_colours: null, texture_details: 0,
+    object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
     fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "washer" };
   try {
@@ -324,6 +324,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     await showFigure(res.session, null, false);
     if (differs) await runAnalyse();
     else show(r);
+    if (r.object.old_pockets?.length) await placeOldPockets(r.object.old_pockets);
     viewer.view("iso");
   } catch (e) {
     toast((e as Error).message);
@@ -478,8 +479,29 @@ function setSimplify(budget: number | null): void {
   void runAnalyse();
 }
 
-async function runAnalyse(): Promise<void> {
-  remember();
+/**
+ * A figure exported by pokefit before: its pockets were filled as it loaded (pokefit/oldpockets.py); the magnets go
+ * back where they were, as pockets placed by hand (drag, remove or Auto place them in the Magnets card). Not
+ * remembered as the next figure's settings.
+ */
+async function placeOldPockets(old: { x: number; y: number; diameter: number }[]): Promise<void> {
+  const p = state.params;
+  const scale = state.report?.fit.scale || 1;
+  const kept = old.slice(0, 3);
+  p.magnets = kept.length;
+  p.pockets = kept.map((q) => ({ x: +(q.x * scale).toFixed(3), y: +(q.y * scale).toFixed(3) }));
+  // Positions follow the figure's size; the diameter is the magnet's own (the old export's print mm).
+  const d = kept[0].diameter;
+  if (Math.abs(d - p.pocket_diameter) > 0.05) p.pocket_diameter = +d.toFixed(2);
+  syncControls();
+  await runAnalyse(false);
+  toast(`This file has ${old.length} magnet pocket${old.length > 1 ? "s" : ""} from an earlier export: filled in, and the ` +
+    `magnets placed there again${old.length > 3 ? " (the first 3)" : ""}. Move or remove them in the Magnets card.`);
+}
+
+/** Analyse with the current settings; `rememberIt` = save them as the next figure's defaults (prefs.ts). */
+async function runAnalyse(rememberIt = true): Promise<void> {
+  if (rememberIt) remember();
   if (!state.session) return;
   if (geometryKey() !== shownGeometry) await refreshFigure();
   const seq = ++state.seq;

@@ -11,7 +11,7 @@
  * State lives in the shared `Params` (`colours`, `paint`), so analysis and
  * export see exactly what the preview shows.
  */
-import { distinctColour, textOn } from "./colour";
+import { deltaE, distinctColour, textOn } from "./colour";
 import { formatDuration } from "./geometry";
 import type { FigureHit } from "./scene";
 import type { ColourPiece, PaintMode, PaintOp, Params, PickResult, PrepareResult, RegionView, Report } from "./types";
@@ -62,6 +62,15 @@ const MAX_LEVEL = 8;
 /** Modes whose angle slider applies. */
 const ANGLED: readonly PaintMode[] = ["part", "region"];
 
+/** What Remove colour changes, kept so Undo can put it back. */
+interface Snapshot {
+  colours: string[];
+  colourMap: number[] | null;
+  paint: PaintOp[] | null;
+  filamentMap: Record<string, number> | null;
+  filament: number;
+}
+
 export class ColorizePanel {
   private filament = 1;            // selected filament (1-based; 0 = erase)
   private mode: PaintMode = "wand";
@@ -81,6 +90,8 @@ export class ColorizePanel {
   private undone: PaintOp[] = [];
   /** Palettes before and after each "Split by piece" (by its steps' `group`): Undo / Redo restore them. */
   private splits = new Map<number, { before: string[]; after: string[] }>();
+  /** Colours removed, last at the end: the state before each and the state it left (Undo restores while unchanged). */
+  private removals: { before: Snapshot; after: string }[] = [];
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
@@ -97,6 +108,7 @@ export class ColorizePanel {
       this.render();
     });
     $("paintSplit").addEventListener("click", () => void this.splitColour());
+    $("paintRemove").addEventListener("click", () => this.removeColour());
     $("paintUndo").addEventListener("click", () => this.undo());
     $("paintRedo").addEventListener("click", () => this.redo());
     $("paintClear").addEventListener("click", () => {
@@ -168,8 +180,10 @@ export class ColorizePanel {
     change();
     p.colours = null;
     p.paint = null;
+    p.colour_map = null;
     this.undone = [];
     this.splits.clear();
+    this.removals = [];
     this.filament = 1;
     this.host.changed();
     void this.reload();
@@ -188,6 +202,7 @@ export class ColorizePanel {
     const p = this.host.params();
     p.paint = null;
     p.colours = null;
+    p.colour_map = null;
     p.texture_colours = null;
     p.texture_details = 0;
     this.filament = 1;
@@ -197,6 +212,7 @@ export class ColorizePanel {
     this.sampling = false;
     this.undone = [];
     this.splits.clear();
+    this.removals = [];
     this.setPainting(false);
   }
 
@@ -248,6 +264,7 @@ export class ColorizePanel {
     $<HTMLInputElement>("paintColour").value = this.filament ? cols[this.filament - 1].slice(0, 7) : "#000000";
     $("paintColourRow").hidden = this.filament === 0;
     ($("paintSplit") as HTMLButtonElement).disabled = this.busy;
+    ($("paintRemove") as HTMLButtonElement).disabled = this.busy || cols.length < 2;
     // "Prints from": mark the selected colour's row.
     document.querySelectorAll<HTMLElement>("#importMap .slot-row").forEach((r) =>
       r.classList.toggle("sel", r.dataset.n === String(this.filament)));
@@ -271,7 +288,7 @@ export class ColorizePanel {
     $("paintSample").setAttribute("aria-pressed", String(this.sampling));
     const ops = p.paint ?? [];
     const n = ops.length;
-    ($("paintUndo") as HTMLButtonElement).disabled = n === 0;
+    ($("paintUndo") as HTMLButtonElement).disabled = n === 0 && !this.removalUndoable();
     ($("paintRedo") as HTMLButtonElement).disabled = this.undone.length === 0;
     ($("paintClear") as HTMLButtonElement).disabled = n === 0;
     ($("paintGrow") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
@@ -295,7 +312,8 @@ export class ColorizePanel {
     b.className = `swatch${filament === 0 ? " erase" : ""}`;
     b.setAttribute("role", "radio");
     b.setAttribute("aria-checked", String(filament === this.filament));
-    b.title = filament ? `Filament ${filament} (${colour})` : "Erase paint (back to the part's own colour)";
+    b.title = filament ? `Filament ${filament} (${colour})`
+      : "Eraser: tap the figure with it to take paint off (back to the part's own colour). To delete a colour from the palette, select it and press Remove colour.";
     b.setAttribute("aria-label", b.title);
     if (filament) {
       b.style.background = colour;
@@ -539,6 +557,62 @@ export class ColorizePanel {
     }
   }
 
+  /** The state Remove colour and its Undo work on. */
+  private snapshot(): Snapshot {
+    const p = this.host.params();
+    return { colours: this.colours(), colourMap: p.colour_map ?? null, paint: p.paint ?? null,
+      filamentMap: p.filament_map ?? null, filament: this.filament };
+  }
+
+  /** Undo would take back the last Remove colour: nothing changed since. */
+  private removalUndoable(): boolean {
+    const last = this.removals[this.removals.length - 1];
+    return !!last && last.after === JSON.stringify({ ...this.snapshot(), filament: 0 });
+  }
+
+  /**
+   * Remove colour: delete the selected filament from the palette. What printed in it, the file's own colour
+   * (through `Params.colour_map`) and paint steps alike, takes the closest remaining colour (CIE76), and the
+   * filaments after it move down one, so the palette has no gap.
+   */
+  private removeColour(): void {
+    const k = this.filament;
+    const cols = this.colours();
+    if (this.busy || k < 1 || cols.length < 2) return;
+    const before = this.snapshot();
+    let j = k === 1 ? 2 : 1;
+    for (let n = 1; n <= cols.length; n++) {
+      if (n !== k && deltaE(cols[n - 1], cols[k - 1]) < deltaE(cols[j - 1], cols[k - 1])) j = n;
+    }
+    const renumber = (n: number): number => {
+      const m = n === k ? j : n;
+      return m > k ? m - 1 : m;
+    };
+    const p = this.host.params();
+    const identity = Array.from({ length: cols.length }, (_, i) => i + 1);
+    p.colour_map = (p.colour_map ?? identity).map(renumber);
+    p.colours = cols.filter((_, i) => i !== k - 1);
+    p.paint = p.paint?.length ? p.paint.map((op) => (op.filament ? { ...op, filament: renumber(op.filament) } : op)) : null;
+    // Slots chosen under "Prints from" follow their colour's new number; the removed colour's choice goes.
+    if (p.filament_map) {
+      const kept = Object.entries(p.filament_map).filter(([n]) => +n !== k).map(([n, slot]) => [String(renumber(+n)), slot]);
+      p.filament_map = kept.length ? Object.fromEntries(kept) : null;
+    }
+    // Steps waiting for Redo and split palettes name the old numbers.
+    this.undone = [];
+    this.splits.clear();
+    this.filament = renumber(j);
+    this.removals.push({ before, after: JSON.stringify({ ...this.snapshot(), filament: 0 }) });
+    $("paintInfo").textContent = `Removed filament ${k}: it prints in filament ${renumber(j)} (${cols[j - 1]}), ` +
+      "the closest colour left.";
+    $("paintInfo").dataset.sticky = "1";
+    window.setTimeout(() => { delete $("paintInfo").dataset.sticky; }, 4000);
+    this.host.changed();
+    this.host.coloursChanged();
+    void this.reload();
+    this.render();
+  }
+
   /** How many steps at the end were made together with the last one (a split's), else 1 (0 when there are none). */
   private lastGroup(ops: PaintOp[]): number {
     const g = ops[ops.length - 1]?.group;
@@ -549,6 +623,20 @@ export class ColorizePanel {
   }
 
   private undo(): void {
+    if (this.removalUndoable()) {
+      const { before } = this.removals.pop() as { before: Snapshot };
+      const p = this.host.params();
+      p.colours = before.colours;
+      p.colour_map = before.colourMap;
+      p.paint = before.paint;
+      p.filament_map = before.filamentMap;
+      this.filament = before.filament;
+      this.host.changed();
+      this.host.coloursChanged();
+      void this.reload();
+      this.render();
+      return;
+    }
     const ops = this.host.params().paint ?? [];
     const n = this.lastGroup(ops);
     if (!n) return;

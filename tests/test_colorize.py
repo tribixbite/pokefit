@@ -11,7 +11,7 @@ from pokefit.colorize import (PaintOp, TopologyCache, apply_paint, colour_pieces
 from pokefit.model3mf import Part, read_project
 from pokefit.paint import attr_paint, decode_majority, leaves, parse_tree
 from pokefit.pipeline import (BUNDLED_REFERENCE, Params, analyse, export, open_session, pick, pieces_of_colour,
-                              preview_faces, preview_glb)
+                              preview_faces, preview_glb, remap_filaments)
 from pokefit.slicer import resize_filaments
 
 
@@ -555,3 +555,31 @@ def test_pieces_of_colour_reports_print_areas(critter: Path, tmp_path: Path) -> 
     assert sum(p["area_mm2"] for p in res["pieces"]) == pytest.approx(total * scale * scale, rel=1e-3)
     with pytest.raises(ValueError):
         pieces_of_colour(s, params, 0)
+
+
+def test_removing_a_colour_renumbers_the_files_filaments(critter: Path, tmp_path: Path) -> None:
+    """`colour_map` renumbers the file's own filaments (whole and split paint, the part's and the object's filament)
+    before paint steps: removing filament 1 of [1, 2, 3] into 3 leaves 2 -> 1 and 3 -> 2."""
+    ball = trimesh.creation.icosphere(subdivisions=3, radius=10)
+    part = Part("body", 0, np.asarray(ball.vertices, float), np.asarray(ball.faces, np.int64), {})
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    (painted,) = apply_paint([part], [PaintOp(0, top, 2, "brush", radius=3.0),
+                                      PaintOp(0, _face_at(part, [0, 0, -10], [0, 0, -1]), 3, "region", 30)],
+                             TopologyCache([part]))
+    (out,) = remap_filaments([painted], [2, 1, 2], 1)
+    assert out.extruder == 2 and np.array_equal(out.faces, painted.faces)
+    assert _painted_area(out, 1) == pytest.approx(_painted_area(painted, 2), rel=1e-12)
+    assert _painted_area(out, 2) == pytest.approx(_painted_area(painted, 3), rel=1e-12)
+    assert _painted_area(out, 3) == 0
+    # Through the pipeline: the critter painted 2 on 1, filament 1 removed (into 2, then renumbered 1).
+    s = open_session(critter, BALL_3MF, None, tmp_path / "w")
+    base = Params(washer="US1/4x1")
+    top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
+    hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
+    removed = Params(washer="US1/4x1", colours=["#161616"], colour_map=[1, 1],
+                     paint=[{"part": hit["part"], "face": hit["face"], "filament": 1, "mode": "region", "angle": 30}])
+    rep, final = analyse(s, removed)
+    assert rep.object["colours"] == ["#161616"] and s.extruder(removed) == 1
+    assert all((p.extruder or 1) == 1 for p in final)
+    with pytest.raises(ValueError):
+        Params(colour_map=[0])

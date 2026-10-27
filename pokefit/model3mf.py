@@ -109,6 +109,10 @@ class FigureObject:
     simplify: float | None = None       # triangle budget (simplify.Budget) the parts are cut to when loaded
     simplified: Any = None              # simplify.SimplifyInfo once that happened (None: nothing to cut)
     repaired: Any = None                # repair.RepairInfo when loading fixed the mesh (None: nothing to fix)
+    # Magnet pockets of an earlier pokefit export, taken out as it loaded (oldpockets.OldPocket, plate frame), and
+    # how many of its "flat base" parts were dropped with them.
+    old_pockets: list[Any] = field(default_factory=list)
+    old_bases: int = 0
 
     @property
     def parts(self) -> list[Part]:
@@ -122,6 +126,11 @@ class FigureObject:
                 cut, info = simplify_parts(parts, self.simplify)
                 if info.faces_after < info.faces_before:
                     parts, self.simplified = cut, info
+            # An earlier export's pockets and flat base out (the repair below closes the holes), so they can be
+            # placed again.
+            from .oldpockets import strip_pockets
+
+            parts, self.old_pockets, self.old_bases = strip_pockets(parts, self.transform)
             # Like Bambu Studio's "Fix model": every edge joins exactly two faces before anything is cut or painted.
             from .repair import repair_parts
 
