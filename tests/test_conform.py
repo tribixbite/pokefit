@@ -9,7 +9,7 @@ import trimesh
 
 from conftest import CLEAN, edge_stats
 from pokefit.ball import Cavity, load_ball
-from pokefit.conform import FILL_NAME, ConformSpec, conform, lift_curve
+from pokefit.conform import FILL_NAME, ConformSpec, base_fill, conform, lift_curve
 from pokefit.model3mf import Part
 from pokefit.pipeline import DEFAULT_BALL, Params, analyse, open_session, pick, preview_faces
 from pokefit.washer import get_washer
@@ -121,13 +121,32 @@ def test_default_fill_is_raised_when_no_magnet_fits(tmp_path: Path) -> None:
     d = rep.to_dict()
     assert d["fit"]["conform"]["fill_mm"] == 4.0 and len(d["pockets"]) == 2
     assert "with less, no magnet pocket fits" in next(c["message"] for c in d["checks"] if c["id"] == "conform")
+    assert s.pocket_spec(Params()).pad == 4.0          # the pads fill as deep as the raised flat base
     # a fill the user chose is kept, even when no pocket fits with it
     rep2, _ = analyse(s, Params(flat_fill=2.4))
     d2 = rep2.to_dict()
     assert d2["fit"]["conform"]["fill_mm"] == 2.4 and not d2["pockets"]
+    room = next(c for c in d2["checks"] if c["id"] == "pockets:room")       # the Magnets card's one-click fix
+    assert room["value"] == 6.0 and "Fill gaps up to" in room["message"]
     # no magnets asked for: nothing to make room for
     rep3, _ = analyse(s, Params(magnets=0))
     assert rep3.to_dict()["fit"]["conform"]["fill_mm"] == 2.5
+
+
+def test_the_fill_reaches_over_a_paw_up_to_the_leg_above_it() -> None:
+    """A thin paw on the bed under a body 3 mm up: the air between them is a gap like the one under the belly, filled
+    to the body when it starts within the fill height (a paw's thin top was all a pocket beside it had for a wall)."""
+    body = trimesh.creation.box((16, 10, 6)).apply_translation([0, 0, 6.0])        # underside at z = 3
+    paw = trimesh.creation.box((4, 4, 0.8)).apply_translation([-5, 0, 0.4])          # 0 .. 0.8 under it
+    parts = [Part(n, 1, np.asarray(m.vertices, float), np.asarray(m.faces, np.int64), {}, "normal_part")
+             for n, m in (("body", body), ("paw", paw))]
+    everywhere = lambda gx, gy, step: np.ones(gx.shape, bool)                         # noqa: E731
+    base = base_fill(parts, everywhere, 4.0, 0.25, 0.1, 1, connected=False)
+    assert base is not None
+    v = base.vertices
+    over_paw = (np.abs(v[:, 0] + 5) < 1.5) & (np.abs(v[:, 1]) < 1.5) & (v[:, 2] > 0)
+    assert over_paw.any() and v[over_paw, 2].min() >= 3.0 - 1e-6                     # up to the body, not 0.8
+    assert base_fill(parts, everywhere, 2.5, 0.25, 0.1, 1, connected=False) is None  # 3 mm: more than 2.5
 
 
 def test_the_flat_base_cannot_be_painted_and_shows_as_its_own_region(tmp_path: Path) -> None:

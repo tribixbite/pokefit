@@ -123,14 +123,31 @@ exist only on the original Windows machine (ask the user for the files).
 13. **Remove colour + re-opening exports** (2026-10-27). Remove colour: `Params.colour_map` (file filament n ->
    colour_map[n-1], applied in `Session.mapped_parts` before paint; `Session.extruder` = renumbered object filament
    everywhere a file is written), UI `colorize.ts removeColour` (closest by CIE76, later ones move down, paint steps
-   and "Prints from" choices renumbered; Undo restores while nothing changed since; no Redo for it). Old pockets:
+   and "Prints from" choices renumbered; Undo and Redo while nothing changed since). Old pockets:
    `pokefit/oldpockets.py`; round trips (export with pockets, reopen) on 7 figures found every pocket within 0.001 mm,
    the refilled meshes closed; the user's old exports: Eevee_pokefit_60 (2), MINI EEVEE 30k (1), Manex (3 at 2.09 mm);
    no false finds on 5 originals. Open: (a) a pocket cut by an older pokefit with a different shape (none known)
    would not be found; (b) a found pocket's diameter sets the pocket size for the session (the Manex export used
    2.09 mm); (c) more than 3 found pockets: the first 3 are placed. Busy pill: a child of `body`, `position: fixed`
    at every width (style.css `.busy`).
-14. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+14. **Magnet count with press + fill** (2026-10-27; user: "going from 1 to 2 or 3 it stays 1 magnet"). Reproduced on
+   `Downloads/Eevee_Multicolor_AMS_Bambu_Lab_X1C.3mf` (30 % scale, paws 0-2.5 mm on the bed, legs from ~4.4 mm):
+   before, 1/2/3 asked -> 1/1/1 at the default, 0/0/0 at fill 4; Pikachu (2 files), Charmander_Full_Colors and MINI
+   EEVEE were already right. Causes and fixes: (a) the fill and the pads only filled under the LOWEST surface, so the
+   air between a paw and its leg stayed open and a pocket next to a paw had a 1.35 mm wall: `HeightField` keeps
+   LATER_SPANS spans above the first, `bridged(gap)` fills up to a span starting within the fill, used by
+   `padded` (pocket map) and `conform.base_fill`; (b) the default fill raised to 6 (`_auto_fill`) still padded the
+   pockets 2.5 deep: `Session.pocket_spec`; (c) `_auto_fill` stopped at the first fill where ANY pocket fit: now the
+   first where all do, else the most; (d) `choose_pockets` thinned the search lattice past a small patch of room
+   (`tests/test_magnets` narrow patch: 3 asked, 2 placed). After: the Eevee 1/2/3 -> 1/2/3 at the default and at
+   press 3 / fill 6; typed fill 4 still 1 (legs start above 4 mm), the Magnets card then offers "Fill gaps up to
+   6 mm" (check `pockets:room`, also when none fit; checked in the browser: fill 4 -> 0 of 3, one click -> 2 of 3 with
+   the user's remembered DIN 9021 M6 washer). Export of the Eevee with 3 magnets: every part closed, Bambu slice
+   3.56 h / 45.2 g. `read_project(..., as_written=True)` for tools (render/verify_export, tests reading exports):
+   the normal load strips an export's pockets and flat base since round 13. Scratchpad scripts `magnet_count.py`, `eevee_cond.py`, renders
+   `eevee_underside*.png`. Open: the fill now also builds up over paws inside the fill area (it is "fill gaps up to
+   X" literally); not yet looked at in Bambu Studio on the user's figures.
+15. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)

@@ -25,7 +25,9 @@
   solid column) and the low footprint's aspect ratio; it is kept only if the figure then fits ≥ 1 % larger. The
   base over the washer is made flat: bumps pressed down by up to 1.2 mm, then gaps up to 2.5 mm between the
   underside and the washer filled by a separate solid "flat base" part (main colour; at the default, raised to 4
-  or 6 mm when no magnet pocket fits otherwise, e.g. a figure on four thin legs). "Fill where": round the washer
+  or 6 mm when the magnets asked for do not fit otherwise, e.g. a figure on four thin legs). Air above a low piece is
+  a gap too: a paw on the bed under a leg starting within the fill height is filled up to the leg, so pockets beside
+  it are walled; when fewer magnets fit than asked, the Magnets card offers the deeper fill. "Fill where": round the washer
   (joined to where the figure stands), everywhere under the figure (every part hovering up to the fill height is
   filled down to the bed), inside a circle the user places and drags, or inside an outline the user draws in the
   underside view. With the magnets on the washer, each pocket also gets a pad of the same fill (gaps up to the

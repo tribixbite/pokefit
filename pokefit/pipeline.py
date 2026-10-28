@@ -352,12 +352,14 @@ class Session:
 
     def _auto_fill(self, params: Params, spec: ConformSpec) -> float:
         """The flat-base fill to use at the default setting: DEFAULT_FILL, or the first of AUTO_FILLS under
-        which a magnet pocket fits at the largest size (a figure on four thin legs, like an Eevee, has room
-        for none until the base fills the gap under its belly). Decided against the default washer, like the
-        conform shape itself, so every washer in the table sees the same figure."""
+        which all `params.magnets` pockets fit at the largest size (a figure on four thin legs, like an Eevee,
+        has room for none until the base fills the gap under its belly). When no fill holds them all, the
+        first that holds the most (none: DEFAULT_FILL). Decided against the default washer, like the conform
+        shape itself, so every washer in the table sees the same figure."""
         key = self._spec_key(params, spec) + (params.spec, params.magnets)
         if key not in self._fills:
             self._fills[key] = spec.fill
+            most = 0
             for fill in (spec.fill, *AUTO_FILLS):
                 parts = self._conformed(params, replace(spec, fill=fill))
                 cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
@@ -368,12 +370,20 @@ class Session:
                 if fkey not in self._fields:     # the same underside `underside` needs later
                     self._fields[fkey] = height_field([p.mesh() for p in parts if p.subtype == "normal_part"])
                 field = self._fields[fkey]
-                pockets, _ = choose_pockets(pocket_map(field.scaled(free.max_scale), params.spec), params.spec,
-                                            params.magnets)
-                if pockets:
-                    self._fills[key] = fill
+                pspec = replace(params.spec, pad=fill) if params.spec.pad > 0 else params.spec   # pads fill as deep
+                pockets, _ = choose_pockets(pocket_map(field.scaled(free.max_scale), pspec), pspec, params.magnets)
+                if len(pockets) > most:          # a deeper fill only where it places more pockets
+                    self._fills[key], most = fill, len(pockets)
+                if most >= params.magnets:
                     break
         return self._fills[key]
+
+    def pocket_spec(self, params: Params) -> PocketSpec:
+        """`params.spec` with the pads filling as deep as the flat base does: the fill raised by `_auto_fill`
+        (typed 2.5 mm, filled 6) pads the pockets 6 mm deep too, as a typed 6 does."""
+        spec = params.spec
+        cspec = self.conform_spec(params) if spec.pad > 0 else None
+        return replace(spec, pad=cspec.fill) if cspec is not None and cspec.fill != spec.pad else spec
 
     def conform_info(self, params: Params) -> ConformInfo | None:
         self.unit_parts(params)
@@ -577,7 +587,7 @@ class Session:
         disc filled to the bed, so a magnet resting on the washer is held all round (the pocket map counts
         on them: `PocketSpec.pad`). None without magnets, on the raised seat, with the fill off, or where the
         figure already sits flat over every pocket."""
-        spec = params.spec
+        spec = self.pocket_spec(params)
         if not (params.magnets and spec.flush and spec.pad > 0):
             return None
         key = shape_key(params)
@@ -811,7 +821,7 @@ def _steel_band(washer: Washer, diameter: float, relaxed: bool) -> tuple[float, 
 
 
 def _pocket_map(session: Session, params: Params, s: float) -> PocketMap:
-    return pocket_map(session.underside(params, s), params.spec)
+    return pocket_map(session.underside(params, s), session.pocket_spec(params))
 
 
 def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float, relaxed: bool = False
@@ -823,7 +833,7 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
     1-Lipschitz in o, so every offset within the best margin m* of the best
     offset o* still fits; o* and 36 such offsets are tried.
     """
-    spec, n = params.spec, params.magnets
+    spec, n = session.pocket_spec(params), params.magnets
     pm = _pocket_map(session, params, s)
     o_star, m_star = best_offset(session.points(params), cavity, s)
     o0 = (float(o_star[0]), float(o_star[1]))
@@ -918,7 +928,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
                      f"{' with the magnets on the steel' if params.magnets else ''} is {auto[0] * hp.height:.1f} mm, "
                      "so it prints at that.")
         return auto[0], auto[1], auto[2], [*auto[3], note], auto[4]
-    spec, n = params.spec, params.magnets
+    spec, n = session.pocket_spec(params), params.magnets
     free = max_scale(hp, cavity)
     if free is None:
         return 0.0, 0.0, [], [], (0.0, 0.0)
@@ -949,12 +959,12 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
     probe = params.figure_scale or s_fit
     free_pk, free_ch = choose_pockets(_pocket_map(session, params, probe), spec, n)
     if not free_pk:
-        return probe, s_fit, free_pk, free_ch, fit_offset(probe)
+        return probe, s_fit, free_pk, free_ch + _more_room(session, params), fit_offset(probe)
     if len(free_pk) < n:
         # Fewer fit than asked: place those like a full set, on the steel ring (a lone pocket placed freely sat
         # on a Pikachu's centre, over the washer's hole), keeping the "only room for k" warning.
         scale, top, pk, ch, off = _solve(session, replace(params, magnets=len(free_pk)), cavity, washer)
-        return scale, top, pk, free_ch + [c for c in ch if c.id != "pockets:feet"], off
+        return scale, top, pk, free_ch + _more_room(session, params) + [c for c in ch if c.id != "pockets:feet"], off
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
         key = (session._key(params), session.ball_scale(params), washer.key, params.clearance, spec, n, relaxed)
@@ -982,6 +992,19 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
                                  f"steel; a larger washer may allow more (see the washer table).")]
             return scale, scale, pk, ch, off
     return s_fit, s_fit, free_pk, free_ch, fit_offset(s_fit)
+
+
+def _more_room(session: Session, params: Params) -> list[Check]:
+    """When fewer pockets fit than asked: the settings that can make room under the figure (none on the raised seat,
+    which uses the figure's own underside, or when the fill is already the deepest offered)."""
+    cspec = session.conform_spec(params)
+    if (params.pocket_seat != "washer" or cspec is None or cspec.fill >= AUTO_FILLS[-1]
+            or not (cspec.flat_diameter > 0 or cspec.fill_all)):          # no flat base: the fill does nothing
+        return []
+    return [Check("pockets:room", "More magnets", "info",
+                  f"More may fit with a deeper flat base: \"Fill gaps up to\" {AUTO_FILLS[-1]:g} mm (now "
+                  f"{cspec.fill:g}){'' if cspec.fill_all else ', or Fill where: everywhere under the figure'}.",
+                  AUTO_FILLS[-1])]
 
 
 def solved(session: Session, params: Params) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
@@ -1102,6 +1125,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                             round(sinfo.thin_share, 4)))
 
     t2 = time.time()
+    pspec = session.pocket_spec(params)
     meshes = [p.mesh() for p in final]
     if skey not in session._undersides:
         _evict(session._undersides)
@@ -1112,7 +1136,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
         checks.extend(pchecks)
         if pockets:
             field_s = session.underside(params, scale)
-            pocket_checks = validate_pockets(field_s, pockets, params.spec)  # pocket:N (+ pocket:gap)
+            pocket_checks = validate_pockets(field_s, pockets, pspec)  # pocket:N (+ pocket:gap)
             checks.extend(pocket_checks)
             lo, hi = washer.annulus(params.pocket_diameter)
             pxy = np.array([[p.x, p.y] for p in pockets])
@@ -1129,13 +1153,13 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
                                     f"by up to {-am:.1f} mm, so they hold with roughly half force. "
                                     "A larger washer avoids this (Compare washers).", round(am, 2)))
             else:
-                od, idd = required_washer(pockets, params.spec)
+                od, idd = required_washer(pockets, pspec)
                 checks.append(Check("steel", "Magnets on the washer", "fail",
                                     f"Pockets miss the steel by {-am:.1f} mm with this washer; needs OD ≥ {od:.1f} mm "
                                     f"and hole ≤ {idd:.1f} mm.", round(am, 2)))
             # Per-pocket checks come first, in pocket order; a failed one is not cut.
             cuttable = [p for p, c in zip(pockets, pocket_checks) if c.status != "fail"]
-            final, cut_checks = cut_pockets(final, cuttable, params.spec)
+            final, cut_checks = cut_pockets(final, cuttable, pspec)
             checks.extend(cut_checks)
     t["pockets"] = time.time() - t2
 
@@ -1293,7 +1317,7 @@ def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], 
                            "pocket_d": params.pocket_diameter}
     out.update(_height_image(f))
     if params.magnets:
-        out["valid"] = _mask_rings(pocket_map(f, params.spec).valid, f)
+        out["valid"] = _mask_rings(pocket_map(f, session.pocket_spec(params)).valid, f)
     return out
 
 

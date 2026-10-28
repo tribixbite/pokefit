@@ -65,6 +65,7 @@ SEGMENTS = 48        # polygon sides of the pocket cylinder (as in the Zelda pot
 MIN_CUT_WALL = 0.2   # mm; thinner than this the pocket would break through the side, so it is not cut
 MIN_CUT_GRIP = 0.5   # mm of walled pocket; less than this holds nothing, so the pocket is not cut
 GRID_CELLS = 400     # height-field cells across the figure's larger footprint side
+LATER_SPANS = 3      # solid spans kept above the first one per cell (`HeightField.starts`, for gap fills)
 LOW_SEAT = 0.5       # mm above the washer: higher than this, the hold is noticeably weaker
 # Placement score, in mm: spread + DEPTH_WEIGHT × min(extra wall, DEPTH_CAP) − SEAT_PENALTY × seat
 # − SHOW_PENALTY × how far the magnet shows below the figure.
@@ -140,24 +141,45 @@ class HeightField:
     """Underside of a solid on a regular XY grid (row i ↔ y0 + i·step, column j ↔ x0 + j·step).
 
     z1: height where material starts going up (+inf where there is none);
-    z2: top of that first solid span (−inf where there is none).
+    z2: top of that first solid span (−inf where there is none);
+    starts, ends: the next LATER_SPANS solid spans above it, (k, row, column) (+inf / −inf where there are fewer).
+    A paw resting on the bed under a raised leg is a thin first span with the leg's span above it.
     """
     x0: float
     y0: float
     step: float
     z1: np.ndarray
     z2: np.ndarray
+    starts: np.ndarray | None = None
+    ends: np.ndarray | None = None
 
     def scaled(self, s: float) -> "HeightField":
         """The same underside after scaling the solid by s about the origin."""
-        return HeightField(self.x0 * s, self.y0 * s, self.step * s, self.z1 * s, self.z2 * s)
+        later = (None, None) if self.starts is None or self.ends is None else (self.starts * s, self.ends * s)
+        return HeightField(self.x0 * s, self.y0 * s, self.step * s, self.z1 * s, self.z2 * s, *later)
+
+    def bridged(self, gap: float) -> tuple[np.ndarray, np.ndarray]:
+        """(start, end) per cell of the span a fill up to `gap` above the bed reaches: the first span, or where it
+        starts at most `gap` up, the last of the spans above it that also start at most `gap` up (the air
+        between them is what the fill fills). Where the first span starts higher it is unchanged."""
+        lo, hi = self.z1.copy(), self.z2.copy()
+        if self.starts is None or self.ends is None or gap <= 0:
+            return lo, hi
+        reach = self.z1 <= gap
+        for a, b in zip(self.starts, self.ends):
+            take = reach & (a <= gap)
+            lo, hi = np.where(take, a, lo), np.where(take, b, hi)
+        return lo, hi
 
     def padded(self, gap: float) -> "HeightField":
         """The underside with every gap up to `gap` mm under material filled to the bed (what a pocket pad does
-        under its own disc: `pocket_pads`)."""
+        under its own disc: `pocket_pads`), the air above a low first span too (a paw on the bed under a leg
+        starting within `gap`: the pad fills up to the leg, so the walls reach it)."""
         if gap <= 0:
             return self
-        return HeightField(self.x0, self.y0, self.step, np.where(self.z1 <= gap, 0.0, self.z1), self.z2)
+        _, top = self.bridged(gap)
+        return HeightField(self.x0, self.y0, self.step, np.where(self.z1 <= gap, 0.0, self.z1),
+                           np.where(self.z1 <= gap, top, self.z2), self.starts, self.ends)
 
     def xy(self) -> tuple[np.ndarray, np.ndarray]:
         ny, nx = self.z1.shape
@@ -197,9 +219,10 @@ def height_field(meshes: list[trimesh.Trimesh], cells: int = GRID_CELLS, margin:
     xs = np.arange(lo[0] - pad, hi[0] + pad + step, step) + 0.1234567 * step
     ys = np.arange(lo[1] - pad, hi[1] + pad + step, step) + 0.3183099 * step
     cell, z, sign = _crossings(np.asarray(m.triangles, np.float64), xs, ys)
-    z1, z2 = _first_spans(cell, z, sign, len(xs) * len(ys))
-    return HeightField(float(xs[0]), float(ys[0]), step, z1.reshape(len(ys), len(xs)),
-                       z2.reshape(len(ys), len(xs)))
+    z1, z2, starts, ends = _spans(cell, z, sign, len(xs) * len(ys))
+    shape = (len(ys), len(xs))
+    return HeightField(float(xs[0]), float(ys[0]), step, z1.reshape(shape), z2.reshape(shape),
+                       starts.reshape((LATER_SPANS, *shape)), ends.reshape((LATER_SPANS, *shape)))
 
 
 def _crossings(tri: np.ndarray, xs: np.ndarray, ys: np.ndarray,
@@ -250,12 +273,16 @@ def _crossings(tri: np.ndarray, xs: np.ndarray, ys: np.ndarray,
     return np.concatenate(out_c), np.concatenate(out_z), np.concatenate(out_s)
 
 
-def _first_spans(cell: np.ndarray, z: np.ndarray, sign: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
-    """Per cell: z where material first starts and where that span ends (inf / −inf where none)."""
+def _spans(cell: np.ndarray, z: np.ndarray, sign: np.ndarray, n: int
+           ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per cell: z where material first starts, where that span ends (inf / −inf where none), and the starts and
+    ends of the next LATER_SPANS spans above it ((LATER_SPANS, n), inf / −inf where there are fewer)."""
     z1 = np.full(n, np.inf)
     z2 = np.full(n, -np.inf)
+    up_lo = np.full((LATER_SPANS, n), np.inf)
+    up_hi = np.full((LATER_SPANS, n), -np.inf)
     if not len(cell):
-        return z1, z2
+        return z1, z2, up_lo, up_hi
     # Entries before exits at the same height: two parts sharing a face (a flat base under a figure's flat bottom)
     # cross at one z, and an exit first would close the span at once (0 mm of material).
     order = np.lexsort((-sign, z, cell))
@@ -273,7 +300,25 @@ def _first_spans(cell: np.ndarray, z: np.ndarray, sign: np.ndarray, n: int) -> t
     c0 = cell[starts]
     z1[c0] = z[starts]
     z2[c0] = np.where(end > starts, z[end], z[starts])
-    return z1, z2
+    # Later spans: the count rising from 0 opens one, falling back to 0 closes it (unclosed: the cell's last hit).
+    prev = depth - sign
+    prev[starts] = 0
+    opens = np.nonzero((depth > 0) & (prev <= 0))[0]
+    closes = np.nonzero((depth <= 0) & (prev > 0))[0]
+    last_of = np.repeat(last, lengths)[opens]
+    nxt = np.searchsorted(closes, opens)                     # the first close after each open
+    shut = closes[np.minimum(nxt, len(closes) - 1)] if len(closes) else last_of
+    shut = np.where((nxt < len(closes)) & (shut <= last_of), shut, last_of)
+    oc = cell[opens]
+    later = z[opens] > z2[oc] + 1e-9                         # above the first span
+    opens, shut, oc = opens[later], shut[later], oc[later]
+    if len(opens):
+        group = np.r_[0, np.nonzero(np.diff(oc))[0] + 1]     # first open of each cell (oc is sorted)
+        rank = np.arange(len(opens)) - np.repeat(group, np.diff(np.r_[group, len(oc)]))
+        keep = rank < LATER_SPANS
+        up_lo[rank[keep], oc[keep]] = z[opens[keep]]
+        up_hi[rank[keep], oc[keep]] = z[shut[keep]]
+    return z1, z2, up_lo, up_hi
 
 
 def _disc_filter(a: np.ndarray, radius_px: float, kind: str, fill: float) -> np.ndarray:
@@ -446,6 +491,20 @@ def choose_pockets(pm: PocketMap, spec: PocketSpec, count: int = 2, ring: Ring |
     sel = np.arange(len(full))
     if k > 1:
         thin = sel[(full[:, 0] % k == 0) & (full[:, 1] % k == 0)]
+        # A patch of room narrower than the lattice (under one foot, a strip a pressed base left) can hold no
+        # lattice cell: then 2 or 3 pockets "did not fit" and fewer were placed. Each patch keeps its best cell
+        # (the largest patches first, at most MAX_CANDIDATES more).
+        labels, _ = ndimage.label(cand)
+        lab = labels[full[:, 0], full[:, 1]]
+        missing = np.setdiff1d(np.unique(lab), np.unique(lab[thin]))
+        if len(missing):
+            order = np.lexsort((-all_base, lab))
+            first = np.unique(lab[order], return_index=True)[1]
+            best = order[first]                                  # best cell of each patch, by label
+            best = best[np.isin(lab[best], missing)]
+            size = np.bincount(lab)[lab[best]]
+            best = best[np.argsort(-size, kind="stable")][:MAX_CANDIDATES[count]]
+            thin = np.union1d(thin, best)
         sel = thin if len(thin) >= count else sel
     pts, base = all_pts[sel], all_base[sel]
     dist = np.hypot(pts[:, None, 0] - pts[None, :, 0], pts[:, None, 1] - pts[None, :, 1])

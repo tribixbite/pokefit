@@ -226,7 +226,8 @@ if (!(shapeView.shape?.length >= 1) || !(atob(shapeView.shape[0]).length > 0)) p
 if (outlined.params.fill_area !== "shape" || outlined.status === undefined) problems.push("fill outline");
 if (pieces.length !== 3) problems.push(`split by piece (${pieces.length} patches, expected 3)`);
 if (!stlEdges.endsWith(", 0 edges not on two")) problems.push(`coloured STL (${stlEdges})`);
-if (!shaped || !(sitting.report.fit.conform?.bend > 0) || sitting.report.object.parts.length !== 2) {
+if (!shaped || !(sitting.report.fit.conform?.bend > 0) ||
+    !sitting.report.object.parts.some((p: { name: string }) => p.name === "flat base")) {   // + a pocket pad: 3
   problems.push("conform (bend + flat base)");
 }
 if (imported.length !== 1 || imported[0].name !== "eSUN PETG Basic") problems.push("preset import");

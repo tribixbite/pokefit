@@ -153,7 +153,7 @@ def test_export_import_variant(critter: Path, tmp_path: Path) -> None:
 
     s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
     out = export(s, Params(washer="US1/4x1"), tmp_path / "out")
-    imp = read_project(out["import_3mf"])
+    imp = read_project(out["import_3mf"], as_written=True)
     targets = s.reference["filament_colour"]
     assert imp.colours == targets                                    # carries the project's own slots
     m = {x["source"]: x["target"] for x in out["import_map"]}

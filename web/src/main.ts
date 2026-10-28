@@ -666,11 +666,13 @@ function renderMagnets(rep: Report): void {
       b.addEventListener("click", () => { state.params.pocket_max_seat = allow; void runAnalyse(); });
       items.push(h("li", {}, b));
     }
+    const more = roomItem(rep, n);
+    if (more) items.push(more);
     $("pocketList").replaceChildren(...items);
     return;
   }
   // One line per pocket: how high its opening is and its check status.
-  $("pocketList").replaceChildren(...rep.pockets.map((p, i) => {
+  const items: HTMLElement[] = rep.pockets.map((p, i) => {
     const c = rep.checks.find((x) => x.id === `pocket:${i + 1}`);
     let seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
     const shows = c?.message.match(/up to ([\d.]+) mm above the washer here/);
@@ -679,7 +681,25 @@ function renderMagnets(rep: Report): void {
     else if (shows) seat += ` · shows ${shows[1]} mm`;
     return h("li", { cls: c?.status ?? "" }, h("span", { cls: "n", textContent: String(i + 1) }),
       h("span", { textContent: c?.status === "fail" ? c.message : seat }));
-  }));
+  });
+  const more = roomItem(rep, n);
+  if (more) items.push(more);
+  $("pocketList").replaceChildren(...items);
+}
+
+/** Fewer pockets placed than asked: the deeper fill that may make room, one click (pipeline._more_room). */
+function roomItem(rep: Report, n: number): HTMLElement | null {
+  const room = rep.checks.find((x) => x.id === "pockets:room");
+  if (!room || typeof room.value !== "number" || rep.pockets.length >= n) return null;
+  const fill = room.value;
+  const b = h("button", { cls: "btn", textContent: `Fill gaps up to ${fill} mm` });
+  b.addEventListener("click", () => {
+    state.params.flat_fill = fill;
+    state.params.pockets = null;
+    syncControls();
+    void runAnalyse();
+  });
+  return h("li", { cls: "info" }, h("span", { textContent: `Room for ${rep.pockets.length} of ${n}. ` }), b);
 }
 
 /** The slots the figure's colours can map to: the printer's loaded AMS trays when read, else the reference

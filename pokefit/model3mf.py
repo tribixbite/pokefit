@@ -113,6 +113,7 @@ class FigureObject:
     # how many of its "flat base" parts were dropped with them.
     old_pockets: list[Any] = field(default_factory=list)
     old_bases: int = 0
+    as_written: bool = False            # True: the parts exactly as in the file (no pocket strip, no repair: tools)
 
     @property
     def parts(self) -> list[Part]:
@@ -126,6 +127,9 @@ class FigureObject:
                 cut, info = simplify_parts(parts, self.simplify)
                 if info.faces_after < info.faces_before:
                     parts, self.simplified = cut, info
+            if self.as_written:
+                self._parts, self.loader = parts, None
+                return parts
             # An earlier export's pockets and flat base out (the repair below closes the holes), so they can be
             # placed again.
             from .oldpockets import strip_pockets
@@ -273,10 +277,11 @@ def _model_settings(z: zipfile.ZipFile) -> dict[str, dict]:
     return out
 
 
-def read_project(path: str | Path, simplify: float | None = None) -> Project:
+def read_project(path: str | Path, simplify: float | None = None, as_written: bool = False) -> Project:
     """Load a 3MF project, a glTF/GLB scene (one part, its colours as paint; see gltf.py)
     or an STL/OBJ mesh (one object, one part). `simplify`: cut each figure to about this many triangles
-    when its meshes load (simplify.py; None = as in the file)."""
+    when its meshes load (simplify.py; None = as in the file). `as_written`: a 3MF's parts exactly as stored (an
+    export's pockets and flat base kept, no repair), for tools that check or render a file."""
     path = Path(path)
     if path.suffix.lower() in (".glb", ".gltf"):
         from .gltf import read_gltf                 # imports this module: load it on use
@@ -352,7 +357,7 @@ def read_project(path: str | Path, simplify: float | None = None) -> Project:
             return out
         return load
 
-    objects = [FigureObject(oid, name, ext, None, build[oid], loader(lv, pm), n, simplify)
+    objects = [FigureObject(oid, name, ext, None, build[oid], loader(lv, pm), n, simplify, as_written=as_written)
                for oid, name, ext, pm, lv, n in found]
 
     if not objects:

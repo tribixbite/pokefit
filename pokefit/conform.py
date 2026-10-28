@@ -349,6 +349,10 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
     Only cells where the gap is at most `max_gap` and fully under the figure are filled, and with
     `connected` only those joined to where the figure already touches the bed (or the largest
     patch); a region the user chose (`connected=False`) fills all of them. Unit-scale frame.
+
+    Air above a low piece is a gap too: a paw on the bed under a leg starting within `max_gap` is filled up
+    to the leg (`HeightField.bridged`), or the paw's thin top would be all a magnet pocket next to it had
+    for a wall (a multicolour Eevee placed 1 of 2 pockets at any fill).
     """
     from scipy import ndimage
 
@@ -359,7 +363,9 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
     cy, cx = ny // b, nx // b
     if cy < 2 or cx < 2:
         return None
-    blocks = field.z1[:cy * b, :cx * b].reshape(cy, b, cx, b)
+    lo, hi = field.bridged(max_gap)
+    touch = field.z1[:cy * b, :cx * b].reshape(cy, b, cx, b).min(axis=(1, 3))   # where the figure itself stands
+    blocks = lo[:cy * b, :cx * b].reshape(cy, b, cx, b)
     zmin = blocks.min(axis=(1, 3))
     under = np.isfinite(blocks).all(axis=(1, 3))
     # The top reaches the HIGHEST underside point of its cell (+ overlap), so no gap is left where the
@@ -368,7 +374,7 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
     # underside the base fills (a cell on the footprint's edge that "sees" the chin far up).
     low = np.isfinite(blocks) & (blocks <= zmin[:, None, :, None] + max_gap)
     zmax = np.where(under, np.where(low, blocks, -np.inf).max(axis=(1, 3)), np.inf)
-    span_top = field.z2[:cy * b, :cx * b].reshape(cy, b, cx, b).min(axis=(1, 3))
+    span_top = hi[:cy * b, :cx * b].reshape(cy, b, cx, b).min(axis=(1, 3))
     step = field.step * b
     xs = field.x0 + (np.arange(cx) * b + (b - 1) / 2) * field.step
     ys = field.y0 + (np.arange(cy) * b + (b - 1) / 2) * field.step
@@ -379,7 +385,7 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
         return None
     if connected:
         labels, n = ndimage.label(mask)
-        touching = set(np.unique(labels[mask & (zmin <= overlap)])) - {0}
+        touching = set(np.unique(labels[mask & (touch <= overlap)])) - {0}
         if not touching:
             sizes = ndimage.sum(mask, labels, range(1, n + 1))
             touching = {int(np.argmax(sizes)) + 1}

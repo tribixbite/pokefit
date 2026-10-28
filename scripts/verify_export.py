@@ -29,7 +29,7 @@ def main() -> int:
     ap.add_argument("--no-slice", action="store_true", help="only inspect the file")
     a = ap.parse_args()
 
-    proj = read_project(a.file)
+    proj = read_project(a.file, as_written=True)
     obj = proj.objects[0]
     states: Counter[int] = Counter()
     split = 0

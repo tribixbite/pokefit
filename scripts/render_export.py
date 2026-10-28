@@ -85,7 +85,7 @@ def main() -> None:
     ap.add_argument("--size", type=int, default=400)
     ap.add_argument("--zoom", help="X,Z,SPAN: a front close-up round X, Z (mm), SPAN mm across")
     a = ap.parse_args()
-    proj = read_project(a.file)
+    proj = read_project(a.file, as_written=True)
     obj = proj.default_object()
     cols = proj.colours
     vs, fs, cs, base = [], [], [], 0

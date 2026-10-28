@@ -92,6 +92,8 @@ export class ColorizePanel {
   private splits = new Map<number, { before: string[]; after: string[] }>();
   /** Colours removed, last at the end: the state before each and the state it left (Undo restores while unchanged). */
   private removals: { before: Snapshot; after: string }[] = [];
+  /** Removals undone, last at the end: the state Undo left and the state to go back to (Redo, while unchanged). */
+  private restored: { before: string; after: Snapshot }[] = [];
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
@@ -184,6 +186,7 @@ export class ColorizePanel {
     this.undone = [];
     this.splits.clear();
     this.removals = [];
+    this.restored = [];
     this.filament = 1;
     this.host.changed();
     void this.reload();
@@ -213,6 +216,7 @@ export class ColorizePanel {
     this.undone = [];
     this.splits.clear();
     this.removals = [];
+    this.restored = [];
     this.setPainting(false);
   }
 
@@ -289,7 +293,7 @@ export class ColorizePanel {
     const ops = p.paint ?? [];
     const n = ops.length;
     ($("paintUndo") as HTMLButtonElement).disabled = n === 0 && !this.removalUndoable();
-    ($("paintRedo") as HTMLButtonElement).disabled = this.undone.length === 0;
+    ($("paintRedo") as HTMLButtonElement).disabled = this.undone.length === 0 && !this.removalRedoable();
     ($("paintClear") as HTMLButtonElement).disabled = n === 0;
     ($("paintGrow") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
     $("levelGroup").hidden = !(n > 0 && ops[n - 1].mode === "wand");
@@ -564,10 +568,35 @@ export class ColorizePanel {
       filamentMap: p.filament_map ?? null, filament: this.filament };
   }
 
+  /** The snapshot compared for "nothing changed since" (the selected filament does not count). */
+  private stateKey(): string {
+    return JSON.stringify({ ...this.snapshot(), filament: 0 });
+  }
+
   /** Undo would take back the last Remove colour: nothing changed since. */
   private removalUndoable(): boolean {
     const last = this.removals[this.removals.length - 1];
-    return !!last && last.after === JSON.stringify({ ...this.snapshot(), filament: 0 });
+    return !!last && last.after === this.stateKey();
+  }
+
+  /** Redo would remove the colour again: nothing changed since its Undo. */
+  private removalRedoable(): boolean {
+    const last = this.restored[this.restored.length - 1];
+    return !!last && last.before === this.stateKey();
+  }
+
+  /** Put a Remove colour snapshot back (Undo and Redo of a removal). */
+  private restore(s: Snapshot): void {
+    const p = this.host.params();
+    p.colours = s.colours;
+    p.colour_map = s.colourMap;
+    p.paint = s.paint;
+    p.filament_map = s.filamentMap;
+    this.filament = s.filament;
+    this.host.changed();
+    this.host.coloursChanged();
+    void this.reload();
+    this.render();
   }
 
   /**
@@ -600,9 +629,10 @@ export class ColorizePanel {
     }
     // Steps waiting for Redo and split palettes name the old numbers.
     this.undone = [];
+    this.restored = [];
     this.splits.clear();
     this.filament = renumber(j);
-    this.removals.push({ before, after: JSON.stringify({ ...this.snapshot(), filament: 0 }) });
+    this.removals.push({ before, after: this.stateKey() });
     $("paintInfo").textContent = `Removed filament ${k}: it prints in filament ${renumber(j)} (${cols[j - 1]}), ` +
       "the closest colour left.";
     $("paintInfo").dataset.sticky = "1";
@@ -625,16 +655,9 @@ export class ColorizePanel {
   private undo(): void {
     if (this.removalUndoable()) {
       const { before } = this.removals.pop() as { before: Snapshot };
-      const p = this.host.params();
-      p.colours = before.colours;
-      p.colour_map = before.colourMap;
-      p.paint = before.paint;
-      p.filament_map = before.filamentMap;
-      this.filament = before.filament;
-      this.host.changed();
-      this.host.coloursChanged();
-      void this.reload();
-      this.render();
+      const after = this.snapshot();
+      this.restore(before);
+      this.restored.push({ before: this.stateKey(), after });
       return;
     }
     const ops = this.host.params().paint ?? [];
@@ -654,6 +677,13 @@ export class ColorizePanel {
   }
 
   private redo(): void {
+    if (this.removalRedoable()) {
+      const { after } = this.restored.pop() as { after: Snapshot };
+      const before = this.snapshot();
+      this.restore(after);
+      this.removals.push({ before, after: this.stateKey() });
+      return;
+    }
     const op = this.undone.pop();
     if (!op) return;
     const back = [op];

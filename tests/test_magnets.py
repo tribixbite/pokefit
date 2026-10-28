@@ -169,6 +169,36 @@ def test_fewer_pockets_when_crowded() -> None:
     assert len(pockets) == 1 and checks[0].status == "warn" and "1 of 3" in checks[0].message
 
 
+@pytest.mark.parametrize("count", [2, 3])
+def test_a_narrow_patch_of_room_is_not_lost_to_thinning(count: int) -> None:
+    """A wide slab plus a foot just big enough for one walled pocket: the foot's few valid centres fall between
+    the thinned search lattice's cells, so asking for 2 or 3 found only the slab's (1 or 2, "only room for")."""
+    spec = SPEC
+    side = spec.diameter + 2 * spec.wall + 0.05                 # valid centres: a ~0.05 mm square
+    slab = trimesh.creation.box([9.0, 14.0, 8]).apply_translation([-20, 0, 4])
+    foot = trimesh.creation.box([side, side, 8]).apply_translation([20.013, 7.017, 4])
+    pockets, checks = auto_pockets([slab, foot], spec, count=count)
+    assert len(pockets) == count and checks[0].status == "pass", checks[0].message
+    assert any(p.x > 15 for p in pockets)                      # one on the foot
+    assert all(c.status == "pass" for c in validate_pockets([slab, foot], pockets, spec))
+
+
+def test_a_pad_reaches_over_a_paw_to_the_leg_above() -> None:
+    """The height field keeps the spans above the first: a paw 0..0.8 under a leg from 3 mm. A pad up to 4 mm fills
+    the air between them (the walls reach the leg), one up to 2.5 mm does not."""
+    leg = trimesh.creation.box([12, 12, 6]).apply_translation([0, 0, 6.0])
+    paw = trimesh.creation.box([12, 12, 0.8]).apply_translation([0, 0, 0.4])
+    f = height_field([leg, paw])
+    mid = (f.z1.shape[0] // 2, f.z1.shape[1] // 2)
+    assert f.starts is not None and f.ends is not None
+    assert (f.z1[mid], f.z2[mid]) == pytest.approx((0.0, 0.8)) and (f.starts[0][mid], f.ends[0][mid]) == pytest.approx((3.0, 9.0))
+    assert f.starts[1][mid] == np.inf
+    assert f.padded(4.0).z2[mid] == pytest.approx(9.0) and f.padded(2.5).z2[mid] == pytest.approx(0.8)
+    assert f.scaled(0.5).starts[0][mid] == pytest.approx(1.5)
+    deep, shallow = PocketSpec(pad=4.0), PocketSpec(pad=2.5)
+    assert auto_pockets([leg, paw], deep)[0] and not auto_pockets([leg, paw], shallow)[0]
+
+
 def test_height_field_overlapping_parts() -> None:
     """An inner part (an eye inside a head) does not end the first solid span early."""
     outer = trimesh.creation.box([10, 10, 10]).apply_translation([0, 0, 5])

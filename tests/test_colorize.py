@@ -191,7 +191,7 @@ def test_pipeline_paint_survives_the_pocket_cut(critter: Path, tmp_path: Path) -
     assert rep.object["parts"][0]["painted"] == hit["faces"]
     assert any(c["id"].startswith("cut:") for c in rep.to_dict()["checks"])
     out = export(s, params, tmp_path / "out")
-    proj = read_project(out["figure_3mf"])
+    proj = read_project(out["figure_3mf"], as_written=True)
     (part,) = proj.objects[0].parts
     painted = [decode_majority(a.split('paint_color="')[1].split('"')[0])
                for a in part.tri_extra.values() if "paint_color" in a]
