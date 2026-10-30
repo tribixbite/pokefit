@@ -65,6 +65,8 @@ export class Viewer {
   private faceOrder = new Map<THREE.BufferGeometry, THREE.TypedArray>();
   private faceMaterials: THREE.MeshStandardMaterial[] = [];
   private frameRequested = false;
+  /** Pixels covered at the bottom by a panel (`setBottomInset`). */
+  private bottomInset = 0;
   /** Outer radius of the ball (final mm), for framing the camera. */
   private ballRadius = 25;
   /** Colorize: called with a tap on the figure (figure frame, scale 1); null = taps orbit only. */
@@ -291,9 +293,22 @@ export class Viewer {
     const w = Math.max(this.host.clientWidth, 1);
     const h = Math.max(this.host.clientHeight, 1);
     this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
+    // With a panel over the bottom of the view (the paint dock), the camera frames the part above it: the
+    // projection of a view `free` pixels tall, extended down over the panel (picking unprojects through it too).
+    const free = Math.max(h - this.bottomInset, Math.min(h, 120));
+    this.camera.aspect = w / free;
+    if (free < h) this.camera.setViewOffset(w, free, 0, 0, w, h);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     this.requestFrame();
+  }
+
+  /** Pixels at the bottom of the view covered by a panel (0: none): the scene is framed above them. */
+  setBottomInset(px: number): void {
+    const v = Math.max(0, Math.round(px));
+    if (v === this.bottomInset) return;
+    this.bottomInset = v;
+    this.resize();
   }
 
   requestFrame(): void {

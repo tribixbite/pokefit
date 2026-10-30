@@ -286,6 +286,8 @@ export interface Report {
   underside: Underside;
   /** Estimated colour changes (pokefit/toolchange.py); empty for a one-colour figure. */
   toolchange: Partial<ToolchangeInfo>;
+  /** The printability checks were left out (a quick analysis): `analyse` again without `quick` for them. */
+  printing_pending?: boolean;
 }
 
 export interface ToolchangeCost { changes: number; purge_g: number; minutes: number }

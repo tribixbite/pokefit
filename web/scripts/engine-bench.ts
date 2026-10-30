@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Module from "manifold-3d";
 import { loadPyodide } from "pyodide";
-import { bootPokefit, PYODIDE_CDN } from "../src/engine/boot.ts";
+import { bootPokefit, fetchWheels, PYODIDE_CDN } from "../src/engine/boot.ts";
 import { pokefitZip } from "../pack.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,7 +28,7 @@ let t = performance.now();
 const pyodide = await loadPyodide({ packageBaseUrl: PYODIDE_CDN, packageCacheDir: join(here, "..", ".pyodide-cache") });
 const manifold = await Module();
 manifold.setup();
-const api = await bootPokefit({ pyodide, manifold, pokefitZip: pokefitZip(join(here, "..", "..")).buffer as ArrayBuffer });
+const api = await bootPokefit({ pyodide, manifold, pokefitZip: pokefitZip(join(here, "..", "..")).buffer as ArrayBuffer, wheels: await fetchWheels() });
 console.log(`${"engine boot".padEnd(34)} ${((performance.now() - t) / 1000).toFixed(2).padStart(7)} s`);
 
 const name = file.split(/[\\/]/).pop()!;

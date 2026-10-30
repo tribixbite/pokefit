@@ -130,24 +130,28 @@ exist only on the original Windows machine (ask the user for the files).
    would not be found; (b) a found pocket's diameter sets the pocket size for the session (the Manex export used
    2.09 mm); (c) more than 3 found pockets: the first 3 are placed. Busy pill: a child of `body`, `position: fixed`
    at every width (style.css `.busy`).
-14. **Magnet count with press + fill** (2026-10-27; user: "going from 1 to 2 or 3 it stays 1 magnet"). Reproduced on
-   `Downloads/Eevee_Multicolor_AMS_Bambu_Lab_X1C.3mf` (30 % scale, paws 0-2.5 mm on the bed, legs from ~4.4 mm):
-   before, 1/2/3 asked -> 1/1/1 at the default, 0/0/0 at fill 4; Pikachu (2 files), Charmander_Full_Colors and MINI
-   EEVEE were already right. Causes and fixes: (a) the fill and the pads only filled under the LOWEST surface, so the
-   air between a paw and its leg stayed open and a pocket next to a paw had a 1.35 mm wall: `HeightField` keeps
-   LATER_SPANS spans above the first, `bridged(gap)` fills up to a span starting within the fill, used by
-   `padded` (pocket map) and `conform.base_fill`; (b) the default fill raised to 6 (`_auto_fill`) still padded the
-   pockets 2.5 deep: `Session.pocket_spec`; (c) `_auto_fill` stopped at the first fill where ANY pocket fit: now the
-   first where all do, else the most; (d) `choose_pockets` thinned the search lattice past a small patch of room
-   (`tests/test_magnets` narrow patch: 3 asked, 2 placed). After: the Eevee 1/2/3 -> 1/2/3 at the default and at
-   press 3 / fill 6; typed fill 4 still 1 (legs start above 4 mm), the Magnets card then offers "Fill gaps up to
-   6 mm" (check `pockets:room`, also when none fit; checked in the browser: fill 4 -> 0 of 3, one click -> 2 of 3 with
-   the user's remembered DIN 9021 M6 washer). Export of the Eevee with 3 magnets: every part closed, Bambu slice
-   3.56 h / 45.2 g. `read_project(..., as_written=True)` for tools (render/verify_export, tests reading exports):
-   the normal load strips an export's pockets and flat base since round 13. Scratchpad scripts `magnet_count.py`, `eevee_cond.py`, renders
-   `eevee_underside*.png`. Open: the fill now also builds up over paws inside the fill area (it is "fill gaps up to
-   X" literally); not yet looked at in Bambu Studio on the user's figures.
-15. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+14. **Magnet count with press + fill** (fixed 563734b; details in its commit). Open: the fill also builds up over
+   paws inside the fill area ("fill gaps up to X" literally: the multicolour Eevee stands on a ~6 mm block at the
+   default); not yet looked at in Bambu Studio on the user's figures.
+15. **Paint dock, "Prints from" fold, faster loads** (2026-10-30; user: paint controls and Show regions too far from
+   the model, filament mapping too big, "can we make load times faster?").
+   - Paint dock (`web/src/paintdock.ts`): while painting, palette / modes / brush-angle / Mirror, Pick, Show regions,
+     Shape map / Undo row move (same elements) onto the 3D view; Fold (remembered, `collapse.sectionToggle`) leaves the
+     palette; the camera frames the scene above it (`scene.setBottomInset`: view offset, picking unprojects through it;
+     tap-painting checked at phone width). Phone: the view is sticky while painting (`.layout` is a flex column on
+     phones: a grid item cannot stick outside its row). A "Paint" button in the view's toolbar. Show regions works in
+     every mode (switches the wand to Part). "How painting works" folded. Open: on a phone the open dock is ~205-246 px
+     of a 460 px view (the figure is framed small above it; Fold leaves 58 px).
+   - "Prints from" folds to chips (figure colour -> slot), folded by default.
+   - Load (browser, warm cache, `Little+Pikachu.3mf` 8.7 MB): figure and fit shown at 21.5 s (was 34.5 s), printability
+     checks at 29.9 s: `analyse(printing=False)` (UI's first call; `Report.printing_pending`, then a full call: the rest
+     is cached). Engine start 10.4 -> 8.2 s: wheels fetched with Pyodide and unpacked into site-packages (no micropip).
+     `xxhash` loaded (trimesh hashed with blake2b: ~1 s CPython per load). Remaining load (CPython 13 s of it):
+     conform 5.5 s (Nelder-Mead fit `fit.neg_margin` 1.8 s, `prepare_points` 1.4 s), height fields 3.3 s (6 calls,
+     `_crossings` 1.8 s), 3MF parse 3 s, mesh checks 1.7 s, pocket cut 1.5 s, pads 1.2 s. Import of the engine 4 s in
+     the browser (scipy.ndimage 1.4, networkx 1.2, trimesh 0.9 s in Node); networkx cannot be dropped (trimesh path
+     traversal needs it; tests fail without it). Scratchpad `prof_load.py`, `time_load.py`.
+16. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)

@@ -71,7 +71,8 @@
   filaments) keeps small features that contrast most with the colour they would merge into (black pupils on a
   cream head) as their own filaments: on two Squirtle models, 2 colours + 1 detail kept the pupils for +49 to
   +73 min in Bambu slices, against 4-5 colours otherwise.
-- Colorize: paint single-colour models by tapping the 3D view. A tap fills a part found from the geometry (spread
+- Colorize: paint single-colour models by tapping the 3D view (while painting, the palette, modes and tools sit on the
+  3D view itself; foldable). A tap fills a part found from the geometry (spread
   until a concave valley sharper than an angle, default 15°, where ears, tails, legs or eyes meet the body), any
   crease (like Bambu's smart fill), a separate shell, or a brush disc; dragging the brush paints a stroke, and a
   part or crease fill stops where the colour changes (outline an eye or a belly that has no crease round it, then

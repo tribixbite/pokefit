@@ -41,6 +41,23 @@ def test_analyse_two_footed(critter: Path, tmp_path: Path) -> None:
     assert rep.fit["margin"] == pytest.approx(0.0, abs=0.05)
 
 
+def test_quick_analysis_leaves_the_printability_checks_for_a_second_call(critter: Path, tmp_path: Path) -> None:
+    """`printing=False` (the UI's first call): fit and pockets as in a full analysis, the printability checks
+    pending; the full call adds them, and a quick call after that has them from the cache."""
+    s = open_session(critter, BALL_3MF, None, tmp_path)
+    p = Params(ball_scale=0.6)
+    quick, _ = analyse(s, p, printing=False)
+    printing_ids = {"thickness", "overhang", "islands", "bed", "supports"}
+    assert quick.printing_pending and "printing" in _by_id(quick)
+    assert not printing_ids & set(_by_id(quick))
+    full, _ = analyse(s, p)
+    assert not full.printing_pending and "printing" not in _by_id(full)
+    assert printing_ids <= set(_by_id(full)), sorted(_by_id(full))
+    assert quick.fit == full.fit and quick.pockets == full.pockets
+    again, _ = analyse(s, p, printing=False)
+    assert not again.printing_pending and _by_id(again) == _by_id(full)
+
+
 def test_fixed_scale_and_no_magnets(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path)
     rep, final = analyse(s, Params(figure_scale=0.5, magnets=False))

@@ -13,6 +13,7 @@
  */
 import { deltaE, distinctColour, textOn } from "./colour";
 import { formatDuration } from "./geometry";
+import { PaintDock } from "./paintdock";
 import type { FigureHit } from "./scene";
 import type { ColourPiece, PaintMode, PaintOp, Params, PickResult, PrepareResult, RegionView, Report } from "./types";
 
@@ -34,6 +35,8 @@ export interface ColorizeHost {
   setStroking(fn: ((hits: FigureHit[]) => void) | null): void;
   /** Stamp: a drag on the figure draws an ellipse's box (null = drags turn the view). */
   setStamping(fn: ((hit: FigureHit, axes: number[]) => void) | null): void;
+  /** Pixels at the bottom of the 3D view covered by the paint dock: the figure is framed above them. */
+  setViewInset(px: number): void;
   /** Called after paint or colours changed (the import-file colour map is stale until re-analysed). */
   changed(): void;
   /** Painting stopped: a good moment to re-analyse if anything changed. */
@@ -94,12 +97,21 @@ export class ColorizePanel {
   private removals: { before: Snapshot; after: string }[] = [];
   /** Removals undone, last at the end: the state Undo left and the state to go back to (Redo, while unchanged). */
   private restored: { before: string; after: Snapshot }[] = [];
+  /** The painting controls on the 3D view while painting (paintdock.ts). */
+  private dock = new PaintDock($("paintDock"), $("paintDockBody"),
+    ["palette", "paintModeRow", "brushRow", "paintAngleRow", "paintTools", "paintSteps"],
+    $<HTMLButtonElement>("dockFold"), (px) => this.host.setViewInset(px));
 
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
+    $("paintViewBtn").addEventListener("click", () => this.setPainting(!this.painting));
+    $("dockDone").addEventListener("click", () => this.setPainting(false));
     $("regionsBtn").addEventListener("click", () => {
       this.regions = !this.regions;
       if (this.regions) this.shapeMap = false;
+      // Regions are what Part, Crease and Piece fill; from another mode (the wand, whose region depends on the
+      // tap) showing them switches to Part, the closest.
+      if (this.regions && !ANGLED.includes(this.mode) && this.mode !== "piece") { this.setMode("part"); return; }
       void this.reload();
       this.render();
     });
@@ -282,10 +294,12 @@ export class ColorizePanel {
     $("brushRow").hidden = this.mode !== "brush";
     $("brushVal").textContent = `${this.brushMm.toFixed(1)} mm`;
     $<HTMLInputElement>("brushSize").value = String(this.brushMm);
-    ($("regionsBtn") as HTMLButtonElement).disabled = !angled && this.mode !== "piece";
+    $("regionsBtn").title = angled || this.mode === "piece" ? "Colour the figure by the regions a tap would fill"
+      : "Colour the figure by the parts a tap fills in Part mode (switches to it)";
     const t = $("paintToggle");
     t.setAttribute("aria-pressed", String(this.painting));
     t.textContent = this.painting ? "Done painting" : "Paint";
+    $("paintViewBtn").setAttribute("aria-pressed", String(this.painting));
     $("regionsBtn").setAttribute("aria-pressed", String(this.regions));
     $("shapeMapBtn").setAttribute("aria-pressed", String(this.shapeMap));
     $("paintMirror").setAttribute("aria-pressed", String(this.mirror));
@@ -361,9 +375,12 @@ export class ColorizePanel {
 
   private setMode(mode: PaintMode): void {
     this.mode = mode;
+    // Regions are those of Part, Crease and Piece: another mode turns the view back to the filaments.
+    const off = this.regions && !ANGLED.includes(mode) && mode !== "piece";
+    if (off) this.regions = false;
     if (this.painting) this.setPainting(true);     // brush: drags paint strokes
     this.render();
-    if (this.regions) void this.reload();
+    if (this.regions || off) void this.reload();
   }
 
   private setPainting(on: boolean): void {
@@ -379,6 +396,7 @@ export class ColorizePanel {
     if (on) void this.host.prepare(this.mode, this.angle, this.mirror).catch(() => undefined);
     if (!on && this.regions) { this.regions = false; void this.reload(); }
     if (!on) this.host.settled();
+    this.dock.show(on);
     this.render();
   }
 

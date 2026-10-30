@@ -55,9 +55,9 @@ def config() -> str:
     return _dump({**app_config(None, _reference, _reference_name, _presets), "engine": "browser"})
 
 
-def load(name: str, data: Any, params_json: str = "{}") -> str:
+def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> str:
     """Open an uploaded .3mf / .stl / .obj / .glb (bytes) and analyse it with the UI's settings (simplified as
-    they ask), so the first analysis is the one shown."""
+    they ask), so the first analysis is the one shown. `quick`: without the printability checks (`analyse`)."""
     params = Params.from_dict(json.loads(params_json))
     folder = WORK / uuid.uuid4().hex[:8]
     folder.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,7 @@ def load(name: str, data: Any, params_json: str = "{}") -> str:
         s.reference = _reference
     s.presets = _presets
     _sessions[s.id] = s
-    rep, _ = analyse(s, params)
+    rep, _ = analyse(s, params, printing=not quick)
     return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
 
 
@@ -98,8 +98,9 @@ def set_ball_model(name: str, data: Any) -> str:
     return _dump({"ok": True, "name": path.name})
 
 
-def run_analyse(sid: str, params_json: str) -> str:
-    rep, _ = analyse(_session(sid), Params.from_dict(json.loads(params_json)))
+def run_analyse(sid: str, params_json: str, quick: bool = False) -> str:
+    """Analyse with the UI's settings; `quick`: the printability checks only if cached (`analyse(printing=)`)."""
+    rep, _ = analyse(_session(sid), Params.from_dict(json.loads(params_json)), printing=not quick)
     return _dump(rep.to_dict())
 
 

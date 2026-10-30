@@ -810,6 +810,8 @@ class Report:
     underside: dict[str, Any] = field(default_factory=dict)   # 2D outlines for the pocket editor
     import_map: list[dict[str, Any]] = field(default_factory=list)   # figure filament -> project slot
     toolchange: dict[str, Any] = field(default_factory=dict)         # estimated colour changes (toolchange.py)
+    # The printability checks were left out (`analyse(printing=False)`): ask again with them.
+    printing_pending: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1059,8 +1061,13 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
     return rows
 
 
-def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[Report, list[Part]]:
-    """Fit, pockets, checks. Returns the report and the final (cut) figure-frame parts."""
+def analyse(session: Session, params: Params, recommend: bool = False,
+            printing: bool = True) -> tuple[Report, list[Part]]:
+    """Fit, pockets, checks. Returns the report and the final (cut) figure-frame parts.
+
+    `printing=False`: leave the printability checks (thickness, overhangs, islands, bed contact: about a quarter
+    of a first analysis) out unless they are cached for this geometry, marking the report `printing_pending`
+    (its status then counts only the checks made), so the UI shows the fit and the pockets first and asks again."""
     session.use_simplify(params.simplify)
     t: dict[str, float] = {}
     t0 = time.time()
@@ -1170,14 +1177,19 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     ignore = [(p.x, p.y, params.pocket_diameter / 2, p.z + params.pocket_depth) for p in pockets] if params.magnets else []
     # Geometry only: a colour edit re-analyses the same shape, so the checks are reused.
     pkey = (parts_digest(final), layer, angle, repr(ignore))
-    if pkey not in session._printing:
+    pending = not printing and pkey not in session._printing
+    if pending:
+        checks.append(Check("printing", "Print checks", "info",
+                            "Checking wall thickness, overhangs, layers that start in mid-air and bed contact…"))
+    elif pkey not in session._printing:
         solid = printable_solid(final)
-        printing = [thickness_check(solid), overhang_check(solid, angle, ignore),
-                    islands_check(solid, 2 * layer), bed_contact_check(solid)]
-        printing.append(supports_verdict(printing))
+        found = [thickness_check(solid), overhang_check(solid, angle, ignore),
+                 islands_check(solid, 2 * layer), bed_contact_check(solid)]
+        found.append(supports_verdict(found))
         _evict(session._printing)
-        session._printing[pkey] = printing
-    checks.extend(session._printing[pkey])
+        session._printing[pkey] = found
+    if not pending:
+        checks.extend(session._printing[pkey])
     t["printability"] = time.time() - t3
 
     t4 = time.time()
@@ -1189,7 +1201,7 @@ def analyse(session: Session, params: Params, recommend: bool = False) -> tuple[
     rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict,
                  [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
                  {k: round(v, 2) for k, v in t.items()}, underside,
-                 [m.to_dict() for m in session.slot_matches(params)], toolchange)
+                 [m.to_dict() for m in session.slot_matches(params)], toolchange, pending)
     return rep, final
 
 

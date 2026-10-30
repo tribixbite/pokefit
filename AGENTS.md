@@ -82,7 +82,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 
 | Python (`pokefit/`) | Role |
 |---|---|
-| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. Start here. |
+| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. `analyse(printing=False)` (the UI's first call: `quick` in webapi/server) leaves the printability checks for a second call (`Report.printing_pending`). Start here. |
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
 | `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer, or over a region (`Params.fill_area`: washer / all / circle / drawn `fill_shape`; `base_fill(region)`). Vertex moves only (paint survives) + a separate "flat base" part. Magnet pads (`Session.pads`, `PocketSpec.pad`) are flat-base parts too. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
@@ -110,11 +110,12 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
 | `src/main.ts` | UI state (`state.params` mirrors `Params`), cards, analyse/export flow. |
 | `src/scene.ts` | three.js viewer, ball/figure/pockets, tap picking. |
 | `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, brush strokes (scene.ts `setStrokeHandler`), stamp drags (`setStampHandler`: box -> ellipse semi-axes at the hit depth), "Shape map" view (scene.ts `shapeMaterial`: per-vertex crease/relief shader), Mirror, Pick colour, Grow/Shrink last step, Undo/Redo, keyboard shortcuts, GLB "Filaments" slider; `prepare` builds tap structures (and the mirror plane) when painting starts. |
-| `src/collapse.ts` | Collapsible cards: every panel card's `h2` becomes a toggle; collapsed keys in localStorage `pokefit.collapsed.v1`. |
+| `src/paintdock.ts` | While painting, the Colours card's painting controls move (same elements) onto the 3D view; foldable; `scene.setBottomInset` frames the figure above it. |
+| `src/collapse.ts` | Collapsible cards: every panel card's `h2` becomes a toggle; collapsed keys in localStorage `pokefit.collapsed.v1`; `sectionToggle` for folds inside a card ("Prints from", the paint dock). |
 | `src/simplify.ts` | Simplify control maths: levels (`LEVELS`, shares), log-scale slider <-> share, typed count -> budget. |
 | `src/prefs.ts` | Remembered settings (localStorage `pokefit.prefs.v1`): only changed, whitelisted, type-checked params; defaults before a file is open. |
 | `src/slotpicker.ts`, `src/colour.ts` | "Prints from" slot dropdown with swatches, closest first (ΔE = the engine's CIE76); colour helpers. |
-| `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport. |
+| `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport; boot fetches the wheels alongside Pyodide and unpacks them into site-packages (no micropip). |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |
 | `src/handoff.ts` | Models from other apps (craftmatic): `pokefit:load` postMessage from trusted origins, `?url=`. |
 | `src/printer.ts` | Printer card (local): "Watch the printer" = camera + status every 15 s while visible. |

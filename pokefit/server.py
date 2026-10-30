@@ -5,9 +5,9 @@ outputs go under .pokefit_cache/ and pokefit_out/ next to the repo.
 
 API (all JSON unless noted):
   GET  /api/config                         washers, filament slots, defaults, slicer availability
-  POST /api/load        body = file bytes, header X-Filename [, X-Params]  -> {session, report}
-  POST /api/load_path   {path[, params]}                                   -> {session, report}
-  POST /api/analyse     {session, params}                          -> report
+  POST /api/load        body = file bytes, header X-Filename [, X-Params, X-Quick: 1] -> {session, report}
+  POST /api/load_path   {path[, params, quick]}                            -> {session, report}
+  POST /api/analyse     {session, params[, quick]} (quick: printability checks left for a second call) -> report
   POST /api/washers     {session, params}                          -> [washer rows]
   GET  /api/preview.glb ?session&object&rx&ry                      -> GLB (figure at scale 1)
   POST /api/preview     {session, params, regions?: {mode, angle}} -> GLB (one uncoloured mesh per part)
@@ -97,9 +97,9 @@ def _regions(body: dict[str, Any]) -> tuple[str, float] | None:
         raise ApiError(400, f"bad regions: {exc}") from exc
 
 
-def _load(path: Path, params: Params | None = None) -> dict[str, Any]:
+def _load(path: Path, params: Params | None = None, quick: bool = False) -> dict[str, Any]:
     """Open a file and analyse it with `params` (the UI's settings, so the first analysis is the one it shows;
-    default settings when None), simplified as they ask."""
+    default settings when None), simplified as they ask. `quick`: without the printability checks (`analyse`)."""
     params = params or Params()
     try:
         s = open_session(path, simplify=params.simplify)
@@ -112,7 +112,7 @@ def _load(path: Path, params: Params | None = None) -> dict[str, Any]:
     s.ams = _ams
     _register(s)
     with _locks[s.id]:
-        rep, _ = analyse(s, params)
+        rep, _ = analyse(s, params, printing=not quick)
     return {"session": s.id, "file": path.name, "report": rep.to_dict()}
 
 
@@ -251,7 +251,7 @@ class Handler(BaseHTTPRequestHandler):
             params = _params({"params": json.loads(unquote(raw))}) if raw else None
         except json.JSONDecodeError as exc:
             raise ApiError(400, f"bad X-Params: {exc}") from exc
-        self._json(_load(path, params))
+        self._json(_load(path, params, quick=self.headers.get("X-Quick") == "1"))
 
     def post_reference(self, q: dict[str, str]) -> None:
         """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
@@ -415,14 +415,14 @@ class Handler(BaseHTTPRequestHandler):
         p = Path(str(body.get("path", ""))).expanduser()
         if not p.is_file():
             raise ApiError(404, f"no such file: {p}")
-        self._json(_load(p, _params(body) if body.get("params") else None))
+        self._json(_load(p, _params(body) if body.get("params") else None, quick=bool(body.get("quick"))))
 
     def post_analyse(self, q: dict[str, str]) -> None:
         body = self._json_body()
         s, lock = _session(body.get("session"))
         params = _params(body)
         with lock:
-            rep, _ = analyse(s, params)
+            rep, _ = analyse(s, params, printing=not body.get("quick"))
         self._json(rep.to_dict())
 
     def post_washers(self, q: dict[str, str]) -> None:

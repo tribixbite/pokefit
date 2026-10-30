@@ -9,6 +9,7 @@ license-files = ["LICENSE"]
 # ships (manifold3d is swapped for its WebAssembly build there, see pokefit/geom.py).
 dependencies = [
     "numpy", "scipy", "trimesh", "manifold3d", "shapely", "lxml", "contourpy", "pillow", "networkx",
+    "xxhash",     # trimesh's fast cache-check hash (its blake2b fallback cost ~1 s per figure load)
     "wasmtime",   # runs the vendored meshoptimizer simplifier (pokefit/simplify.py) outside the browser
 ]
 

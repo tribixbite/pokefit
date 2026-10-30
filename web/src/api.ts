@@ -111,25 +111,29 @@ export async function getConfig(): Promise<Config> {
   return (await (await check(await fetch(versioned("config.json")))).json()) as Config;
 }
 
-/** Open a .3mf/.stl/.obj/.glb; the engine simplifies it as `params` ask and analyses it with them. */
+/**
+ * Open a .3mf/.stl/.obj/.glb; the engine simplifies it as `params` ask and analyses it with them, quickly: the
+ * printability checks come from a second `analyse` (the report says `printing_pending`).
+ */
 export async function loadFile(file: File, params: Params): Promise<LoadResponse> {
   if (mode === "local") {
     const res = await check(
       await fetch("/api/load", {
         method: "POST", body: file,
-        headers: { "X-Filename": encodeURIComponent(file.name), "X-Params": encodeURIComponent(JSON.stringify(params)) },
+        headers: { "X-Filename": encodeURIComponent(file.name), "X-Params": encodeURIComponent(JSON.stringify(params)),
+          "X-Quick": "1" },
       }),
     );
     return (await res.json()) as LoadResponse;
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  return json<LoadResponse>(await call("load", [file.name, bytes, JSON.stringify(params)], [bytes.buffer]));
+  return json<LoadResponse>(await call("load", [file.name, bytes, JSON.stringify(params), true], [bytes.buffer]));
 }
 
-/** Load a file already on the server's disk (local engine only). */
+/** Load a file already on the server's disk (local engine only); quick, as `loadFile`. */
 export async function loadPath(path: string, params: Params): Promise<LoadResponse> {
   if (mode !== "local") throw new Error("Opening a path needs the local version; drop the file instead.");
-  return postJson<LoadResponse>("/api/load_path", { path, params });
+  return postJson<LoadResponse>("/api/load_path", { path, params, quick: true });
 }
 
 /** Use the filament slots of the user's own Bambu project (for the import file). */
@@ -151,9 +155,10 @@ export async function setBallModel(file: File): Promise<string> {
   return (json<{ name: string }>(await call("setBallModel", [file.name, bytes], [bytes.buffer]))).name;
 }
 
-export async function analyse(session: string, params: Params): Promise<Report> {
-  if (mode === "local") return postJson<Report>("/api/analyse", { session, params });
-  return json<Report>(await call("analyse", [session, JSON.stringify(params)]));
+/** Analyse with `params`; `quick`: leave the printability checks out unless cached (`printing_pending`). */
+export async function analyse(session: string, params: Params, quick = false): Promise<Report> {
+  if (mode === "local") return postJson<Report>("/api/analyse", { session, params, quick });
+  return json<Report>(await call("analyse", [session, JSON.stringify(params), quick]));
 }
 
 export async function washers(session: string, params: Params): Promise<WasherRow[]> {

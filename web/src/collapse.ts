@@ -44,6 +44,27 @@ function store(): CollapseStore | null {
   }
 }
 
+/**
+ * A section inside a card opened and closed by `btn` (its `aria-expanded`); `apply(open)` shows or hides the body.
+ * Remembered with the cards: `key` in the set means collapsed for a section open by default, and `key:open` means
+ * opened for one collapsed by default (`defaultOpen` false). Returns a setter for code that opens it.
+ */
+export function sectionToggle(btn: HTMLButtonElement, key: string, defaultOpen: boolean,
+  apply: (open: boolean) => void): (open: boolean) => void {
+  const mark = defaultOpen ? key : `${key}:open`;
+  const set = (open: boolean, save: boolean): void => {
+    btn.setAttribute("aria-expanded", String(open));
+    apply(open);
+    if (!save) return;
+    const keys = loadCollapsed(store());
+    if (open !== defaultOpen) keys.add(mark); else keys.delete(mark);
+    saveCollapsed(store(), keys);
+  };
+  set(loadCollapsed(store()).has(mark) ? !defaultOpen : defaultOpen, false);
+  btn.addEventListener("click", () => set(btn.getAttribute("aria-expanded") !== "true", true));
+  return (open) => set(open, true);
+}
+
 /** Make every `.card` in `panel` with an `h2` collapsible. */
 export function makeCollapsible(panel: HTMLElement): void {
   const collapsed = loadCollapsed(store());

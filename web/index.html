@@ -107,6 +107,15 @@
         <button data-view="bottom" title="Bottom">Under</button>
         <button id="clipBtn" class="toggle" aria-pressed="false" title="Cut the ball in half">Cut</button>
         <button id="spaceBtn" class="toggle" aria-pressed="true" title="Show the usable space">Space</button>
+        <button id="paintViewBtn" class="toggle paint-view" aria-pressed="false" title="Paint the figure: the paint tools open on this view (P)" hidden>Paint</button>
+      </div>
+      <!-- Paint dock: while painting, the Colours card's painting controls move here (paintdock.ts). -->
+      <div id="paintDock" class="paint-dock" role="region" aria-label="Paint tools" hidden>
+        <div class="dock-head">
+          <button id="dockFold" class="btn small dock-fold" type="button" aria-expanded="true"><span class="chev" aria-hidden="true"></span></button>
+          <button id="dockDone" class="btn small primary" type="button" title="Stop painting (Esc)">Done</button>
+        </div>
+        <div id="paintDockBody" class="dock-body"></div>
       </div>
       <div id="fitPill" class="fit-pill" hidden></div>
       <div class="view-legend" aria-hidden="true"><span><i class="dot lim"></i>tightest spot</span><span><i class="dot pk"></i>magnet pocket</span><span><i class="dot sp"></i>usable space</span></div>
@@ -253,7 +262,9 @@
           </label>
           <div id="texCost" class="tex-cost" aria-label="Colour-change cost per number of filaments"></div>
         </div>
-        <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. The wand takes the feature you tap (an eye, a flame, a toe pad); other modes fill a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Outline with the brush and Fill inside where no crease goes round; Mirror paints both sides at once. Exported as Bambu paint. “Show regions” previews the parts a tap would fill.</p>
+        <details class="adv paint-help"><summary>How painting works</summary>
+        <p class="hint">Make a single-colour model multi-colour: pick a colour, press Paint, then tap the figure. The wand takes the feature you tap (an eye, a flame, a toe pad); other modes fill a part found from the shape — up to the valley where a tail, ear, leg or eye meets the body — or a separate piece, or a brush patch. Outline with the brush and Fill inside where no crease goes round; Mirror paints both sides at once. Exported as Bambu paint. “Show regions” previews the parts a tap would fill. While painting, these tools sit on the 3D view.</p>
+        </details>
         <div id="palette" class="palette" role="radiogroup" aria-label="Paint colour"></div>
         <div class="row" id="paintColourRow">
           <label class="colour-edit"><input id="paintColour" type="color" /> <span id="paintColourLabel"></span></label>
@@ -262,14 +273,18 @@
         </div>
         <div id="slotMapBox" class="slot-map-box" hidden>
           <div class="h-row sub">
-            <h3>Prints from</h3>
+            <h3><button id="slotMapToggle" class="card-toggle" type="button" aria-controls="slotMapBody" aria-expanded="false" title="Which filament slot each colour prints from"><span class="chev" aria-hidden="true"></span>Prints from</button></h3>
             <span id="slotMapSource" class="muted"></span>
             <button id="slotSourceBtn" class="btn small" hidden></button>
           </div>
-          <div id="importMap" class="slot-map" role="list"></div>
-          <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>
+          <!-- Folded: each colour and the slot it prints from, in one line of chips (tap to unfold and change). -->
+          <button id="slotMapSummary" class="slot-summary" type="button" title="Change which slot a colour prints from"></button>
+          <div id="slotMapBody">
+            <div id="importMap" class="slot-map" role="list"></div>
+            <button id="snapColours" class="btn" hidden title="Recolour the figure with the colours of the matched filaments, so the preview and export show what will print">Use these filaments' colours</button>
+          </div>
         </div>
-        <div class="row seat-row">
+        <div class="row seat-row" id="paintModeRow">
           <span class="muted">Tap fills</span>
           <div class="seg" id="paintMode" role="radiogroup" aria-label="What a tap paints">
             <button role="radio" data-mode="wand" title="Magic wand: the feature you tap (an eye, a flame, a toe pad, a belly), found from the shape. Not quite it? Smaller / Larger step through the other sizes it found (,  .)">Wand</button><button role="radio" data-mode="part" title="Spread until a valley where parts meet (tail, ears, legs, eye sockets)">Part</button><button role="radio" data-mode="region" title="Spread until any crease sharper than the angle (like Bambu's smart fill)">Crease</button><button role="radio" data-mode="fill" title="Bucket fill: the tapped colour up to where the colour changes, across any crease (tap inside a brush outline)">Fill</button><button role="radio" data-mode="piece" title="Everything connected to the tapped spot (a separate shell, e.g. loose eyes)">Piece</button><button role="radio" data-mode="brush" title="A round patch around the tap (spots, stripes)">Brush</button><button role="radio" data-mode="stamp" title="Drag a box over a spot: the ellipse in it is painted like a decal, as you see it (eyes the shape does not outline)">Stamp</button>
@@ -283,13 +298,13 @@
           <input id="paintAngle" type="range" min="3" max="90" step="1" value="30" />
           <span id="paintAngleVal" class="muted">30°</span>
         </label>
-        <div class="row wrap">
+        <div class="row wrap" id="paintTools">
           <button id="paintMirror" class="btn" aria-pressed="false" title="Paint the same spot on the other side of the figure too, across its mirror plane: both eyes, cheeks or paws in one tap (M)">Mirror</button>
           <button id="paintSample" class="btn" aria-pressed="false" title="Tap the figure to pick the colour shown there (I)">Pick colour</button>
           <button id="regionsBtn" class="btn" aria-pressed="false" title="Colour the figure by the regions a tap would fill">Show regions</button>
           <button id="shapeMapBtn" class="btn" aria-pressed="false" title="Shape map: creases dark, raised spots warm and sunk ones cool, with contour lines of equal height like a topographic map. The wand and the soft paint edges follow these creases; where none goes round a spot, use the stamp.">Shape map</button>
         </div>
-        <div class="row wrap">
+        <div class="row wrap" id="paintSteps">
           <button id="paintUndo" class="btn" title="Undo the last paint step (Ctrl+Z)">Undo</button>
           <button id="paintRedo" class="btn" title="Redo (Ctrl+Shift+Z)">Redo</button>
           <button id="paintClear" class="btn">Clear</button>

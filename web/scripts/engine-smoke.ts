@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Module from "manifold-3d";
 import { loadPyodide } from "pyodide";
-import { bootPokefit, PYODIDE_CDN } from "../src/engine/boot.ts";
+import { bootPokefit, fetchWheels, PYODIDE_CDN } from "../src/engine/boot.ts";
 import { pokefitZip } from "../pack.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -22,7 +22,7 @@ const pyodide = await loadPyodide({ packageBaseUrl: PYODIDE_CDN, packageCacheDir
 const manifold = await Module();
 manifold.setup();
 const zip = pokefitZip(root);
-const api = await bootPokefit({ pyodide, manifold, pokefitZip: zip.buffer as ArrayBuffer, onStatus: (s) => console.log(`[${secs()} s] ${s}`) });
+const api = await bootPokefit({ pyodide, manifold, pokefitZip: zip.buffer as ArrayBuffer, wheels: await fetchWheels(), onStatus: (s) => console.log(`[${secs()} s] ${s}`) });
 
 // Two-footed block figure (same as the Python tests' critter): STL written by trimesh inside Pyodide.
 const file = process.argv[2];

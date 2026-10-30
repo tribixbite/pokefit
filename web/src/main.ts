@@ -1,6 +1,6 @@
 /** pokefit web UI: wires the panel controls, the 3D view and the underside editor to the API. */
 import * as api from "./api";
-import { makeCollapsible } from "./collapse";
+import { makeCollapsible, sectionToggle } from "./collapse";
 import { ColorizePanel } from "./colorize";
 import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
@@ -96,6 +96,7 @@ const colorize = new ColorizePanel({
   setPicking: (fn) => viewer.setPickHandler(fn),
   setStroking: (fn) => viewer.setStrokeHandler(fn),
   setStamping: (fn) => viewer.setStampHandler(fn),
+  setViewInset: (px) => viewer.setBottomInset(px),
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
   // A colour edit only re-runs the colour part of the analysis (shape work is cached): quick enough to do at once,
@@ -312,6 +313,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     state.params = fresh;
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
+    $("paintViewBtn").hidden = false;
     $("sliceOut").replaceChildren();
     $("exportOut").replaceChildren();
     $("washerTable").replaceChildren();
@@ -323,7 +325,11 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     shownGeometry = geometryKey();
     await showFigure(res.session, null, false);
     if (differs) await runAnalyse();
-    else show(r);
+    else {
+      const seq = ++state.seq;
+      show(r);
+      await completeChecks(r, seq);
+    }
     if (r.object.old_pockets?.length) await placeOldPockets(r.object.old_pockets);
     viewer.view("iso");
   } catch (e) {
@@ -508,14 +514,28 @@ async function runAnalyse(rememberIt = true): Promise<void> {
   paintDirty = false;
   busy(true);
   try {
-    const rep = await api.analyse(state.session, state.params);
+    // Quick first (fit, pockets, preview): the printability checks follow in a second call.
+    const rep = await api.analyse(state.session, state.params, true);
     if (seq !== state.seq) return;          // a newer request superseded this one
     show(rep);
+    await completeChecks(rep, seq);
   } catch (e) {
     if (seq === state.seq) toast((e as Error).message);
   } finally {
     if (seq === state.seq) busy(false);
   }
+}
+
+/**
+ * A quick report's printability checks (thickness, overhangs, islands, bed contact: about a quarter of a first
+ * analysis) by a second, full analysis; the rest of it is cached, so it costs only those. Skipped when a newer
+ * request has started (`seq`): that one completes its own.
+ */
+async function completeChecks(rep: Report, seq: number): Promise<void> {
+  if (!rep.printing_pending || !state.session || seq !== state.seq) return;
+  busy(true, "Checking printability…");
+  const full = await api.analyse(state.session, state.params);
+  if (seq === state.seq) show(full);
 }
 
 function show(rep: Report): void {
@@ -594,8 +614,11 @@ function show(rep: Report): void {
 
 function renderStatus(rep: Report): void {
   const chip = $("sumStatus");
-  chip.className = `status-chip ${rep.status}`;
-  chip.textContent = { pass: "ready", warn: "check warnings", fail: "problems", info: "info" }[rep.status];
+  // A quick report has no printability checks yet: "ready" would be premature.
+  const status = rep.printing_pending && rep.status !== "fail" ? "info" : rep.status;
+  chip.className = `status-chip ${status}`;
+  chip.textContent = rep.printing_pending && rep.status !== "fail" ? "checking…"
+    : { pass: "ready", warn: "check warnings", fail: "problems", info: "info" }[rep.status];
 }
 
 function limitText(kind: string): string {
@@ -774,7 +797,23 @@ function renderImportMap(rep: Report): void {
     row.dataset.n = String(m.source);
     return row;
   }));
+  // Folded: one chip per colour, its swatch and the slot it prints from (as the palette's corner dots show).
+  $("slotMapSummary").replaceChildren(...rep.import_map.map((m) => {
+    const slot = slotOf(m.source);
+    const fig = h("span", { cls: "mini-sw", textContent: String(m.source) });
+    fig.style.background = m.colour;
+    fig.style.color = textOn(m.colour.slice(0, 7));
+    const to = h("span", { cls: `mini-sw slot${slot?.colour ? "" : " none"}`, textContent: slot?.label ?? "?" });
+    if (slot?.colour) { to.style.background = slot.colour; to.style.color = textOn(slot.colour); }
+    return h("span", { cls: `slot-chip${m.used === false ? " unused" : ""}` }, fig, h("span", { cls: "arrow", textContent: "→" }), to);
+  }));
 }
+
+/** "Prints from" in the Colours card: folded to a line of chips by default (it grew long with many colours). */
+const openSlotMap = sectionToggle($<HTMLButtonElement>("slotMapToggle"), "prints-from", false, (open) => {
+  $("slotMapBody").hidden = !open;
+  $("slotMapSummary").hidden = open;
+});
 
 function renderChecks(rep: Report): void {
   const order = { fail: 0, warn: 1, info: 2, pass: 3 } as const;
@@ -1436,6 +1475,9 @@ function bind(): void {
 }
 
 makeCollapsible($("panel"));
+$("slotMapSummary").addEventListener("click", () => openSlotMap(true));
+// The Export card's link to "Prints from" unfolds it.
+document.querySelector<HTMLAnchorElement>('a[href="#slotMapBox"]')?.addEventListener("click", () => openSlotMap(true));
 bind();
 colorize.render();
 void init();

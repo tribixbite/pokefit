@@ -5,7 +5,7 @@
  *   out: { id, ok: true, result } | { id, ok: false, error } | { status: string }
  */
 import Module from "manifold-3d";
-import { bootPokefit, PYODIDE_CDN, type WebApi } from "./engine/boot";
+import { bootPokefit, fetchWheels, PYODIDE_CDN, type WebApi } from "./engine/boot";
 import { versioned } from "./version";
 
 /** The worker's global scope (typed here: the project compiles against the DOM lib, not WebWorker). */
@@ -22,7 +22,7 @@ async function start(): Promise<WebApi> {
   // Pyodide is loaded from its CDN at run time (not bundled): the URL is not a literal on purpose.
   const pyodideUrl = `${PYODIDE_CDN}pyodide.mjs`;
   const { loadPyodide } = (await import(/* @vite-ignore */ pyodideUrl)) as typeof import("pyodide");
-  const [pyodide, manifold, zip] = await Promise.all([
+  const [pyodide, manifold, zip, wheels] = await Promise.all([
     loadPyodide({ indexURL: PYODIDE_CDN }),
     Module({ locateFile: () => versioned(new URL("manifold.wasm", scope.location.href)) }).then((m) => {
       m.setup();
@@ -32,11 +32,9 @@ async function start(): Promise<WebApi> {
       if (!r.ok) throw new Error(`pokefit.zip: HTTP ${r.status}`);
       return r.arrayBuffer();
     }),
+    fetchWheels(new URL("wheels/", scope.location.href).href),
   ]);
-  const api = await bootPokefit({
-    pyodide, manifold, pokefitZip: zip, onStatus: status,
-    wheelBase: new URL("wheels/", scope.location.href).href,
-  });
+  const api = await bootPokefit({ pyodide, manifold, pokefitZip: zip, wheels, onStatus: status });
   status("ready");
   return api;
 }
@@ -54,10 +52,10 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
     const transfer: Transferable[] = [];
     switch (fn) {
       case "config": result = api.config(); break;
-      case "load": result = api.load(args[0] as string, args[1] as Uint8Array, args[2] as string); break;
+      case "load": result = api.load(args[0] as string, args[1] as Uint8Array, args[2] as string, args[3] === true); break;
       case "setReference": result = api.set_reference(args[0] as string, args[1] as Uint8Array); break;
       case "setBallModel": result = api.set_ball_model(args[0] as string, args[1] as Uint8Array); break;
-      case "analyse": result = api.run_analyse(args[0] as string, args[1] as string); break;
+      case "analyse": result = api.run_analyse(args[0] as string, args[1] as string, args[2] === true); break;
       case "washers": result = api.washers(args[0] as string, args[1] as string); break;
       case "preview": {
         const p = api.preview(args[0] as string, args[1] as string, (args[2] as string | undefined) ?? "null");

@@ -216,7 +216,10 @@ svg.underside.drawing { cursor: crosshair; touch-action: none; }
 }
 
 @media (max-width: 860px) {
-  .layout { grid-template-columns: 1fr; grid-template-rows: 52dvh auto; }
+  /* A column of flex items, not grid rows: a grid item cannot stick outside its own row (the paint dock keeps
+     the view on screen while the page scrolls). */
+  .layout { display: flex; flex-direction: column; flex: 1 0 auto; }
+  .viewport { flex: none; height: 52dvh; }
   .panel { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
   body { overflow-y: auto; }
   .top { gap: 10px; padding: 8px 12px; }
@@ -404,3 +407,50 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 /* Colorize stamp: the box being dragged, its ellipse shown inside. */
 .stamp-box { position: absolute; pointer-events: none; border: 2px dashed #6aa8ff; border-radius: 50%; background: rgba(106, 168, 255, .12); z-index: 5; }
+
+/* Paint dock (paintdock.ts): the painting controls on the 3D view while painting, at its bottom, scrolling inside
+   itself; folded, only the palette shows. Its rows scroll sideways on a phone instead of wrapping tall. */
+.view-tools .paint-view[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.paint-dock {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 4; width: min(760px, calc(100% - 20px));
+  max-height: min(56%, 380px); display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px;
+  border-radius: 12px; background: rgba(19, 25, 34, .93); border: 1px solid var(--line); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .45); touch-action: manipulation;
+}
+/* Fold and Done sit at the end of the palette's row (the palette scrolls under the space they take). */
+.dock-head { position: absolute; top: 8px; right: 10px; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.dock-fold .chev {
+  width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s;
+}
+.paint-dock.folded .dock-fold .chev { transform: rotate(-135deg) translate(-2px, -2px); }
+.dock-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.paint-dock.folded .dock-body > :not(#palette) { display: none !important; }
+.dock-body .palette { margin: 0; gap: 10px; flex-wrap: nowrap; overflow: auto hidden; padding: 3px 8px 8px 3px; flex: none;
+  margin-right: 104px; }
+.dock-body #paintModeRow > .muted { display: none; }   /* "Tap fills": the mode buttons say it */
+.dock-body #paintInfo { font-size: 12px; }
+.dock-body .swatch { flex: none; width: 34px; height: 34px; }
+.dock-body .seat-row, .dock-body #paintTools { flex-wrap: nowrap; overflow-x: auto; gap: 6px; }
+.dock-body #paintMode { flex-wrap: nowrap; flex: none; }
+.dock-body #paintMode button { flex: none; white-space: nowrap; }
+.dock-body .btn { flex: none; min-height: 36px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+.dock-body .range-row { margin: 0; }
+.dock-body #paintSteps { gap: 6px; }
+.dock-body #paintInfo { flex-basis: 100%; }
+/* What the dock covers makes way: the fit pill and legend; on a phone the view stays on screen (sticky, taller). */
+body.painting .fit-pill, body.painting .view-legend { display: none; }
+@media (max-width: 860px) {
+  body.painting .viewport { height: 64dvh; position: sticky; top: 0; z-index: 6; border-bottom: 1px solid var(--line); }
+  .paint-dock { bottom: 6px; width: calc(100% - 12px); padding: 6px 8px 8px; }
+  .dock-body .swatch { width: 32px; height: 32px; }
+}
+
+/* "Prints from" folded: a line of chips, figure colour -> the slot it prints from. */
+.h-row.sub h3 .card-toggle { margin: 0; min-height: 30px; }
+.slot-summary { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; font: inherit; }
+.slot-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); font-size: 11px; }
+.slot-chip.unused { opacity: .6; }
+.slot-chip .arrow { color: var(--muted); }
+.mini-sw { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 3px; border-radius: 5px; border: 1px solid #ffffff22; font: 700 10px/1 inherit; }
+.mini-sw.none { background: repeating-linear-gradient(45deg, #2a3446 0 3px, #1b2230 3px 6px); color: var(--muted); }
