@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import trimesh
 
-from pokefit.shell import cap_height, fit_sphere, flat_spot, from_manifold, to_manifold, washer_seat_depth
+from pokefit.shell import cap_height, fit_sphere, flat_spot, from_manifold, to_manifold, steel_seat_depth
 
 
 def test_fit_sphere_exact() -> None:
@@ -16,7 +16,7 @@ def test_fit_sphere_exact() -> None:
 
 def test_cap_height() -> None:
     assert cap_height(10, 12) == pytest.approx(8.0)
-    assert washer_seat_depth(10, 12) == pytest.approx(2.0)
+    assert steel_seat_depth(10, 12) == pytest.approx(2.0)
     with pytest.raises(ValueError):
         cap_height(5, 10)
 

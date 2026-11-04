@@ -29,6 +29,7 @@ interface Stroke {
   lastAt: number;               // performance.now() of the last raycast
 }
 
+const FOCUS_MARGIN = 0.9;     // focusFigure: the bounding sphere is loose round a figure (its box corners), so a little over the view
 const STROKE_PX = 4;          // screen distance between stroke samples (the engine joins the gaps)
 const STROKE_MS = 12;         // and time between them
 const MAX_STROKE = 2000;      // samples per stroke (the engine takes up to 4000)
@@ -63,6 +64,9 @@ export class Viewer {
   figureSignature = "";
   /** Each figure mesh's face order as loaded (colour edits regroup the index buffer from it). */
   private faceOrder = new Map<THREE.BufferGeometry, THREE.TypedArray>();
+  /** "Reshape a part": the limb being changed, drawn over the figure (kept across reloads of the figure). */
+  private highlighted: { part: number; faces: number[] } | null = null;
+  private highlightMesh: THREE.Mesh | null = null;
   private faceMaterials: THREE.MeshStandardMaterial[] = [];
   private frameRequested = false;
   /** Pixels covered at the bottom by a panel (`setBottomInset`). */
@@ -349,7 +353,46 @@ export class Viewer {
     this.figureScaled.add(this.figure);
     this.figureUrl = url;
     this.figureSignature = signature;
+    this.buildHighlight();
     this.requestFrame();
+  }
+
+  /** Draw `faces` of figure part `part` (preview mesh `p<part>`, the engine's triangle order) as a tinted overlay,
+   * or nothing (null). The overlay follows the figure when it reloads (a reshaped limb's new geometry). */
+  highlightFaces(part: number, faces: number[] | null): void {
+    this.highlighted = faces && faces.length ? { part, faces } : null;
+    this.buildHighlight();
+    this.requestFrame();
+  }
+
+  private buildHighlight(): void {
+    if (this.highlightMesh) {
+      this.highlightMesh.removeFromParent();
+      this.highlightMesh.geometry.dispose();
+      (this.highlightMesh.material as THREE.Material).dispose();
+      this.highlightMesh = null;
+    }
+    const h = this.highlighted;
+    const mesh = h && (this.figure?.getObjectByName(`p${h.part}`) as THREE.Mesh | undefined);
+    const order = mesh?.isMesh ? this.faceOrder.get(mesh.geometry) : undefined;
+    if (!h || !mesh || !order) return;
+    const index = new Uint32Array(h.faces.length * 3);
+    let k = 0;
+    for (const f of h.faces) {
+      if (3 * f + 2 >= order.length) continue;
+      index[k++] = order[3 * f]; index[k++] = order[3 * f + 1]; index[k++] = order[3 * f + 2];
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", mesh.geometry.getAttribute("position"));
+    geo.setIndex(new THREE.BufferAttribute(index.subarray(0, k), 1));
+    const overlay = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0x37c2ff, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }));
+    overlay.raycast = () => undefined;      // taps go through to the figure
+    overlay.renderOrder = 2;
+    mesh.add(overlay);
+    this.highlightMesh = overlay;
   }
 
   /**
@@ -415,6 +458,40 @@ export class Viewer {
         m.needsUpdate = true;
       }
     });
+    this.requestFrame();
+  }
+
+  /** Bring the figure close (painting starts): the camera keeps its direction and moves in until the figure fills
+   * the view above any bottom panel (`move` false: only report where it is). Returns where the camera was, for
+   * `restoreView`. */
+  focusFigure(move = true): { position: THREE.Vector3; target: THREE.Vector3 } {
+    const saved = { position: this.camera.position.clone(), target: this.controls.target.clone() };
+    if (!this.figure || !move) return saved;
+    const sphere = new THREE.Box3().setFromObject(this.figure).getBoundingSphere(new THREE.Sphere());
+    if (!(sphere.radius > 0)) return saved;
+    const half = THREE.MathUtils.degToRad(this.camera.fov / 2);
+    // The narrower of the two view angles sets the distance (a phone in portrait is limited by width).
+    const fit = Math.min(half, Math.atan(Math.tan(half) * this.camera.aspect));
+    const d = (sphere.radius * FOCUS_MARGIN) / Math.sin(fit);
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.controls.target.copy(sphere.center);
+    this.camera.position.copy(sphere.center).addScaledVector(dir, d);
+    this.controls.update();
+    this.requestFrame();
+    return saved;
+  }
+
+  /** Put the camera back (`focusFigure`'s answer). */
+  restoreView(saved: { position: THREE.Vector3; target: THREE.Vector3 }): void {
+    this.camera.position.copy(saved.position);
+    this.controls.target.copy(saved.target);
+    this.controls.update();
+    this.requestFrame();
+  }
+
+  /** Show or hide the whole ball: shell, connector ring, usable space, steel and its seat (the figure stays). */
+  setBallVisible(on: boolean): void {
+    this.ballGroup.visible = on;
     this.requestFrame();
   }
 
@@ -491,9 +568,9 @@ export class Viewer {
     );
     allowed.add(allowedEdges);
 
-    // Washer resting on its seat; the seat itself as a dark disc.
-    const w = b.washer;
-    const washer = new THREE.Mesh(
+    // The steel disc (or washer: with its hole) resting on its seat; the seat itself as a dark disc.
+    const w = b.steel;
+    const steel = new THREE.Mesh(
       lathe([
         { r: w.id / 2, z: b.seat_z },
         { r: w.od / 2, z: b.seat_z },
@@ -507,7 +584,7 @@ export class Viewer {
       }),
     );
     const seat = new THREE.Mesh(
-      new THREE.CircleGeometry(w.od / 2 + 0.2, 64),
+      new THREE.CircleGeometry((b.floor_diameter ?? w.od + 0.4) / 2, 64),
       new THREE.MeshStandardMaterial({
         color: 0xc8303a, side: THREE.DoubleSide, transparent: true, opacity: 0.35, depthWrite: false,
         clippingPlanes: clipping,
@@ -525,7 +602,7 @@ export class Viewer {
       ),
       new THREE.LineBasicMaterial({ color: 0x5a6578 }),
     );
-    this.ballGroup.add(allowed, wall, ring, washer, seat, eq);
+    this.ballGroup.add(allowed, wall, ring, steel, seat, eq);
   }
 
   private buildMarkers(rep: Report, focus: Check | null): void {

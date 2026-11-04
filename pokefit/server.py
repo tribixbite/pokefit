@@ -4,17 +4,18 @@ stdlib only (ThreadingHTTPServer). Sessions live in memory; uploads and
 outputs go under .pokefit_cache/ and pokefit_out/ next to the repo.
 
 API (all JSON unless noted):
-  GET  /api/config                         washers, filament slots, defaults, slicer availability
+  GET  /api/config                         steel discs/washers, filament slots, defaults, slicer availability
   POST /api/load        body = file bytes, header X-Filename [, X-Params, X-Quick: 1] -> {session, report}
   POST /api/load_path   {path[, params, quick]}                            -> {session, report}
   POST /api/analyse     {session, params[, quick]} (quick: printability checks left for a second call) -> report
-  POST /api/washers     {session, params}                          -> [washer rows]
+  POST /api/steels     {session, params}                          -> [steel rows: largest figure per catalogue steel]
   GET  /api/preview.glb ?session&object&rx&ry                      -> GLB (figure at scale 1)
   POST /api/preview     {session, params, regions?: {mode, angle}} -> GLB (one uncoloured mesh per part)
   POST /api/preview_faces {session, params, regions?}              -> {signature, colours, parts} (its face colours)
   POST /api/pick        {session, params, point, normal, mode, angle, radius, stroke?} -> {part, face, path, faces, ...}
   POST /api/paint_prepare {session, params, mode, angle} -> builds tap structures before the first tap
   POST /api/colour_pieces {session, params, filament} -> {pieces: [{part, face, area_mm2, faces}]}
+  POST /api/limb        {session, params, point, normal | part, face; angle?} -> {part, face, faces, share, length_mm, joined}
   POST /api/slice       {session, params, x10}                     -> {job}
   GET  /api/job         ?id                                        -> {state, result|error}
   POST /api/export      {session, params}                          -> {files: [{name, url}], ...}
@@ -40,17 +41,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, export,
-                       input_checks,
+from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, auto_simplify, export,
+                       input_checks, limb_region,
                        open_session, pick, pieces_of_colour, prepare_paint, preview_faces, preview_glb, safe_stem,
-                       slice_variants, washer_table)
+                       slice_variants, steel_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
                       print_file_summary,
                       print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe
-from .washer import CATALOGUE, DEFAULT_WASHER
+from .steel import CATALOGUE, DEFAULT_STEEL
 
 WEB_DIST = ROOT / "web" / "dist"
 OUT_DIR = ROOT / "pokefit_out"
@@ -111,6 +112,7 @@ def _load(path: Path, params: Params | None = None, quick: bool = False) -> dict
     s.presets = _presets
     s.ams = _ams
     _register(s)
+    params = auto_simplify(s, params)
     with _locks[s.id]:
         rep, _ = analyse(s, params, printing=not quick)
     return {"session": s.id, "file": path.name, "report": rep.to_dict()}
@@ -425,14 +427,14 @@ class Handler(BaseHTTPRequestHandler):
             rep, _ = analyse(s, params, printing=not body.get("quick"))
         self._json(rep.to_dict())
 
-    def post_washers(self, q: dict[str, str]) -> None:
+    def post_steels(self, q: dict[str, str]) -> None:
         body = self._json_body()
         s, lock = _session(body.get("session"))
         params = _params(body)
         with lock:
             input_checks(s, params)   # warm the per-object caches; the table itself only reads them
             s.unit_parts(params)
-        self._json(washer_table(s, params))
+        self._json(steel_table(s, params))
 
     def get_preview_glb(self, q: dict[str, str]) -> None:
         s, lock = _session(q.get("session"))
@@ -484,6 +486,20 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             res = prepare_paint(s, params, str(body.get("mode", "part")), float(body.get("angle", 15.0)),
                                 bool(body.get("mirror", False)))
+        self._json(res)
+
+    def post_limb(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        try:
+            at = (int(body["part"]), int(body["face"])) if "part" in body else None
+            point = [float(v) for v in body["point"]][:3] if at is None else None
+            normal = [float(v) for v in body["normal"]][:3] if body.get("normal") else None
+            with lock:
+                res = limb_region(s, params, point, normal, float(body.get("angle", 15.0)), at)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ApiError(400, str(exc)) from exc
         self._json(res)
 
     def post_colour_pieces(self, q: dict[str, str]) -> None:

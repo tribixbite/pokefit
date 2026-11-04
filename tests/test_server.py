@@ -48,8 +48,8 @@ def loaded(base_url: str, tmp_path_factory: pytest.TempPathFactory) -> dict[str,
 def test_config(base_url: str) -> None:
     code, body = _req(base_url + "/api/config")
     cfg = json.loads(body)
-    assert code == 200 and cfg["default_washer"] == "M6"
-    assert {w["key"] for w in cfg["washers"]} >= {"M6", "M8"}
+    assert code == 200 and cfg["default_steel"] == "D20"
+    assert {w["key"] for w in cfg["steels"]} >= {"D20", "D15", "M6", "M8"}
 
 
 def test_load_returns_report(loaded: dict[str, Any]) -> None:
@@ -67,7 +67,7 @@ def test_analyse_and_preview(base_url: str, loaded: dict[str, Any]) -> None:
 
 
 def test_export_and_download(base_url: str, loaded: dict[str, Any]) -> None:
-    code, res = _post(base_url, "/api/export", {"session": loaded["session"], "params": {"washer": "US1/4x1"}})
+    code, res = _post(base_url, "/api/export", {"session": loaded["session"], "params": {"steel": "US1/4x1"}})
     assert code == 200, res
     names = [f["name"] for f in res["files"]]
     assert "critter_pokefit_60.3mf" in names

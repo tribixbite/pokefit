@@ -37,6 +37,8 @@ export interface ColorizeHost {
   setStamping(fn: ((hit: FigureHit, axes: number[]) => void) | null): void;
   /** Pixels at the bottom of the 3D view covered by the paint dock: the figure is framed above them. */
   setViewInset(px: number): void;
+  /** Painting starts (true): bring the figure close; stops (false): put the camera back where it was. */
+  focusFigure(on: boolean): void;
   /** Called after paint or colours changed (the import-file colour map is stale until re-analysed). */
   changed(): void;
   /** Painting stopped: a good moment to re-analyse if anything changed. */
@@ -232,6 +234,11 @@ export class ColorizePanel {
     this.setPainting(false);
   }
 
+  /** Stop painting (another tool takes the taps on the 3D view: "Reshape a part"). */
+  stopPainting(): void {
+    if (this.painting) this.setPainting(false);
+  }
+
   /** Paint steps name triangles; when the triangles change (Simplify), the steps and their redo history go. */
   dropPaint(): void {
     this.host.params().paint = null;
@@ -396,7 +403,9 @@ export class ColorizePanel {
     if (on) void this.host.prepare(this.mode, this.angle, this.mirror).catch(() => undefined);
     if (!on && this.regions) { this.regions = false; void this.reload(); }
     if (!on) this.host.settled();
+    const was = this.dock.visible;
     this.dock.show(on);
+    if (on !== was) this.host.focusFigure(on);
     this.render();
   }
 
@@ -437,6 +446,7 @@ export class ColorizePanel {
         ...(res.path?.length ? { path: res.path } : {}),
         ...(this.mirror ? { mirror: true } : {}),
         ...(res.stamp ? { stamp: res.stamp } : {}),
+        ...(res.points?.length ? { points: res.points } : {}),
       }];
       this.undone = [];
       const what = this.mode === "face" ? "1 triangle" : `${res.faces.toLocaleString()} triangles`;
@@ -743,7 +753,7 @@ export class ColorizePanel {
 
   /** [ / ]: the brush radius (0.1 mm steps) or the crease angle (1° steps) down / up. */
   private nudge(dir: number): void {
-    if (this.mode === "brush") this.brushMm = Math.max(0.3, Math.min(8, +(this.brushMm + dir * 0.1).toFixed(1)));
+    if (this.mode === "brush") this.brushMm = Math.max(0.2, Math.min(8, +(this.brushMm + dir * 0.1).toFixed(1)));
     else if (ANGLED.includes(this.mode)) this.angles[this.mode] = Math.max(3, Math.min(90, this.angle + dir));
     this.render();
   }

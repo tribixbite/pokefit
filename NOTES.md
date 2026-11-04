@@ -36,7 +36,7 @@ exist only on the original Windows machine (ask the user for the files).
    | Piplup | 37.8 | 1 (fill 6 mm) | 2 | 1.37 / 12.9 | 1.75 / 19.5 |
    | Mew | 39.6 | 0: FAIL | 3 | 3.54 / 47.1 | (no detail) |
    All need supports (chins, arms). Open: Mew (thin looping tail and feet: no pocket, small bed contact; glue it or a
-   stand); Bulbasaur only 22 mm (long and wide); several "magnets overhang the steel" warnings (a larger washer).
+   stand); Bulbasaur only 22 mm (long and wide); several "magnets overhang the steel" warnings (measured with washers, before steel discs).
 4. **Photo pipeline**: Pixal3D multi-view + mirrored right is the default. `--pose` (OpenPose skeleton reference, arms
    down) turned the arms-up Charmander into a sitting, arms-down one: 33.8 mm vs 32.8, 2 magnets. Gloss
    (`imageto3d.gloss_free`) clears streaks on head and shell; a faint darker blotchiness remains on the Squirtle's head
@@ -48,10 +48,10 @@ exist only on the original Windows machine (ask the user for the files).
 6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only).
 7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
    automated download). The user downloads, then opens the file.
-8. **Conform limits**: designed for the largest-fit scale and the default washer's floor; the flat base's walls are
-   vertical (a pedestal between the legs). Fill where: washer / everywhere / circle / drawn outline (`Params.fill_area`,
-   `fill_shape`). Magnet pads (`Session.pads`): on the washer seat each pocket's walled disc gets the gap fill too, so
-   magnets are walled from the washer up; Downloads Charmander with a 10.7 mm fill circle: both pockets now pass
+8. **Conform limits**: designed for the largest-fit scale and the figure's floor (`Session.floor`); the flat base's walls are
+   vertical (a pedestal between the legs). Fill where: steel / everywhere / circle / drawn outline (`Params.fill_area`,
+   `fill_shape`). Magnet pads (`Session.pads`): on the steel seat each pocket's walled disc gets the gap fill too, so
+   magnets are walled from the steel up; Downloads Charmander with a 10.7 mm fill circle: both pockets now pass
    ("Sits on the washer"; before: "only 0.5-0.7 mm walled, glue it"). The raised seat lifts each pocket only as far as
    its own spot needs (one over the flat base stays on the washer): by design, explained in the seat hint. Pads stay
    within the cavity's flat floor radius; not checked against a hand-placed pocket outside it (clipped there).
@@ -133,25 +133,42 @@ exist only on the original Windows machine (ask the user for the files).
 14. **Magnet count with press + fill** (fixed 563734b; details in its commit). Open: the fill also builds up over
    paws inside the fill area ("fill gaps up to X" literally: the multicolour Eevee stands on a ~6 mm block at the
    default); not yet looked at in Bambu Studio on the user's figures.
-15. **Paint dock, "Prints from" fold, faster loads** (2026-10-30; user: paint controls and Show regions too far from
-   the model, filament mapping too big, "can we make load times faster?").
-   - Paint dock (`web/src/paintdock.ts`): while painting, palette / modes / brush-angle / Mirror, Pick, Show regions,
-     Shape map / Undo row move (same elements) onto the 3D view; Fold (remembered, `collapse.sectionToggle`) leaves the
-     palette; the camera frames the scene above it (`scene.setBottomInset`: view offset, picking unprojects through it;
-     tap-painting checked at phone width). Phone: the view is sticky while painting (`.layout` is a flex column on
-     phones: a grid item cannot stick outside its row). A "Paint" button in the view's toolbar. Show regions works in
-     every mode (switches the wand to Part). "How painting works" folded. Open: on a phone the open dock is ~205-246 px
-     of a 460 px view (the figure is framed small above it; Fold leaves 58 px).
-   - "Prints from" folds to chips (figure colour -> slot), folded by default.
-   - Load (browser, warm cache, `Little+Pikachu.3mf` 8.7 MB): figure and fit shown at 21.5 s (was 34.5 s), printability
-     checks at 29.9 s: `analyse(printing=False)` (UI's first call; `Report.printing_pending`, then a full call: the rest
-     is cached). Engine start 10.4 -> 8.2 s: wheels fetched with Pyodide and unpacked into site-packages (no micropip).
-     `xxhash` loaded (trimesh hashed with blake2b: ~1 s CPython per load). Remaining load (CPython 13 s of it):
-     conform 5.5 s (Nelder-Mead fit `fit.neg_margin` 1.8 s, `prepare_points` 1.4 s), height fields 3.3 s (6 calls,
-     `_crossings` 1.8 s), 3MF parse 3 s, mesh checks 1.7 s, pocket cut 1.5 s, pads 1.2 s. Import of the engine 4 s in
-     the browser (scipy.ndimage 1.4, networkx 1.2, trimesh 0.9 s in Node); networkx cannot be dropped (trimesh path
-     traversal needs it; tests fail without it). Scratchpad `prof_load.py`, `time_load.py`.
-16. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+15. **Paint dock, "Prints from" fold, faster loads** (2026-10-30, bc6645b; details in its commit). Open: on a phone the
+   open dock is ~205-246 px of a 460 px view. Load hotspots (CPython, Little+Pikachu 8.7 MB, before this round's fit
+   speed-up): conform 5.5 s, height fields 3.3 s, 3MF parse 3 s, mesh checks 1.7 s, pocket cut 1.5 s, pads 1.2 s;
+   engine import ~4 s in the browser (networkx cannot be dropped: trimesh path traversal). Scratchpad `prof_load.py`.
+16. **Steel discs, flat floor, reshape a part, fine brush** (2026-11-04). The user now glues thin steel discs, 0.8" x
+   0.01" (20.32 x 0.254 mm, default `D20`) and 0.59" x 0.02" (14.99 x 0.508, `D15`); washers stay as options.
+   - `pokefit/steel.py` (was washer.py; `Steel.id` 0 = solid disc: `annulus` from 0, magnets anywhere on it). Params
+     `steel` (old `washer` key mapped), pocket_seat / fill_area value `steel` (old `washer` accepted); prefs migrate.
+   - **Flat floor** (`Params.floor_diameter`, None = auto `Session.floor` -> `fit.best_floor` on the reshaped,
+     unconformed figure; smallest within 0.3 % of the best). Why: a thin disc's floor sits low where the sphere is
+     narrow; on its own seat wide figures fit much smaller. Max fit height, no conform/magnets (scratchpad
+     `floor_scan.py`): dragon M6 34.1 -> D20 seat 30.2 / D15 seat 24.5; D20 on a 26 mm floor 35.5; Charmander mini
+     27.1 (M6) -> 25.9 (D20 seat) -> 29.7-30.0 (30-32 mm floor). The UI's Charmander mini: 29.9 mm on a 34.7 mm floor.
+     The shell export is cut to the floor (`shell_floor<D>mm_<pct>.stl`). Conform designs against the actual floor
+     (`_floor_key` in the cache key); `conform.lift_start` = floor reach - 2.1 mm (equals the old start on a seat;
+     moving it 0.2 mm cut a test figure's bend gain from 8 % to 0.4 %). Steel table rows share the figure's floor.
+   - **Reshape a part** (`pokefit/reshape.py`, UI `web/src/reshape.ts`): tap -> paint's part region, steps down to
+     smaller angles (`FALLBACK_ANGLES`) when it takes > 40 % of the surface; Size / Bend / Swing eased over 35 % of
+     the limb. Low-poly Charmander mini: the tail flame at 4 deg (5 %); 15 deg takes the body; at 6 deg a patchy 58 %
+     (why MAX_SHARE is 0.4).
+   - **Brush < 0.5 mm**: strokes kept triangle centroids (zigzag) and painted only triangles whose centre was inside;
+     now `PaintOp.points` (drag points, file frame) and exact triangle-touch test, split finer (`BRUSH_STEPS`).
+     Real mesh (Charmander mini, 1.14 mm triangles, 0.3 mm brush): area 0.85x the ideal stroke, nothing beyond the
+     radius (scratchpad `real_brush.py`). A drag in the browser was not tested (automation drags do not stroke).
+   - Fit speed: active-set Nelder-Mead (`fit.ACTIVE`), identical results on 5 figures, Pikachu 309 -> 116 ms per fit,
+     dragon 253 -> 75 ms (scratchpad `fitbench.py`, `fit_before.json` / `fit_after.json`).
+   - Ball toggle in the view toolbar (remembered); painting zooms to the figure and restores the camera on Done;
+     auto Simplify to 200k on opening a > 300k-triangle figure (`simplify_auto`, not remembered as a Simplify pref).
+   - Bambu's "invalid config, load geometry data only": 2.8.2.61 `check_project_config` returns false when the
+     config has no `nozzle_diameter`, and a geometry-only import never reads the file's config (bbs_3mf.cpp
+     `dont_load_config`): no file content avoids it. Fixed in 2.9.1 (released 2026-11-03). The user's install is
+     2.8.2.61; the slicer CLI path was not retested on 2.9.1.
+   - Open: (a) a reshaped limb is not checked for running into the body; (b) the auto floor changes the shell per
+     figure: a user reusing one printed shell must type its floor; (c) thin-steel hold strength not measured;
+     (d) `Steel` labels show 20.32 x 0.254 (inch conversions).
+17. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
@@ -211,9 +228,9 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
 - Setup once: `pip install -e .` (repo root) and `cd web && bun install && bun run build`.
 - UI: `python -m pokefit serve --open` → http://127.0.0.1:8765/ (drop a .3mf/.stl/.obj/.glb, or
   `?path=C:/path/to/file.3mf` with `+` written as `%2B`). Outputs land in `pokefit_out/<name>/`.
-- CLI: `python -m pokefit fit <figure.3mf> [--ball 0.6 | --diameter 44] --washer M6 [--scale 85%] [--magnets 0-3]
+- CLI: `python -m pokefit fit <figure.3mf> [--ball 0.6 | --diameter 44] --steel D20 [--floor auto] [--scale 85%] [--magnets 0-3]
   [--rotate-x/-y/-z DEG]
-  [--washers] [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
+  [--steels] [--out DIR] [--slice] [--x10]`; `python -m pokefit ball` prints the cavity profile.
 - Magnets (1–3): placed on a rasterised height field of the underside (`magnets.HeightField`), so
   sloped/raised undersides work. Seat mode `pocket_seat` (CLI `--magnet-seat`):
   `washer` (default, user's request 2026-10-18): every opening at z 0, magnet rests on the steel;

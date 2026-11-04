@@ -1,6 +1,7 @@
 /** pokefit web UI: wires the panel controls, the 3D view and the underside editor to the API. */
 import * as api from "./api";
 import { makeCollapsible, sectionToggle } from "./collapse";
+import { Reshape } from "./reshape";
 import { ColorizePanel } from "./colorize";
 import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
@@ -12,7 +13,7 @@ import {
 } from "./simplify";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import type {
-  AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, WasherRow,
+  AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
 } from "./types";
 import { browserStore, clearPrefs, readPrefs, REMEMBERED_KEYS, writePrefs } from "./prefs";
 import { UndersideEditor } from "./underside";
@@ -32,13 +33,13 @@ interface State {
   seq: number;
 }
 
-/** The engine's defaults (`pipeline.Params`); the washer becomes the config's default once it is known. */
+/** The engine's defaults (`pipeline.Params`); the steel becomes the config's default once it is known. */
 let defaults: Params = {
-  ball_scale: 0.6, ball_diameter: null, washer: "M6", clearance: 1, figure_scale: null, figure_height: null,
+  ball_scale: 0.6, ball_diameter: null, steel: "D20", floor_diameter: null, simplify_auto: true, clearance: 1, figure_scale: null, figure_height: null,
   rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
   pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
-  pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "washer", object_id: null, slot: null, settings_source: "reference",
-  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "washer", fill_shape: null, paint_depth: null,
+  pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "steel", object_id: null, slot: null, settings_source: "reference",
+  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null,
   filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5,
 };
@@ -93,10 +94,17 @@ const colorize = new ColorizePanel({
       ...(stampAxes ? { stamp_axes: stampAxes } : {}) }),
   prepare: (mode, angle, mirror) => api.preparePaint(state.session ?? "", state.params, { mode, angle, mirror }),
   pieces: (filament) => api.colourPieces(state.session ?? "", state.params, filament),
-  setPicking: (fn) => viewer.setPickHandler(fn),
+  setPicking: (fn) => { if (fn) reshape.stop(); viewer.setPickHandler(fn); },
   setStroking: (fn) => viewer.setStrokeHandler(fn),
   setStamping: (fn) => viewer.setStampHandler(fn),
   setViewInset: (px) => viewer.setBottomInset(px),
+  focusFigure: (on) => {
+    if (on) {
+      savedView = viewer.focusFigure(false);
+      // The dock sizes the view's free area as it appears: frame the figure once that is known.
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (savedView) viewer.focusFigure(); }));
+    } else if (savedView) { viewer.restoreView(savedView); savedView = null; }
+  },
   changed: () => { paintDirty = true; },
   settled: () => { if (paintDirty) void runAnalyse(); },
   // A colour edit only re-runs the colour part of the analysis (shape work is cached): quick enough to do at once,
@@ -107,6 +115,21 @@ const colorize = new ColorizePanel({
   },
   toast: (msg) => toast(msg),
   slotOf: (n) => slotOf(n),
+});
+
+/** Where the camera was when painting started (put back when it stops). */
+let savedView: ReturnType<typeof viewer.focusFigure> | null = null;
+
+/** "Reshape a part": limbs resized or bent (Figure card). */
+const reshape = new Reshape({
+  params: () => state.params,
+  limb: (req, angle) => api.limb(state.session ?? "", state.params,
+    "hit" in req ? { point: req.hit.point, normal: req.hit.normal, angle } : { ...req, angle }),
+  setPicking: (fn) => viewer.setPickHandler(fn),
+  highlight: (part, faces) => viewer.highlightFaces(part, faces),
+  stopOthers: () => colorize.stopPainting(),
+  apply: () => void runAnalyse(),
+  toast: (msg) => toast(msg),
 });
 
 // ------------------------------------------------------------------ helpers
@@ -147,8 +170,8 @@ async function init(): Promise<void> {
   }
   const cfg = state.config;
   if (cfg.engine === "local") engineStatus("local");
-  defaults = { ...defaults, washer: cfg.default_washer };
-  if (!remembered.washer) state.params.washer = cfg.default_washer;
+  defaults = { ...defaults, steel: cfg.default_steel };
+  if (!remembered.steel) state.params.steel = cfg.default_steel;
   state.params.slot = cfg.default_slot;
   const ballSel = $<HTMLSelectElement>("ballSelect");
   for (const s of cfg.ball_scales) {
@@ -156,16 +179,16 @@ async function init(): Promise<void> {
     ballSel.append(h("option", { value: String(s), textContent: `${Math.round(s * 100)} % · Ø ${d.toFixed(1)} mm` }));
   }
   ballSel.append(h("option", { value: "custom", textContent: "Inner diameter…" }));
-  const ws = $<HTMLSelectElement>("washerSelect");
-  for (const w of cfg.washers) ws.append(h("option", { value: w.key, textContent: w.label }));
+  const ws = $<HTMLSelectElement>("steelSelect");
+  for (const w of cfg.steels) ws.append(h("option", { value: w.key, textContent: w.label }));
   ws.append(h("option", { value: "custom", textContent: "Custom size…" }));
-  if (!cfg.washers.some((w) => w.key === state.params.washer)) {
-    const [od, id, t] = state.params.washer.split(",").map(Number);
+  if (!cfg.steels.some((w) => w.key === state.params.steel)) {
+    const [od, id, t] = state.params.steel.split(",").map(Number);
     if (od > id && id >= 0 && t > 0) {
-      ws.insertBefore(h("option", { value: state.params.washer, textContent: `custom ${od} × ${id} × ${t} mm` }), ws.lastElementChild);
-    } else state.params.washer = cfg.default_washer;     // a remembered washer this version no longer has
+      ws.insertBefore(h("option", { value: state.params.steel, textContent: id > 0 ? `custom washer ${od} × ${id} × ${t} mm` : `custom disc ${od} × ${t} mm` }), ws.lastElementChild);
+    } else state.params.steel = cfg.default_steel;     // a remembered steel this version no longer has
   }
-  ws.value = state.params.washer;
+  ws.value = state.params.steel;
   syncControls();
   renderSlots(cfg);
   renderPrinter(cfg);
@@ -304,23 +327,35 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
   busy(true, `Loading ${name}…`);
   const fresh: Params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
+    limbs: null,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
-    fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "washer" };
+    fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "steel" };
   try {
     const res = await fn(fresh);
     state.session = res.session;
     colorize.reset();
+    state.params.limbs = null;
+    reshape.reset();
     state.params = fresh;
     $("fileName").textContent = res.file;
     $("drop").classList.add("hidden");
     $("paintViewBtn").hidden = false;
     $("sliceOut").replaceChildren();
     $("exportOut").replaceChildren();
-    $("washerTable").replaceChildren();
+    $("steelTable").replaceChildren();
     // Initial analysis used server defaults; re-run if the UI's settings differ.
     // The first analysis used the engine's defaults: run again with the user's settings (remembered or set
     // before the file was opened) where any differ.
     const r = res.report;
+    // A dense figure the engine simplified as it opened (`simplify_auto`): keep that setting for this file (asking
+    // for none would load every triangle again), but never remember it for the next figure.
+    if (state.params.simplify === null && r.params.simplify !== null) {
+      state.params.simplify = r.params.simplify;
+      autoSimplified = r.params.simplify;
+      showSimplify(r.params.simplify);
+      toast(`This figure has ${r.object.file_faces.toLocaleString()} triangles: opened simplified to ` +
+        `${Number(r.params.simplify).toLocaleString()}. Simplify → Off keeps every triangle.`);
+    } else autoSimplified = null;
     const differs = REMEMBERED_KEYS.some((k) => r.params[k] !== state.params[k]);
     shownGeometry = geometryKey();
     await showFigure(res.session, null, false);
@@ -384,20 +419,24 @@ async function showFigure(session: string, regions: RegionView | null, overlay: 
   return reloaded;
 }
 
-/** What the figure's shape depends on: orientation and the conform step (designed for this ball,
- * clearance and, unless the flat base has its own size, the washer). */
+/** What the figure's shape depends on: orientation and the conform step (designed for this ball, clearance,
+ * steel and floor). */
 function geometryKey(): string {
   const p = state.params;
   return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
-    p.flat_base === null ? p.washer : "", p.flat_depth, p.flat_fill, p.fill_area, p.fill_circle, p.fill_shape, p.ball_scale, p.ball_diameter,
+    p.steel, p.floor_diameter, JSON.stringify(p.limbs ?? null), p.flat_depth, p.flat_fill, p.fill_area, p.fill_circle, p.fill_shape, p.ball_scale, p.ball_diameter,
     p.clearance, p.strengthen, p.strengthen ? p.figure_height : null, p.simplify]);
 }
 let shownGeometry = "";
 
 /** Remember the settings the user changed (the next figure, or the next visit, starts from them). */
 function remember(): void {
-  writePrefs(prefStore, state.params, defaults);
+  // A Simplify the engine chose for a dense file is that file's, not a preference.
+  const p = autoSimplified !== null && state.params.simplify === autoSimplified ? { ...state.params, simplify: null } : state.params;
+  writePrefs(prefStore, p, defaults);
 }
+/** The Simplify budget the engine chose when the current figure opened (null: none). */
+let autoSimplified: number | null = null;
 
 /** Show `state.params` in the controls that the report does not set (before a file, or after a reset). */
 function syncControls(): void {
@@ -406,7 +445,8 @@ function syncControls(): void {
   $<HTMLSelectElement>("ballSelect").value = preset ? String(p.ball_scale) : "custom";
   $("ballCustomRow").hidden = preset;
   if (!preset && p.ball_diameter) $<HTMLInputElement>("ballCustom").value = p.ball_diameter.toFixed(1);
-  $<HTMLSelectElement>("washerSelect").value = p.washer;
+  $<HTMLSelectElement>("steelSelect").value = p.steel;
+  $<HTMLInputElement>("floorD").value = p.floor_diameter === null ? "" : String(p.floor_diameter);
   $<HTMLInputElement>("clearanceInput").value = String(p.clearance);
   $<HTMLInputElement>("heightInput").value = p.figure_height ? String(p.figure_height) : "";
   $<HTMLSelectElement>("bendSelect").value = p.bend === null ? "auto" : String(p.bend);
@@ -416,6 +456,7 @@ function syncControls(): void {
   $<HTMLSelectElement>("paintDepth").value = p.paint_depth === null ? "" : String(p.paint_depth);
   $<HTMLSelectElement>("strengthenSelect").value = String(p.strengthen);
   showSimplify(p.simplify);
+  $<HTMLInputElement>("simplifyAuto").checked = p.simplify_auto;
   $<HTMLSelectElement>("despeckleSelect").value = String(p.despeckle);
   document.querySelectorAll<HTMLButtonElement>("#magnetCount button").forEach((b) =>
     b.setAttribute("aria-checked", String(+(b.dataset.n ?? -1) === p.magnets)));
@@ -477,8 +518,10 @@ function setSimplify(budget: number | null): void {
   showSimplify(budget);
   if (budget === p.simplify) return;
   p.simplify = budget;
-  if (p.paint?.length) toast("Paint steps cleared: they belong to the old triangles.");
+  if (p.paint?.length || p.limbs?.length) toast("Paint steps and reshaped parts cleared: they belong to the old triangles.");
   colorize.dropPaint();
+  p.limbs = null;
+  reshape.reset();
   if (state.report?.object.texture_colours) p.colours = null;
   p.figure_scale = null;
   p.pockets = null;
@@ -598,6 +641,11 @@ function show(rep: Report): void {
   $<HTMLSelectElement>("ballSelect").value = preset ? String(rep.params.ball_scale) : "custom";
   $("ballCustomRow").hidden = preset;
   if (!preset) $<HTMLInputElement>("ballCustom").value = rep.ball.inner_diameter.toFixed(1);
+  // The floor the fit used: chosen for this figure (blank field), or the one typed (at least the steel's seat).
+  const floor = rep.ball.floor_diameter;
+  $<HTMLInputElement>("floorD").placeholder = rep.params.floor_diameter === null ? `auto ${floor.toFixed(1)}` : "auto";
+  $("floorInfo").textContent = rep.params.floor_diameter !== null && Math.abs(floor - rep.params.floor_diameter) > 0.05
+    ? `${floor.toFixed(1)} (the steel's seat)` : "";
   $<HTMLInputElement>("rotX").value = String(rep.params.rotate_x);
   $<HTMLInputElement>("rotY").value = String(rep.params.rotate_y);
   $<HTMLInputElement>("rotZ").value = String(rep.params.rotate_z);
@@ -653,12 +701,12 @@ function renderMagnets(rep: Report): void {
   document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
     b.setAttribute("aria-checked", String(b.dataset.seat === rep.params.pocket_seat)));
   $("seatHint").textContent = raised
-    ? "Where the figure floats above the bed, that pocket's opening moves up into it, each only as far as its own spot needs (one over the flat base stays on the washer): the magnet is hidden but sits above the steel, so it holds less."
-    : "Every magnet rests on the washer. Gaps under the figure up to the “Fill gaps” height are filled round each magnet, so it is walled from the washer up; where the figure floats higher, the magnet's lower side shows.";
+    ? "Where the figure floats above the bed, that pocket's opening moves up into it, each only as far as its own spot needs (one over the flat base stays on the steel disc): the magnet is hidden but sits above the steel, so it holds less."
+    : "Every magnet rests on the steel disc. Gaps under the figure up to the “Fill gaps” height are filled round each magnet, so it is walled from the steel up; where the figure floats higher, the magnet's lower side shows.";
   $<HTMLInputElement>("pkMaxSeat").disabled = !raised;
   $("maxSeatLabel").classList.toggle("off", !raised);
   for (const e of [$("seatMode").closest<HTMLElement>(".seat-row"), $("seatHint")]) if (e) e.hidden = n === 0;
-  const area = rep.params.fill_area ?? (rep.params.fill_circle ? "circle" : "washer");
+  const area = rep.params.fill_area ?? (rep.params.fill_circle ? "circle" : "steel");
   const fc = area === "circle" ? rep.params.fill_circle : null;
   const shape = area === "shape" ? rep.params.fill_shape : null;
   const s = rep.fit.scale;
@@ -683,7 +731,7 @@ function renderMagnets(rep: Report): void {
       });
       items.push(h("li", {}, b));
     }
-    if (raised && /above the washer everywhere/.test(under.message) && low > rep.params.pocket_max_seat) {
+    if (raised && /above the steel everywhere/.test(under.message) && low > rep.params.pocket_max_seat) {
       const allow = low;                    // already rounded up to 0.1 mm by the server
       const b = h("button", { cls: "btn", textContent: `Allow pockets up to ${allow.toFixed(1)} mm high` });
       b.addEventListener("click", () => { state.params.pocket_max_seat = allow; void runAnalyse(); });
@@ -697,8 +745,8 @@ function renderMagnets(rep: Report): void {
   // One line per pocket: how high its opening is and its check status.
   const items: HTMLElement[] = rep.pockets.map((p, i) => {
     const c = rep.checks.find((x) => x.id === `pocket:${i + 1}`);
-    let seat = p.z < 0.05 ? "on the washer" : `${p.z.toFixed(1)} mm above the washer`;
-    const shows = c?.message.match(/up to ([\d.]+) mm above the washer here/);
+    let seat = p.z < 0.05 ? "on the steel" : `${p.z.toFixed(1)} mm above the steel`;
+    const shows = c?.message.match(/up to ([\d.]+) mm above the steel here/);
     const short = c?.message.match(/only ([\d.]+) mm of the magnet is walled/);
     if (short) seat += ` · only ${short[1]} mm walled, glue it`;
     else if (shows) seat += ` · shows ${shows[1]} mm`;
@@ -836,7 +884,7 @@ function renderChecks(rep: Report): void {
   }));
 }
 
-// ------------------------------------------------------------------ slicing / export / washers
+// ------------------------------------------------------------------ slicing / export / steels
 
 function sliceLine(label: string, r: SliceResult | undefined): HTMLElement {
   if (!r) return h("div");
@@ -1015,34 +1063,34 @@ async function doExport(): Promise<void> {
   }
 }
 
-async function compareWashers(): Promise<void> {
+async function compareSteel(): Promise<void> {
   if (!state.session) return;
-  const btn = $<HTMLButtonElement>("washerCompare");
+  const btn = $<HTMLButtonElement>("steelCompare");
   btn.disabled = true;
-  $("washerTable").replaceChildren(h("div", { cls: "muted", textContent:
-    api.engineMode() === "browser" ? "Trying every washer (about a minute in the browser)…" : "Trying every washer (≈ 30 s)…" }));
+  $("steelTable").replaceChildren(h("div", { cls: "muted", textContent:
+    api.engineMode() === "browser" ? "Trying every steel disc and washer (about a minute in the browser)…" : "Trying every steel disc and washer (≈ 30 s)…" }));
   try {
-    const rows: WasherRow[] = await api.washers(state.session, state.params);
+    const rows: SteelRow[] = await api.steels(state.session, state.params);
     const best = rows.find((r) => r.pockets_on_steel)?.key;
-    $("washerTable").replaceChildren(h("table", { cls: "tbl" },
-      h("thead", {}, h("tr", {}, ...["washer", "figure", "magnets", ""].map((t) => h("th", { textContent: t })))),
+    $("steelTable").replaceChildren(h("table", { cls: "tbl" },
+      h("thead", {}, h("tr", {}, ...["steel disc / washer", "figure", "magnets", ""].map((t) => h("th", { textContent: t })))),
       h("tbody", {}, ...rows.map((r) => {
         const use = h("button", { cls: "btn", textContent: "Use" });
         use.addEventListener("click", () => {
-          $<HTMLSelectElement>("washerSelect").value = r.key;
-          state.params.washer = r.key;
+          $<HTMLSelectElement>("steelSelect").value = r.key;
+          state.params.steel = r.key;
           state.params.pockets = null;
           void runAnalyse();
         });
-        const tr = h("tr", { cls: `${r.key === best ? "best" : ""} ${r.key === state.params.washer ? "current" : ""}` },
+        const tr = h("tr", { cls: `${r.key === best ? "best" : ""} ${r.key === state.params.steel ? "current" : ""}` },
           h("td", { textContent: r.key }), h("td", { textContent: `${r.height_mm.toFixed(1)} mm` }),
           h("td", { textContent: { full: "on steel", partial: "half on steel", off: "off steel" }[r.steel] }),
           h("td", {}, use));
-        tr.title = r.label;
+        tr.title = `${r.label}, on a ${r.floor_diameter.toFixed(1)} mm floor`;
         return tr;
       }))));
   } catch (e) {
-    $("washerTable").replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+    $("steelTable").replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {
     btn.disabled = false;
   }
@@ -1071,6 +1119,13 @@ function bind(): void {
 
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((b) =>
     b.addEventListener("click", () => viewer.view(b.dataset.view as "iso")));
+  // The ball on or off (remembered): off shows the figure alone; Cut and Space only matter while it shows.
+  const ballBtn = $<HTMLButtonElement>("ballBtn");
+  sectionToggle(ballBtn, "view-ball", true, (on) => {
+    ballBtn.setAttribute("aria-pressed", String(on));
+    viewer.setBallVisible(on);
+    for (const id of ["clipBtn", "spaceBtn"]) $<HTMLButtonElement>(id).disabled = !on;
+  });
   const clip = $<HTMLButtonElement>("clipBtn");
   clip.addEventListener("click", () => {
     const on = clip.getAttribute("aria-pressed") !== "true";
@@ -1132,11 +1187,11 @@ function bind(): void {
     if (v >= 15 && v <= 300) setBall(state.params.ball_scale, v);
     else toast("Inner diameter must be between 15 and 300 mm.");
   });
-  $<HTMLSelectElement>("washerSelect").addEventListener("change", (e) => {
+  $<HTMLSelectElement>("steelSelect").addEventListener("change", (e) => {
     const sel = e.target as HTMLSelectElement;
-    $("washerCustomRow").hidden = sel.value !== "custom";
+    $("steelCustomRow").hidden = sel.value !== "custom";
     if (sel.value === "custom") return;
-    state.params.washer = sel.value;
+    state.params.steel = sel.value;
     state.params.pockets = null;
     void runAnalyse();
   });
@@ -1144,15 +1199,15 @@ function bind(): void {
     const od = +$<HTMLInputElement>("wOd").value;
     const id = +$<HTMLInputElement>("wId").value;
     const t = +$<HTMLInputElement>("wT").value;
-    if (!(od > id && id >= 0 && t > 0)) { toast("Washer needs OD > hole ≥ 0 and thickness > 0."); return; }
+    if (!(od > id && id >= 0 && t > 0)) { toast("Steel needs a diameter > hole ≥ 0 (0 = a solid disc) and a thickness > 0."); return; }
     const key = `${od},${id},${t}`;
-    const sel = $<HTMLSelectElement>("washerSelect");
+    const sel = $<HTMLSelectElement>("steelSelect");
     if (![...sel.options].some((o) => o.value === key)) {
       sel.insertBefore(h("option", { value: key, textContent: `custom ${od} × ${id} × ${t} mm` }), sel.lastElementChild);
     }
     sel.value = key;
-    $("washerCustomRow").hidden = true;
-    state.params.washer = key;
+    $("steelCustomRow").hidden = true;
+    state.params.steel = key;
     state.params.pockets = null;
     void runAnalyse();
   });
@@ -1193,6 +1248,10 @@ function bind(): void {
   const simpSlider = $<HTMLInputElement>("simplifySlider");
   simpSlider.addEventListener("input", () => showSimplify(sliderBudget(+simpSlider.value), true));
   simpSlider.addEventListener("change", () => setSimplify(sliderBudget(+simpSlider.value)));
+  $<HTMLInputElement>("simplifyAuto").addEventListener("change", (e) => {
+    state.params.simplify_auto = (e.target as HTMLInputElement).checked;
+    remember();
+  });
   $<HTMLInputElement>("simplifyCount").addEventListener("change", (e) =>
     setSimplify(countBudget(+(e.target as HTMLInputElement).value, fileFaces)));
   $("simplifyTicks").replaceChildren(...[...LEVELS.map((l) => shareToSlider(l.share)), SLIDER_MAX].map((v) =>
@@ -1203,7 +1262,7 @@ function bind(): void {
     if (state.params.paint?.length) void refreshFigure();
     void runAnalyse();
   });
-  // Fill where: round the washer (automatic) or a circle the user places under the body.
+  // Fill where: round the steel disc (automatic) or a circle the user places under the body.
   $<HTMLSelectElement>("fillWhere").addEventListener("change", (e) => {
     const area = (e.target as HTMLSelectElement).value as FillArea;
     const rep = state.report;
@@ -1213,7 +1272,7 @@ function bind(): void {
       syncFillCircle();
       return;
     }
-    if (area !== "washer" && state.params.flat_fill <= 0) {
+    if (area !== "steel" && state.params.flat_fill <= 0) {
       state.params.flat_fill = 2.5;
       $<HTMLInputElement>("flatFill").value = "2.5";
       toast("Fill gaps up to was 0 mm (nothing filled): set to 2.5 mm.");
@@ -1225,8 +1284,8 @@ function bind(): void {
     underside.setDrawing(false);
     if (area === "circle" && rep && !state.params.fill_circle) {
       const s = rep.fit.scale || rep.fit.max_scale;
-      const d = state.params.flat_base ?? rep.ball.washer.od;
-      // Starts centred on the washer, as wide as the flat base.
+      const d = state.params.flat_base ?? rep.ball.steel.od;
+      // Starts centred on the steel, as wide as the flat base.
       state.params.fill_circle = { x: +(rep.underside.ring.x / s).toFixed(4), y: +(rep.underside.ring.y / s).toFixed(4),
         d: +(d / s).toFixed(4) };
     }
@@ -1259,8 +1318,17 @@ function bind(): void {
   $<HTMLInputElement>("flatD").addEventListener("change", (e) => {
     const raw = (e.target as HTMLInputElement).value.trim();
     const v = +raw;
-    if (raw !== "" && !(v >= 0 && v <= 60)) { toast("Flat base Ø must be 0–60 mm (blank = the washer's)."); return; }
+    if (raw !== "" && !(v >= 0 && v <= 60)) { toast("Flat base Ø must be 0–60 mm (blank = the steel's)."); return; }
     state.params.flat_base = raw === "" ? null : v;
+    state.params.pockets = null;
+    void runAnalyse();
+  });
+  $<HTMLInputElement>("floorD").addEventListener("change", (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    const v = +raw;
+    if (raw !== "" && !(v >= 0 && v <= 60)) { toast("Flat floor Ø must be 0–60 mm (blank = the best for this figure)."); return; }
+    state.params.floor_diameter = raw === "" ? null : v;
+    state.params.figure_scale = null;
     state.params.pockets = null;
     void runAnalyse();
   });
@@ -1271,6 +1339,8 @@ function bind(): void {
   $<HTMLSelectElement>("objectSelect").addEventListener("change", async (e) => {
     state.params.object_id = (e.target as HTMLSelectElement).value;
     colorize.reset();                       // paint refers to triangles of the previous figure
+    state.params.limbs = null;               // ... and so do reshaped limbs
+    reshape.reset();
     state.params.figure_scale = null;
     state.params.pockets = null;
     state.params.filament_map = null;
@@ -1343,7 +1413,7 @@ function bind(): void {
     }));
   document.querySelectorAll<HTMLButtonElement>("#seatMode button").forEach((b) =>
     b.addEventListener("click", () => {
-      const seat = b.dataset.seat === "raised" ? "raised" : "washer";
+      const seat = b.dataset.seat === "raised" ? "raised" : "steel";
       if (seat === state.params.pocket_seat) return;
       state.params.pocket_seat = seat;
       void runAnalyse();                    // hand-placed pockets keep their XY; their seats follow the mode
@@ -1471,7 +1541,7 @@ function bind(): void {
   if (location.hash === "#about") showAbout(true);
   $("sliceBtn").addEventListener("click", () => void doSlice());
   $("exportBtn").addEventListener("click", () => void doExport());
-  $("washerCompare").addEventListener("click", () => void compareWashers());
+  $("steelCompare").addEventListener("click", () => void compareSteel());
 }
 
 makeCollapsible($("panel"));

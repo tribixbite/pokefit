@@ -9,26 +9,26 @@
   <!-- The UI is dark already; stop the Dark Reader extension from re-tinting it. -->
   <meta name="darkreader-lock" />
   <title>pokefit — fit any 3D-printed figure inside a Pokéball, with magnets</title>
-  <meta name="description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta name="description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel disc, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <link rel="canonical" href="https://pokefit.party/" />
   <meta name="robots" content="index, follow, max-image-preview:large" />
   <meta name="theme-color" content="#0d1117" />
   <meta name="author" content="tribixbite" />
-  <meta name="keywords" content="pokeball, 3d printing, figure, magnet, bambu studio, 3mf, stl, fit, scale, washer, printability" />
+  <meta name="keywords" content="pokeball, 3d printing, figure, magnet, bambu studio, 3mf, stl, fit, scale, steel, printability" />
   <!-- Social previews: the animated GIF first (Discord, Slack, Telegram animate it), a still JPEG second. -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="pokefit" />
   <meta property="og:url" content="https://pokefit.party/" />
   <meta property="og:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
-  <meta property="og:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta property="og:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel disc, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <meta property="og:image" content="https://pokefit.party/og.gif" />
   <meta property="og:image:type" content="image/gif" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="An open Pokéball with a small green figure standing on a steel washer inside, next to the pokefit title." />
+  <meta property="og:image:alt" content="An open Pokéball with a small green figure standing on a steel disc inside, next to the pokefit title." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="pokefit — fit any figure inside a Pokéball, with magnets" />
-  <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
+  <meta name="twitter:description" content="Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel disc, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser." />
   <meta name="twitter:image" content="https://pokefit.party/og.gif" />
   <meta name="twitter:image:alt" content="An open Pokéball with a small green figure inside, next to the pokefit title." />
   <link rel="manifest" href="site.webmanifest" />
@@ -45,7 +45,7 @@
         "name": "pokefit",
         "url": "https://pokefit.party/",
         "image": "https://pokefit.party/og.jpg",
-        "description": "Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel washer, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser.",
+        "description": "Free tool that scales any 3D-printable figure (3MF, STL, OBJ, GLB) to the largest size that fits inside a printed Pokéball, adds 1–3 magnet pockets so it snaps onto a steel disc, checks printability and exports a Bambu Studio-ready 3MF. Runs in your browser.",
         "applicationCategory": "DesignApplication",
         "operatingSystem": "Any (web browser); Windows/macOS/Linux for the local version",
         "browserRequirements": "Requires JavaScript and WebAssembly",
@@ -54,7 +54,7 @@
         "featureList": [
           "Largest scale that fits inside the ball's cavity, connector ring and opening",
           "1 to 3 magnet pockets placed on the figure's underside, including sloped undersides",
-          "Steel washer catalogue and comparison",
+          "Steel disc and washer catalogue and comparison",
           "Mesh soundness, wall thickness, overhang, floating-island and bed-contact checks",
           "Bambu Studio 3MF export keeping painted colours, plus an import-ready variant",
           "Any-angle rotation and custom ball inner diameter"
@@ -67,8 +67,8 @@
         "mainEntity": [
           { "@type": "Question", "name": "Are my files uploaded anywhere?",
             "acceptedAnswer": { "@type": "Answer", "text": "No. The analysis runs in your browser (Python compiled to WebAssembly); files never leave your device." } },
-          { "@type": "Question", "name": "Which washer and magnets should I use?",
-            "acceptedAnswer": { "@type": "Answer", "text": "A plain or zinc-plated steel washer (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets. A 1/4 inch × 1 inch fender washer or a DIN 9021 M6 washer works for the 60 % ball; Compare washers shows which gives the largest figure." } },
+          { "@type": "Question", "name": "Which steel and magnets should I use?",
+            "acceptedAnswer": { "@type": "Answer", "text": "A thin plain or zinc-plated steel disc (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets. A 20 mm (0.8 inch) disc 0.25 mm thick works for the 60 % ball, and so do washers (a DIN 9021 M6 or a 1/4 inch × 1 inch fender washer); Compare steel sizes shows which gives the largest figure." } },
           { "@type": "Question", "name": "Which file types work?",
             "acceptedAnswer": { "@type": "Answer", "text": "3MF (including Bambu Studio projects with painted colours and several figures), STL and OBJ." } },
           { "@type": "Question", "name": "How do I get print time and filament estimates?",
@@ -105,6 +105,7 @@
         <button data-view="side" title="Side">Side</button>
         <button data-view="top" title="Top">Top</button>
         <button data-view="bottom" title="Bottom">Under</button>
+        <button id="ballBtn" class="toggle" aria-pressed="true" title="Show the ball (off: the figure alone, nothing round it)">Ball</button>
         <button id="clipBtn" class="toggle" aria-pressed="false" title="Cut the ball in half">Cut</button>
         <button id="spaceBtn" class="toggle" aria-pressed="true" title="Show the usable space">Space</button>
         <button id="paintViewBtn" class="toggle paint-view" aria-pressed="false" title="Paint the figure: the paint tools open on this view (P)" hidden>Paint</button>
@@ -157,7 +158,7 @@
       </section>
 
       <section class="card">
-        <h2>Ball &amp; washer</h2>
+        <h2>Ball &amp; steel</h2>
         <div class="grid2">
           <label>Ball size
             <select id="ballSelect"></select>
@@ -167,18 +168,22 @@
             <span class="unit"><input id="clearanceInput" type="number" min="0" max="5" step="0.1" value="1" inputmode="decimal" /> mm</span>
           </label>
         </div>
-        <label>Steel washer (glued to the inside bottom)
-          <select id="washerSelect"></select>
+        <label>Steel disc or washer (glued to the inside bottom)
+          <select id="steelSelect"></select>
         </label>
-        <div id="washerCustomRow" class="row custom-washer" hidden>
-          <label>OD <input id="wOd" type="number" min="1" step="0.1" value="20" inputmode="decimal" /></label>
-          <label>hole <input id="wId" type="number" min="0" step="0.1" value="6.4" inputmode="decimal" /></label>
-          <label>thick <input id="wT" type="number" min="0.1" step="0.1" value="1.5" inputmode="decimal" /></label>
+        <label title="The flat floor printed into the bottom shell's pole; the steel is glued on it. A wider floor sits higher, where the ball is wider: room for a wide base, less for height. Blank = the size that lets this figure fit largest (the exported shell is cut to match: print it with the figure). Type the size of a shell you already printed; 0 = just the steel's own seat.">Flat floor Ø
+          <span class="unit"><input id="floorD" type="number" min="0" max="60" step="0.5" placeholder="auto" inputmode="decimal" /> mm</span>
+          <span id="floorInfo" class="muted"></span>
+        </label>
+        <div id="steelCustomRow" class="row custom-steel" hidden>
+          <label>Ø <input id="wOd" type="number" min="1" step="0.1" value="20" inputmode="decimal" /></label>
+          <label title="0 for a solid disc">hole <input id="wId" type="number" min="0" step="0.1" value="0" inputmode="decimal" /></label>
+          <label>thick <input id="wT" type="number" min="0.05" step="0.05" value="0.25" inputmode="decimal" /></label>
           <button id="wApply" class="btn">Apply</button>
         </div>
-        <p class="hint">Must be plain or zinc-plated <b>steel</b> — stainless washers are not magnetic.</p>
-        <button id="washerCompare" class="btn">Compare washers</button>
-        <div id="washerTable"></div>
+        <p class="hint">Must be plain or zinc-plated <b>steel</b> — stainless steel is not magnetic. On a solid disc a magnet holds anywhere on it, its middle too; a washer's hole holds nothing.</p>
+        <button id="steelCompare" class="btn">Compare steel sizes</button>
+        <div id="steelTable"></div>
       </section>
 
       <section class="card">
@@ -196,21 +201,40 @@
           <span id="rotLabel" class="muted"></span>
         </div>
         <p class="hint">Any angle (e.g. 45°): applied about X, then Y, then Z. The lowest point lands on the bed.</p>
+        <div class="reshape" role="group" aria-label="Reshape a part">
+          <div class="row">
+            <button id="limbPick" class="btn" type="button" aria-pressed="false" title="Then tap a tail, ear, leg or arm on the 3D view: it is found up to the valley where it meets the body, like paint's Part mode">Pick a part</button>
+            <span class="muted">Resize or bend a tail, ear or leg</span>
+          </div>
+          <label class="range-row" id="limbAngleRow" hidden title="Where the part ends: at a valley sharper than this. Smaller: shallower valleys count as joints too, so a tap takes less (try it when a tap takes the body); larger: only deep joints, so it takes more.">Joint <input id="limbAngle" type="range" min="2" max="60" step="1" value="15" /> <span id="limbAngleVal" class="muted"></span></label>
+          <p id="limbInfo" class="hint"></p>
+          <div id="limbEditor" hidden>
+            <label class="range-row">Size <input id="limbScale" type="range" min="30" max="300" step="5" value="100" /> <span id="limbScaleVal" class="muted"></span></label>
+            <label class="range-row" title="Tip up (+) or down (−) at the joint; a part pointing up or down tips to the front (+) or back">Bend <input id="limbBend" type="range" min="-150" max="150" step="5" value="0" /> <span id="limbBendVal" class="muted"></span></label>
+            <label class="range-row" title="Tip sideways at the joint (+ = counter-clockwise seen from above)">Swing <input id="limbSwing" type="range" min="-150" max="150" step="5" value="0" /> <span id="limbSwingVal" class="muted"></span></label>
+            <div class="row">
+              <button id="limbReset" class="btn" type="button">As it was</button>
+              <button id="limbDone" class="btn" type="button">Done</button>
+            </div>
+            <p class="hint">The change eases in over the first third of the part, so it bends in a curve. Nothing stops a part bent into the body: check the view. Paint and colours stay.</p>
+          </div>
+          <div id="limbList" class="limb-list"></div>
+        </div>
         <div class="shape-grid" role="group" aria-label="Shape for the ball">
-          <label title="Legs or a tail lying straight out past the washer meet the sphere's slope first: bend them up along it so the figure fits larger. Auto bends only limbs (not a solid body), more for wide, low figures, and only if it helps.">Bend legs/tail
+          <label title="Legs or a tail lying straight out past the steel disc meet the sphere's slope first: bend them up along it so the figure fits larger. Auto bends only limbs (not a solid body), more for wide, low figures, and only if it helps.">Bend legs/tail
             <select id="bendSelect">
               <option value="auto">Auto</option><option value="0">Off</option><option value="0.33">Slight</option>
               <option value="0.66">Medium</option><option value="1">Follow the sphere</option>
             </select>
           </label>
-          <label title="Diameter of the flat middle of the base (blank = the washer's, where the ball's floor is flat). 0 = leave the base as it is.">Flat base Ø
-            <span class="unit"><input id="flatD" type="number" min="0" max="60" step="0.5" placeholder="washer" inputmode="decimal" /> mm</span></label>
+          <label title="Diameter of the flat middle of the base (blank = the steel disc's, where the ball's floor is flat). 0 = leave the base as it is.">Flat base Ø
+            <span class="unit"><input id="flatD" type="number" min="0" max="60" step="0.5" placeholder="steel" inputmode="decimal" /> mm</span></label>
           <label title="Press the lowest bumps of the base down flat by up to this much (it lowers the figure by as much).">Press up to
             <span class="unit"><input id="flatDepth" type="number" min="0" max="5" step="0.1" value="1.2" inputmode="decimal" /> mm</span></label>
-          <label title="Fill gaps up to this high between the base and the washer with a solid flat base (printed in the main colour): magnets get room, the belly needs no support. At 2.5 (the default) it is raised to 4 or 6 mm when no magnet would fit otherwise.">Fill gaps up to
+          <label title="Fill gaps up to this high between the base and the steel disc with a solid flat base (printed in the main colour): magnets get room, the belly needs no support. At 2.5 (the default) it is raised to 4 or 6 mm when no magnet would fit otherwise.">Fill gaps up to
             <span class="unit"><input id="flatFill" type="number" min="0" max="10" step="0.5" value="2.5" inputmode="decimal" /> mm</span></label>
-          <label title="Where the gaps are filled: round the washer (joined to where the figure already stands); everywhere under the figure (every part hovering up to the height above, down to the bed); inside a circle you place; or inside an outline you draw (both in the Magnets card's underside view).">Fill where
-            <select id="fillWhere"><option value="washer">Round the washer</option><option value="all">Everywhere under the figure</option><option value="circle">A circle I place</option><option value="shape">A shape I draw</option></select></label>
+          <label title="Where the gaps are filled: round the steel disc (joined to where the figure already stands); everywhere under the figure (every part hovering up to the height above, down to the bed); inside a circle you place; or inside an outline you draw (both in the Magnets card's underside view).">Fill where
+            <select id="fillWhere"><option value="steel">Round the steel disc</option><option value="all">Everywhere under the figure</option><option value="circle">A circle I place</option><option value="shape">A shape I draw</option></select></label>
           <div class="row" id="fillShapeRow" hidden><button id="fillDraw" class="btn" type="button" aria-pressed="false" title="Then drag round the area to fill in the Magnets card's underside view (released = closed)">Draw the outline</button></div>
           <label id="fillCircleRow" hidden title="Diameter of the fill circle at the print size.">Circle Ø
             <span class="unit"><input id="fillCircleD" type="number" min="1" max="60" step="0.5" inputmode="decimal" /> mm</span></label>
@@ -231,6 +255,7 @@
             <label class="unit simplify-count"><input id="simplifyCount" type="number" min="1000" step="1000" inputmode="numeric" aria-label="Triangles to keep" /> <span id="simplifyOf" class="muted"></span></label>
           </div>
           <datalist id="simplifyTicks"></datalist>
+          <label class="check" title="A figure of more than 300,000 triangles (far more than a print shows) opens simplified to 200,000: opening, painting and the analysis are several times faster. Off (above) keeps every triangle of that file."><input id="simplifyAuto" type="checkbox" checked /> simplify figures over 300k triangles when they open</label>
         </div>
         <p id="simplifyInfo" class="hint" hidden></p>
         <p id="conformInfo" class="hint" hidden></p>
@@ -291,7 +316,7 @@
           </div>
         </div>
         <label class="range-row" id="brushRow" hidden>Brush radius
-          <input id="brushSize" type="range" min="0.3" max="8" step="0.1" value="1.5" />
+          <input id="brushSize" type="range" min="0.2" max="8" step="0.1" value="1.5" />
           <span id="brushVal" class="muted">1.5 mm</span>
         </label>
         <label class="range-row" id="paintAngleRow">Angle
@@ -351,13 +376,13 @@
         <div class="row seat-row">
           <span class="muted">Seat</span>
           <div class="seg" id="seatMode" role="radiogroup" aria-label="Where the magnets sit">
-            <button role="radio" data-seat="washer" title="Every magnet rests on the washer. Under a part that floats above the bed the magnet shows below it.">On the washer</button><button role="radio" data-seat="raised" title="Pockets move up into parts that float above the bed: the magnet is hidden, but sits above the steel and holds less.">Raised into the figure</button>
+            <button role="radio" data-seat="steel" title="Every magnet rests on the steel disc. Under a part that floats above the bed the magnet shows below it.">On the steel</button><button role="radio" data-seat="raised" title="Pockets move up into parts that float above the bed: the magnet is hidden, but sits above the steel and holds less.">Raised into the figure</button>
           </div>
         </div>
         <p class="hint" id="seatHint"></p>
         <div id="underside" class="underside-host"></div>
         <div class="legend">
-          <span><i class="lg height"></i>underside, low → high</span><span><i class="lg feet"></i>on the bed</span><span><i class="lg base"></i>gap fill (flat base)</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>steel ring</span>
+          <span><i class="lg height"></i>underside, low → high</span><span><i class="lg feet"></i>on the bed</span><span><i class="lg base"></i>gap fill (flat base)</span><span><i class="lg valid"></i>pocket fits</span><span><i class="lg steel"></i>magnets on the steel</span>
         </div>
         <div class="row">
           <button id="autoPockets" class="btn">Auto place</button>
@@ -372,7 +397,7 @@
             <label>Wall <span class="unit"><input id="pkWall" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
             <label>Ceiling <span class="unit"><input id="pkCeil" type="number" min="0.2" max="5" step="0.1" inputmode="decimal" /> mm</span></label>
             <label title="How much of the pocket should be walled all round; below that the magnet shows">Grip <span class="unit"><input id="pkGrip" type="number" min="0.2" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
-            <label id="maxSeatLabel" title="Raised seat: automatic placement will not put a pocket opening higher above the washer than this">Max height <span class="unit"><input id="pkMaxSeat" type="number" min="0" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
+            <label id="maxSeatLabel" title="Raised seat: automatic placement will not put a pocket opening higher above the steel than this">Max height <span class="unit"><input id="pkMaxSeat" type="number" min="0" max="20" step="0.1" inputmode="decimal" /> mm</span></label>
           </div>
         </details>
       </section>
@@ -401,7 +426,7 @@
 
       <section class="card">
         <h2>Export</h2>
-        <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching washer-seat bottom shell, and the figure as a coloured STL (one closed solid, a colour per triangle: read by MeshLab, VisCAM and SolidView; Bambu Studio and most slicers load its shape but not its colours, so print colour from the 3MF).</p>
+        <p class="hint">Print-ready 3MF (pockets cut, paint kept, your printer settings) + the matching bottom shell with a seat for the steel, and the figure as a coloured STL (one closed solid, a colour per triangle: read by MeshLab, VisCAM and SolidView; Bambu Studio and most slicers load its shape but not its colours, so print colour from the 3MF).</p>
         <div class="row">
           <label class="btn" for="refInput" title="A Bambu Studio project you print from (its filament slots and printer settings), or presets exported from Bambu Studio (File › Export › Export Preset Bundle: .bbscfg, .bbsflmt, or a presets .zip)">Project or presets…</label>
           <input id="refInput" type="file" accept=".3mf,.json,.bbscfg,.bbsflmt,.zip" hidden />
@@ -415,10 +440,10 @@
         <p id="presetInfo" class="hint" hidden></p>
         <div id="importMapBox" hidden>
           <p class="hint">To add the figure to a project you already have open, drag the <b>…_import.3mf</b> into it and pick <b>Import geometry only</b>. Its colours are renumbered to that project's filament slots, as set under <a href="#slotMapBox">Colours → Prints from</a>.</p>
-          <p class="hint">Bambu Studio 2.8.2 also says "The 3mf file has invalid config, load geometry data only" on every geometry import — harmless, fixed in later releases.</p>
+          <p class="hint">Bambu Studio 2.8.2 says "The 3mf file has invalid config, load geometry data only" on every geometry import of any 3MF: it never reads the file's settings then, and its check fails on the empty settings. Nothing in a file can avoid it there; it is harmless, and gone in Bambu Studio 2.9.1.</p>
         </div>
         <div class="row" id="ballModelRow" hidden>
-          <label class="btn" for="ballModelInput" title="The bottom shell with the washer seat is cut from the ball model, which pokefit cannot redistribute">Add the ball model for the shell</label>
+          <label class="btn" for="ballModelInput" title="The bottom shell with the steel seat is cut from the ball model, which pokefit cannot redistribute">Add the ball model for the shell</label>
           <input id="ballModelInput" type="file" accept=".3mf" hidden />
           <span id="ballModelInfo" class="muted">MakerWorld #2045372</span>
         </div>
@@ -435,7 +460,7 @@
         <p id="printerStatus" class="muted printer-status" aria-live="polite"></p>
         <img id="camView" class="cam-view" alt="Live view inside the printer" hidden />
       </section>
-      <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <button id="resetPrefs" class="linkbtn" title="Settings you change (ball, washer, magnets, height, shape) are remembered in this browser for the next figure.">reset settings</button> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
+      <footer class="foot muted">pokefit · <span id="engineWhere">in your browser</span> · <span id="timing"></span> · <button id="resetPrefs" class="linkbtn" title="Settings you change (ball, steel, magnets, height, shape) are remembered in this browser for the next figure.">reset settings</button> · <a href="https://github.com/tribixbite/pokefit" rel="noopener">source</a></footer>
     </aside>
   </main>
 
@@ -514,24 +539,29 @@
       <button id="aboutClose" class="btn about-close" aria-label="Close">✕</button>
       <h1 id="aboutTitle">pokefit — fit any figure inside a Pokéball, with magnets</h1>
       <p>pokefit takes a 3D-printable figure (3MF, STL or OBJ), scales it to the largest size that fits inside a
-        printed Pokéball, cuts pockets for magnets into its underside so it snaps onto a steel washer glued in
+        printed Pokéball, cuts pockets for magnets into its underside so it snaps onto a steel disc glued in
         the ball, checks that it will print, and exports a ready-to-slice Bambu Studio 3MF with its painted colours.</p>
       <h2>How to use it</h2>
       <ol>
         <li><b>Open a figure</b> — drop a .3mf, .stl, .obj or .glb on the page. Files with several figures get a picker. A .glb keeps its colours (texture or materials) as filaments; choose how many under Colours.</li>
         <li><b>Pick the ball</b> — the 60 % or 100 % ball, or type the inner diameter of yours. Set the clearance to the walls.</li>
-        <li><b>Pick the washer</b> — plain or zinc-plated steel (stainless is not magnetic). <i>Compare washers</i> shows which allows the largest figure.</li>
+        <li><b>Pick the steel</b> — a thin steel disc (the default, 20.3 × 0.25 mm) or a washer, plain or zinc-plated (stainless is not magnetic). <i>Compare steel sizes</i> shows which allows the largest figure.
+          The steel is glued on a flat floor printed into the bottom shell; its size (<i>Flat floor Ø</i>) is chosen for each
+          figure unless you type the one you printed, and the exported shell matches it.</li>
         <li><b>Magnets</b> — 1, 2 or 3 pockets for 4 × 2 mm disc magnets are placed automatically; drag them in the underside view.
-          By default every magnet rests on the washer; under a part that floats above the bed (a tail) the magnet shows below it.
+          By default every magnet rests on the steel disc; under a part that floats above the bed (a tail) the magnet shows below it.
           Choose <i>Raised into the figure</i> to hide it in the part instead (it then holds less). Nothing goes below the plane the figure stands on.</li>
         <li><b>Colour it</b> — for single-colour models: pick a colour, press <i>Paint</i> and tap the figure. Each tap fills a part found
           from the shape (up to the valley where an ear, tail, leg or eye meets the body), a separate piece, or a brush patch.
           <i>Show regions</i> previews the parts. Exported as Bambu paint.</li>
-        <li><b>Shape it for the ball</b> (Figure card) — legs or a tail lying straight out past the washer are bent up along the
-          sphere so the figure fits larger, and the base over the washer is made flat (low bumps pressed, gaps under the
+        <li><b>Shape it for the ball</b> (Figure card) — legs or a tail lying straight out past the steel disc are bent up along the
+          sphere so the figure fits larger, and the base over the steel disc is made flat (low bumps pressed, gaps under the
           body filled with a solid flat base) so the magnets have room. Set the bend to <i>Off</i> and the sizes to 0 to keep the
           model exactly as it is.</li>
         <li><b>Turn it</b> — rotate about X, Y and Z by any angle (45° works) if the model is not standing upright.</li>
+        <li><b>Reshape a part</b> (Figure card) — <i>Pick a part</i>, tap a tail, ear or leg, then change its size or bend it at the
+          joint (up, down or sideways). Tap it again later to change it; × puts it back.</li>
+        <li><b>The view</b> — <i>Ball</i> off shows the figure alone; <i>Cut</i> halves the ball; <i>Space</i> shows the room it may use.</li>
         <li><b>Export</b> — the figure 3MF (opens as a Bambu Studio project), an <i>import</i> variant whose colours are renumbered to
           your own project's filament slots (for <i>Import geometry only</i>), and a JSON report. <i>Project or presets…</i> also
           reads Bambu Studio's preset exports (<i>File › Export › Export Preset Bundle</i>: .bbscfg, .bbsflmt, presets .zip):
@@ -542,7 +572,7 @@
         <li>Fit against the ball's inner sphere, the connector rings and the ring opening the figure must pass through when closing.</li>
         <li>Mesh soundness: closed surface, consistent normals, degenerate faces, separate shells.</li>
         <li>Wall thickness, overhangs that need support, layers that start in mid-air, and bed contact (brim advice).</li>
-        <li>Magnet pockets: wall around each pocket, material above it, how high it sits above the washer, and whether it is over the steel.</li>
+        <li>Magnet pockets: wall around each pocket, material above it, how high it sits above the steel, and whether it is over the steel.</li>
       </ul>
       <h2>Privacy</h2>
       <p>Everything runs in your browser: the same Python engine as the desktop version, compiled to WebAssembly (Pyodide).
@@ -561,9 +591,9 @@ python -m pokefit serve --open</code></pre>
       <dl>
         <dt>Are my files uploaded anywhere?</dt>
         <dd>No. The analysis runs in your browser (Python compiled to WebAssembly); files never leave your device.</dd>
-        <dt>Which washer and magnets should I use?</dt>
-        <dd>A plain or zinc-plated steel washer (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets.
-          A 1/4 inch × 1 inch fender washer or a DIN 9021 M6 washer works for the 60 % ball; <i>Compare washers</i> shows which gives the largest figure.</dd>
+        <dt>Which steel and magnets should I use?</dt>
+        <dd>A thin plain or zinc-plated steel disc (stainless is not magnetic), glued inside the ball's bottom, and 4 × 2 mm disc magnets pressed into the pockets.
+          A 20 mm (0.8 inch) disc 0.25 mm thick works for the 60 % ball, and so do washers (DIN 9021 M6, 1/4 inch × 1 inch fender); <i>Compare steel sizes</i> shows which gives the largest figure.</dd>
         <dt>Which file types work?</dt>
         <dd>3MF (including Bambu Studio projects with painted colours and several figures), STL and OBJ.</dd>
         <dt>How do I get print time and filament estimates?</dt>

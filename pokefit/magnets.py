@@ -11,7 +11,7 @@ The underside does not have to be flat. It is described by a height field
 from below up to its ceiling at z_top = z + depth, where z is its seat (the
 pocket's open end). Two seat modes (`PocketSpec.flush`):
 
-  * on the washer (default): z = 0 everywhere, so the magnet always rests on
+  * on the steel (default): z = 0 everywhere, so the magnet always rests on
     the steel. Under a part that floats above the bed (a tail, a raised paw)
     the pocket only goes as far into the part as the magnet reaches, and the
     magnet shows below it;
@@ -25,7 +25,7 @@ Rules (both modes):
     still stands on its original underside;
   * at least `grip` mm of the pocket is surrounded by `wall` mm of material
     (z1 <= z_top - grip all over the walled disc), so a magnet pressed in
-    is held; below that it stands proud of the surface. On the washer this is
+    is held; below that it stands proud of the surface. On the steel this is
     the amount wanted (less is cut, with a warning to glue the magnet) and
     MIN_CUT_GRIP the least that is cut;
   * the walls reach the ceiling (z2 >= z_top over the walled disc) and
@@ -33,14 +33,14 @@ Rules (both modes):
   * (raised, automatic placement) z <= `max_seat`: higher up, the magnet is
     too far from the steel to hold much.
 
-On the washer with `pad` > 0 (the gap fill's height), gaps up to `pad` under a
+On the steel with `pad` > 0 (the gap fill's height), gaps up to `pad` under a
 pocket's walled disc count as filled: the pipeline adds a pad of flat base there
-(`pipeline.Session.pads`), so the magnet is walled from the washer up.
+(`pipeline.Session.pads`), so the magnet is walled from the steel up.
 
 Up to three pockets are placed automatically: spread as far apart as possible
 (stability), deep inside the valid area (thicker walls), low (a magnet any
-distance above the steel holds much less) and, on the washer, where the
-figure itself comes down to the washer (the magnet hidden and held all
+distance above the steel holds much less) and, on the steel, where the
+figure itself comes down to the steel (the magnet hidden and held all
 round). Nothing is cut where a rule fails; the failure is reported with numbers.
 """
 from __future__ import annotations
@@ -66,14 +66,14 @@ MIN_CUT_WALL = 0.2   # mm; thinner than this the pocket would break through the 
 MIN_CUT_GRIP = 0.5   # mm of walled pocket; less than this holds nothing, so the pocket is not cut
 GRID_CELLS = 400     # height-field cells across the figure's larger footprint side
 LATER_SPANS = 3      # solid spans kept above the first one per cell (`HeightField.starts`, for gap fills)
-LOW_SEAT = 0.5       # mm above the washer: higher than this, the hold is noticeably weaker
+LOW_SEAT = 0.5       # mm above the steel: higher than this, the hold is noticeably weaker
 # Placement score, in mm: spread + DEPTH_WEIGHT × min(extra wall, DEPTH_CAP) − SEAT_PENALTY × seat
 # − SHOW_PENALTY × how far the magnet shows below the figure.
 # The first mm of wall beyond the minimum is worth 2 mm of spread (pockets centre
 # in small feet); past that spread wins. 1 mm of seat height costs 5 mm of spread;
-# 1 mm of magnet showing under a part that floats above the washer costs 8 mm
+# 1 mm of magnet showing under a part that floats above the steel costs 8 mm
 # (less of it is held, and it is on view), so a spot where the figure itself
-# reaches the washer wins unless it is much worse placed.
+# reaches the steel wins unless it is much worse placed.
 DEPTH_WEIGHT = 2.0
 DEPTH_CAP = 1.0
 SEAT_PENALTY = 5.0
@@ -88,10 +88,10 @@ class PocketSpec:
     wall: float = 0.8
     ceiling: float = 0.6
     grip: float = 1.2          # min. height of the pocket surrounded by wall
-    max_seat: float = 2.0      # raised, auto placement: highest pocket opening above the washer (the hold fades fast)
-    flush: bool = True         # True: every pocket opens on the washer (z = 0); False: raised into floating parts
-    pad: float = 0.0           # on the washer: gaps up to this high under a pocket's walled disc are filled by a pad
-                               # (`pocket_pads`), so the magnet is walled from the washer up (0 = no pads)
+    max_seat: float = 2.0      # raised, auto placement: highest pocket opening above the steel (the hold fades fast)
+    flush: bool = True         # True: every pocket opens on the steel (z = 0); False: raised into floating parts
+    pad: float = 0.0           # on the steel: gaps up to this high under a pocket's walled disc are filled by a pad
+                               # (`pocket_pads`), so the magnet is walled from the steel up (0 = no pads)
 
 
 @dataclass
@@ -348,10 +348,10 @@ class PocketMap:
     field: HeightField
     seat: np.ndarray       # pocket seat height per cell (inf where no material)
     valid: np.ndarray      # a pocket centred here satisfies every rule
-    room: np.ndarray       # raised: every rule but `max_seat`; on the washer: same as valid
+    room: np.ndarray       # raised: every rule but `max_seat`; on the steel: same as valid
     depth: np.ndarray      # mm from the cell to the nearest invalid one
     show: np.ndarray       # mm of the magnet showing below the figure (highest underside over the pocket − seat)
-    raised_low: float      # on the washer with no valid cell: lowest seat a raised pocket would need (inf: none)
+    raised_low: float      # on the steel with no valid cell: lowest seat a raised pocket would need (inf: none)
     grip: np.ndarray       # mm of the pocket surrounded by wall
 
 
@@ -365,7 +365,7 @@ def _raised(z_hi: np.ndarray, walls: np.ndarray, cover: np.ndarray, spec: Pocket
 
 
 def _seen(f: HeightField, spec: PocketSpec) -> HeightField:
-    """The underside a pocket meets: on the washer with pads, its small gaps filled."""
+    """The underside a pocket meets: on the steel with pads, its small gaps filled."""
     return f.padded(spec.pad) if spec.flush else f
 
 
@@ -381,7 +381,7 @@ def pocket_map(f: HeightField, spec: PocketSpec) -> PocketMap:
     seat, room = _raised(z_hi, walls, cover, spec)
     raised_low = np.inf
     if spec.flush:
-        # On the washer: seat 0; at least MIN_CUT_GRIP mm of the pocket walled, walls and cover as usual.
+        # On the steel: seat 0; at least MIN_CUT_GRIP mm of the pocket walled, walls and cover as usual.
         valid = (np.isfinite(z_hi) & (spec.depth - z_hi >= MIN_CUT_GRIP - eps)
                  & (walls >= spec.depth - eps) & (cover >= spec.depth + spec.ceiling - eps))
         if not valid.any() and room.any():
@@ -398,17 +398,20 @@ def pocket_map(f: HeightField, spec: PocketSpec) -> PocketMap:
     return PocketMap(f, seat, valid, room, depth, show, raised_low, grip)
 
 
-Ring = tuple[float, float, float, float]   # (centre x, centre y, inner r, outer r) in the figure frame
+# Where pocket centres may go on the steel: (centre x, centre y, inner r, outer r) in the figure frame. A solid disc
+# has inner r 0 (a whole disc); a washer's hole makes it a ring.
+Ring = tuple[float, float, float, float]
 
 
 def ring_polygon(ring: Ring) -> Polygon:
     cx, cy, lo, hi = ring
-    return Point(cx, cy).buffer(hi, quad_segs=32).difference(Point(cx, cy).buffer(lo, quad_segs=32))
+    disc = Point(cx, cy).buffer(hi, quad_segs=32)
+    return disc if lo <= 0 else disc.difference(Point(cx, cy).buffer(lo, quad_segs=32))
 
 
 def auto_pockets(meshes: list[trimesh.Trimesh], spec: PocketSpec, ring: Ring | None = None,
                  count: int = 2) -> tuple[list[Pocket], list[Check]]:
-    """Choose `count` pocket positions; with `ring`, all must lie on the washer's steel ring."""
+    """Choose `count` pocket positions; with `ring`, all must lie on the steel (`Ring`)."""
     f = height_field(meshes, margin=spec.diameter / 2 + spec.wall)
     return choose_pockets(pocket_map(f, spec), spec, count, ring)
 
@@ -421,14 +424,14 @@ def _no_room(pm: PocketMap, spec: PocketSpec) -> Check:
         low = float(np.ceil(pm.raised_low * 10 - 1e-9) / 10)
         return Check("pockets:feet", "Underside", "fail",
                      f"Nowhere a pocket fits does the figure come within {spec.depth - MIN_CUT_GRIP:.1f} mm of "
-                     f"the washer, so a magnet resting on the washer would not be held. "
-                     f"Raised into the figure, the lowest pocket would open {low:.1f} mm above the washer.",
+                     f"the steel, so a magnet resting on the steel would not be held. "
+                     f"Raised into the figure, the lowest pocket would open {low:.1f} mm above the steel.",
                      value=low)
     if pm.room.any():
         # Rounded UP to 0.1 mm, so a limit set to this value admits the lowest spot.
         low = float(np.ceil(pm.seat[pm.room].min() * 10 - 1e-9) / 10)
         return Check("pockets:feet", "Underside", "fail",
-                     f"The underside is at least {low:.1f} mm above the washer everywhere a pocket would fit; "
+                     f"The underside is at least {low:.1f} mm above the steel everywhere a pocket would fit; "
                      f"a magnet that high holds little (limit {spec.max_seat:.1f} mm).", value=low)
     thick = np.isfinite(f.z1) & (f.z2 - f.z1 >= spec.depth + spec.ceiling)
     largest = float(ndimage.distance_transform_edt(thick).max() * f.step) if thick.any() else 0.0
@@ -462,7 +465,7 @@ def choose_pockets(pm: PocketMap, spec: PocketSpec, count: int = 2, ring: Ring |
         cand &= (d >= lo) & (d <= hi)
     if not cand.any():
         return [], [Check("pockets:feet", "Underside", "fail",
-                          "The underside has room for pockets, but none of it lies over the washer's steel ring "
+                          "The underside has room for pockets, but none of it lies over the steel "
                           "with the figure placed to fit the ball.")]
     full = np.argwhere(cand)
     all_pts = np.c_[xs[full[:, 1]], ys[full[:, 0]]]
@@ -566,7 +569,7 @@ def choose_pockets(pm: PocketMap, spec: PocketSpec, count: int = 2, ring: Ring |
 
 
 def seat_of(f: HeightField, x: float, y: float, spec: PocketSpec) -> float:
-    """Seat of a pocket at (x, y): 0 on the washer, else the lowest that keeps `grip` mm of it walled
+    """Seat of a pocket at (x, y): 0 on the steel, else the lowest that keeps `grip` mm of it walled
     (≥ 0; inf without material)."""
     _, z1, _ = _seen(f, spec).window(x, y, spec.diameter / 2 + spec.wall)
     z1 = z1[np.isfinite(z1)]
@@ -595,7 +598,7 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
         # Walled height of the pocket: from the highest underside point over the walled disc to the ceiling.
         walled = (d <= r + spec.wall) & np.isfinite(z1)
         grip = float(top - z1[walled].max()) if walled.any() else 0.0
-        # Raised pockets meet `grip` by construction; on the washer a hand-placed one may fall short, and its
+        # Raised pockets meet `grip` by construction; on the steel a hand-placed one may fall short, and its
         # wall is then measured at the height it has (at least MIN_CUT_GRIP).
         need = spec.grip if grip >= spec.grip - 1e-6 else max(grip, MIN_CUT_GRIP)
         bad = ~np.isfinite(z1) | (z1 > top - need + 1e-6) | (z2 < top - 1e-6)
@@ -614,22 +617,22 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
         if not np.isfinite(seat) or (wall + r <= 0 and np.isfinite(z1[inner]).sum() == 0):
             msg = "Pocket centre is not under the figure."
         elif grip < MIN_CUT_GRIP - 1e-6:
-            msg = (f"The figure is {z1[walled].max():.1f} mm above the washer here: a magnet resting on the "
-                   f"washer would reach only {max(grip, 0.0):.1f} mm into it (needs {MIN_CUT_GRIP:.1f}). "
+            msg = (f"The figure is {z1[walled].max():.1f} mm above the steel here: a magnet resting on the "
+                   f"steel would reach only {max(grip, 0.0):.1f} mm into it (needs {MIN_CUT_GRIP:.1f}). "
                    "Move it, or choose the raised seat.")
         else:
             msg = (f"Breaks through the side by {-wall:.2f} mm, " if wall < 0 else f"Wall {wall:.2f} mm (min {spec.wall:.1f}), ")
             msg = (msg +
                    f"ceiling {'covered' if ok_ceil else f'only {covered:.0%} covered'}. ")
-            msg += ("Sits on the washer." if seat < 0.05 else
-                    f"Opening {seat:.1f} mm above the washer" +
+            msg += ("Sits on the steel." if seat < 0.05 else
+                    f"Opening {seat:.1f} mm above the steel" +
                     (" (too far to hold much)." if seat > spec.max_seat else
                      " (weaker hold)." if seat > LOW_SEAT else "."))
             proud = float(z1[solid].max() - seat) if solid.any() else 0.0
-            # The magnet always rests on the washer (or its raised seat); what can be missing is wall round its
-            # lower side, where the figure's underside lies above the washer and nothing fills the gap.
+            # The magnet always rests on the steel (or its raised seat); what can be missing is wall round its
+            # lower side, where the figure's underside lies above the steel and nothing fills the gap.
             rise = float(z1[walled].max() - seat) if walled.any() else 0.0
-            where = "the washer" if spec.flush else "the pocket's opening"
+            where = "the steel" if spec.flush else "the pocket's opening"
             fix = (" Raise “Fill gaps up to” to at least that to wall it in." if spec.flush and rise <= 10 else "")
             if grip < spec.grip - 1e-6:
                 msg += (f" The figure's underside is up to {rise:.1f} mm above {where} round it, so only "
@@ -637,7 +640,7 @@ def validate_pockets(source: HeightField | list[trimesh.Trimesh], pockets: list[
                         + fix)
             elif proud > 0.05:
                 msg += (f" The figure's underside is up to {proud:.1f} mm above {where} here, so the magnet's "
-                        f"lower side shows by that much (it still rests on the washer)." + fix)
+                        f"lower side shows by that much (it still rests on the steel)." + fix)
         if status == "fail":
             msg += " Not cut."
         checks.append(Check(f"pocket:{i + 1}", f"Pocket {i + 1}", status, msg, round(wall, 2),
@@ -719,8 +722,9 @@ def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> t
     return out, checks
 
 
-def required_washer(pockets: list[Pocket], spec: PocketSpec) -> tuple[float, float]:
-    """(min OD, max ID) for every pocket to sit on steel, the washer centred on the pockets' centroid."""
+def required_steel(pockets: list[Pocket], spec: PocketSpec) -> tuple[float, float]:
+    """(min OD, max hole) for every pocket to lie fully on steel centred on the pockets' centroid (a solid disc:
+    only the OD matters)."""
     if len(pockets) < 2:
         return spec.diameter, 0.0
     xy = np.array([[p.x, p.y] for p in pockets])

@@ -1,4 +1,4 @@
-"""Pokéball shell geometry: sphere fitting and the flat-bottom / washer-seat cut.
+"""Pokéball shell geometry: sphere fitting and the flat-bottom / steel seat cut.
 
 The shell is a dome in its native frame (pole on +z), e.g. the
 `0_ball_shell_2x` object of pokeball.3mf.
@@ -6,7 +6,7 @@ The shell is a dome in its native frame (pole on +z), e.g. the
 * Outer: the dome is cut by a horizontal plane so the cut face is a disk of
   `disk` mm diameter (final print size) — the ball rests on it.
 * Inner: the cavity above a horizontal plane is filled, giving an inner flat
-  of `fill` mm diameter. Used as the washer seat (fill = washer OD) and to keep
+  of `fill` mm diameter. Used as the seat for the steel disc or washer (fill = its OD) and to keep
   the pole wall thick. Keep fill >= disk so the pole wall never thins.
 """
 from __future__ import annotations
@@ -109,6 +109,6 @@ def flat_spot(shell: trimesh.Trimesh, scale: float, disk: float, fill: float) ->
     return FlatSpotResult(out, r_out, r_in, (z_flat - z_fill) * scale, (r_out - r_in) * scale)
 
 
-def washer_seat_depth(r_inner_final: float, washer_od: float) -> float:
-    """How far above the inner pole the washer seat (inner flat of diameter OD) sits, final mm."""
-    return r_inner_final - cap_height(r_inner_final, washer_od)
+def steel_seat_depth(r_inner_final: float, steel_od: float) -> float:
+    """How far above the inner pole the seat for the steel (inner flat of diameter OD) sits, final mm."""
+    return r_inner_final - cap_height(r_inner_final, steel_od)

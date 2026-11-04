@@ -78,11 +78,11 @@ const lid = shell(0xe5484d, true);
 lid.position.set(0, 0, R);
 hinge.add(lid);
 
-// Steel washer on the inner floor, and the figure on it.
+// A steel disc on the inner floor, and the figure on it.
 const floorY = -Math.sqrt(r * r - 9 * 9) + 0.2;
-const washer = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 1.4, 64), mat(0xb9c2cc, 0.25, 0.9));
-washer.position.y = floorY + 0.7;
-rig.add(washer);
+const steel = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 1.4, 64), mat(0xb9c2cc, 0.25, 0.9));
+steel.position.y = floorY + 0.7;
+rig.add(steel);
 
 /** An original round critter: body, ears, feet, eyes, cheeks. */
 function critter(): THREE.Group {

@@ -4,9 +4,9 @@ import trimesh
 
 from pokefit.ball import Ball, Cavity
 from pokefit.fit import annulus_margin, best_offset, check_fit, max_scale, prepare_points
-from pokefit.washer import Washer
+from pokefit.steel import Steel
 
-THIN = Washer("t", "test", 10.0, 2.0, 0.5)
+THIN = Steel("t", "test", 10.0, 2.0, 0.5)
 
 
 def plain_ball(r: float = 30.0) -> Ball:

@@ -1,7 +1,7 @@
 /**
  * Web Worker running the pokefit Python engine in the browser (Pyodide), so the
  * static site (pokefit.party) needs no server. Messages:
- *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | washers | preview | faces | pick | paintPrepare | colourPieces | export
+ *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | steels | preview | faces | pick | paintPrepare | limb | colourPieces | export
  *   out: { id, ok: true, result } | { id, ok: false, error } | { status: string }
  */
 import Module from "manifold-3d";
@@ -56,7 +56,7 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
       case "setReference": result = api.set_reference(args[0] as string, args[1] as Uint8Array); break;
       case "setBallModel": result = api.set_ball_model(args[0] as string, args[1] as Uint8Array); break;
       case "analyse": result = api.run_analyse(args[0] as string, args[1] as string, args[2] === true); break;
-      case "washers": result = api.washers(args[0] as string, args[1] as string); break;
+      case "steels": result = api.steels(args[0] as string, args[1] as string); break;
       case "preview": {
         const p = api.preview(args[0] as string, args[1] as string, (args[2] as string | undefined) ?? "null");
         const bytes = p.toJs();
@@ -68,6 +68,7 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
       case "faces": result = api.faces(args[0] as string, args[1] as string, (args[2] as string | undefined) ?? "null"); break;
       case "pick": result = api.pick_face(args[0] as string, args[1] as string, args[2] as string); break;
       case "paintPrepare": result = api.paint_prepare(args[0] as string, args[1] as string, args[2] as string); break;
+      case "limb": result = api.limb(args[0] as string, args[1] as string, args[2] as string); break;
       case "colourPieces": result = api.colour_pieces(args[0] as string, args[1] as string, args[2] as string); break;
       case "export": {
         const p = api.run_export(args[0] as string, args[1] as string);

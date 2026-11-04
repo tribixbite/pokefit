@@ -9,14 +9,17 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
 - scales it to the **largest size that fits** the ball's inner sphere, connector rings and ring opening
   (60 % or 100 % ball, or any inner diameter);
 - cuts **1–3 magnet pockets** (4 × 2 mm discs) into its underside — flat feet or not — so it snaps onto a
-  **steel washer** glued inside the ball (magnets rest on the washer; optionally raised into floating parts),
-  and compares washers;
-- **shapes the figure for the ball**: legs or a tail lying straight out past the washer are bent up along the
+  **thin steel disc** (or a washer) glued inside the ball (magnets rest on the steel, anywhere on a solid disc;
+  optionally raised into floating parts), and compares steel sizes;
+- picks the **flat floor** printed into the bottom shell for each figure (a wider floor sits higher, where the ball
+  is wider: a wide figure fits much larger on a thin disc), or uses the one you type; the shell export matches it;
+- **reshapes a part** you tap (a tail, ear or leg): resize it or bend it at its joint, easing in so it curves;
+- **shapes the figure for the ball**: legs or a tail lying straight out past the floor are bent up along the
   sphere so it fits larger (automatic for limbs, more for wide, low figures, only when it helps), and the base is
-  made flat over the washer (18 mm, or any diameter): low bumps pressed flat (≤ 1.2 mm), gaps under the body up to
-  2.5 mm filled with a solid flat base (round the washer, everywhere under the figure, inside a circle you place
+  made flat over the steel disc (20.3 mm, or any diameter): low bumps pressed flat (≤ 1.2 mm), gaps under the body up to
+  2.5 mm filled with a solid flat base (round the steel disc, everywhere under the figure, inside a circle you place
   or inside an outline you draw under the body), so magnets have room and the belly needs no support; a magnet
-  resting on the washer gets a small pad of the same fill round it, so it is walled from the washer up. Paint and texture colour are kept (only vertices move; the
+  resting on the steel gets a small pad of the same fill round it, so it is walled from the steel up. Paint and texture colour are kept (only vertices move; the
   flat base is its own part);
 - **strengthens thin parts** (optional): ears, tail tips and flames get a minimum thickness where they join the
   figure, tapering toward their tips; a thin neck between two bigger parts (a small tail tip under a big flame)
@@ -40,7 +43,7 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   so the exported file has no non-manifold edges;
 - **re-opens its own exports**: a figure exported before has its magnet pockets found, filled in and placed again
   as movable pockets, and its old flat base taken off (the settings make it again), so an export can be edited;
-- **remembers your settings** (ball, washer, magnets, height, shape, simplify) in your browser, and lets you set them before
+- **remembers your settings** (ball, steel, floor, magnets, height, shape, simplify) in your browser, and lets you set them before
   opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;
 - **exports a Bambu Studio 3MF** that keeps painted colours, plus a variant renumbered to your own project's
@@ -80,12 +83,12 @@ Needs Python 3.11+ and [bun](https://bun.sh); Bambu Studio for slicing.
 pip install -e .            # add ".[full]" for the self-intersection check
 cd web && bun install && bun run build && cd ..
 python -m pokefit serve --open                       # web UI at http://127.0.0.1:8765
-python -m pokefit fit figure.3mf --diameter 44 --magnets 2 --washers --out out/ --slice --x10
+python -m pokefit fit figure.3mf --diameter 44 --magnets 2 --steels --out out/ --slice --x10
 ```
 
 The ball's measurements ship with the package. The ball model itself (MakerWorld
 [#2045372](https://makerworld.com/en/models/2045372), not redistributed here) is only needed for the
-washer-seat bottom shell: put `pokeball.3mf` in the repo folder, or load it on the website.
+bottom shell with the floor for the steel: put `pokeball.3mf` in the repo folder, or load it on the website.
 
 ## Development
 

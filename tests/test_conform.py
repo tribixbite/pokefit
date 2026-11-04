@@ -12,9 +12,9 @@ from pokefit.ball import Cavity, load_ball
 from pokefit.conform import FILL_NAME, ConformSpec, base_fill, conform, lift_curve
 from pokefit.model3mf import Part
 from pokefit.pipeline import DEFAULT_BALL, Params, analyse, open_session, pick, preview_faces
-from pokefit.washer import get_washer
+from pokefit.steel import get_steel
 
-CAVITY = Cavity(load_ball(DEFAULT_BALL), 0.6, get_washer("M6"), 1.0)
+CAVITY = Cavity(load_ball(DEFAULT_BALL), 0.6, get_steel("M6"), 1.0)
 
 
 def _part(mesh: trimesh.Trimesh, name: str = "fig", extra: dict[int, str] | None = None) -> Part:
@@ -80,7 +80,7 @@ def test_round_underside_is_pressed_and_filled_over_the_disc() -> None:
     s = info.scale_after
     centre = out[0].vertices[:, :2].mean(axis=0)
     r = np.linalg.norm(base.vertices[:, :2] - centre, axis=1) * s
-    assert r.max() <= 9.0 + 0.5                                        # within the washer disc
+    assert r.max() <= 9.0 + 0.5                                        # within the steel disc
     assert abs(base.vertices[:, 2].min()) < 1e-9                       # stands on the bed
     assert info.fill_mm2 > 50
 
@@ -89,12 +89,14 @@ def test_off_leaves_the_geometry_alone(tmp_path: Path) -> None:
     stl = tmp_path / "fig.stl"
     sitting_figure().export(stl)
     s = open_session(stl, work_dir=tmp_path / "w")
-    off = Params(bend=0, flat_base=0, magnets=0)
+    # On the M6 washer's own seat (a narrow floor), where bending the legs pays; a wide printed floor needs none.
+    seat = {"steel": "M6", "floor_diameter": 0}
+    off = Params(bend=0, flat_base=0, magnets=0, **seat)
     assert s.conform_spec(off) is None
     plain = s.unit_parts(off)
-    shaped = s.unit_parts(Params(magnets=0))
+    shaped = s.unit_parts(Params(magnets=0, **seat))
     assert len(shaped) == 2 and shaped[1].name == FILL_NAME and len(plain) == 1
-    rep, _ = analyse(s, Params(magnets=0))
+    rep, _ = analyse(s, Params(magnets=0, **seat))
     assert "conform" in rep.fit and any(c["id"] == "conform" for c in rep.to_dict()["checks"])
     rep_off, _ = analyse(s, off)
     assert rep.fit["max_scale"] > rep_off.fit["max_scale"]
@@ -182,7 +184,7 @@ def _four_legs(tmp_path: Path) -> Path:
 def test_a_fill_circle_fills_only_inside_it_wherever_it_is_placed(tmp_path: Path) -> None:
     s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
     auto = [p for p in s.unit_parts(Params(magnets=0, flat_fill=8)) if p.name == FILL_NAME][0]
-    assert np.ptp(auto.vertices[:, 0]) > 10                         # round the washer: out to the legs
+    assert np.ptp(auto.vertices[:, 0]) > 10                         # round the steel: out to the legs
     for cx in (0.0, 2.0):
         params = Params(magnets=0, flat_fill=8, fill_circle={"x": cx, "y": 0.0, "d": 6.0})
         base = [p for p in s.unit_parts(params) if p.name == FILL_NAME][0]
@@ -210,7 +212,7 @@ def test_a_height_asked_for_is_printed_unless_it_does_not_fit(tmp_path: Path) ->
         Params(figure_height=0)
 
 
-def test_magnets_on_the_washer_get_pads_so_they_are_walled_from_the_washer_up(tmp_path: Path) -> None:
+def test_magnets_on_the_steel_get_pads_so_they_are_walled_from_the_steel_up(tmp_path: Path) -> None:
     """2.5 mm of air under the belly and a tiny fill circle: the pockets get pads filling that gap round them."""
     s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
     params = Params(magnets=2, flat_fill=4, fill_circle={"x": 0.0, "y": 0.0, "d": 1.0})
@@ -218,7 +220,7 @@ def test_magnets_on_the_washer_get_pads_so_they_are_walled_from_the_washer_up(tm
     d = rep.to_dict()
     pocket_checks = [c for c in d["checks"] if c["id"].startswith("pocket:")]
     assert len(d["pockets"]) == 2 and all(p["z"] == 0.0 for p in d["pockets"])
-    assert all(c["status"] == "pass" and "Sits on the washer" in c["message"] for c in pocket_checks)
+    assert all(c["status"] == "pass" and "Sits on the steel" in c["message"] for c in pocket_checks)
     assert not any("glue" in c["message"] for c in pocket_checks)
     pad = s.pads(params)
     assert pad is not None and any(p.name == FILL_NAME for p in s.figure_parts(params))
@@ -246,11 +248,14 @@ def test_exported_parts_have_no_non_manifold_edges(tmp_path: Path) -> None:
 
 def test_fill_everywhere_and_a_drawn_shape(tmp_path: Path) -> None:
     s = open_session(_four_legs(tmp_path), work_dir=tmp_path / "w")
-    every = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="all")) if p.name == FILL_NAME][0]
+    seat = {"steel": "M6", "floor_diameter": 0}         # the print size the gap heights below were measured at
+    every = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="all", **seat))
+             if p.name == FILL_NAME][0]
     assert np.ptp(every.vertices[:, 0]) > 13 and np.ptp(every.vertices[:, 1]) > 8      # under the whole belly
-    assert [p for p in s.unit_parts(Params(magnets=0, flat_fill=2, fill_area="all")) if p.name == FILL_NAME] == []
+    assert [p for p in s.unit_parts(Params(magnets=0, flat_fill=2, fill_area="all", **seat))
+            if p.name == FILL_NAME] == []
     tri = [[-5.0, -3.5], [5.0, -3.5], [0.0, 3.5]]
-    shaped = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="shape", fill_shape=tri))
+    shaped = [p for p in s.unit_parts(Params(magnets=0, flat_fill=3, fill_area="shape", fill_shape=tri, **seat))
               if p.name == FILL_NAME][0]
     v = shaped.vertices
     assert 8 < np.ptp(v[:, 0]) <= 10.2 and 5.5 < np.ptp(v[:, 1]) <= 7.2

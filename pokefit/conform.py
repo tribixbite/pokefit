@@ -1,7 +1,7 @@
 """Conform a figure to the ball's floor: bend outstretched legs and tails up along the sphere, and
-press the base flat over the washer.
+press the base flat over the steel disc.
 
-Why: the cavity floor is flat only over the washer (an M6 DIN 9021 is 18 mm across); beyond it the
+Why: the cavity floor is flat only over the steel (the default disc is 20.3 mm across); beyond it the
 sphere rises (60 % ball: 2 mm up at 13.7 mm from the axis, 4 mm at 15.7 mm). Feet or a tail lying
 straight out reach that slope first, which caps the figure's size; and a rounded underside rests on
 a point, which leaves the magnets little to sit on.
@@ -25,7 +25,7 @@ colour and the tap-to-paint topology all carry over exactly.
   scale settles (ROUNDS).
 
 **Flatten**: vertices below the plane z = t are lifted onto it, and then the figure drops by t.
-This gives a flat contact patch on the washer. t is the smallest depth at which FLAT_TARGET of
+This gives a flat contact patch on the steel disc. t is the smallest depth at which FLAT_TARGET of
 the figure's footprint over the disc touches the bed, capped at `max_depth` mm. A base that is
 already flat needs t ≈ 0 and is left alone.
 """
@@ -45,6 +45,7 @@ from .model3mf import Part
 BAND = 0.30          # lowest fraction of the height that a bend lifts fully
 FADE = 0.20          # ...fading to no lift over this fraction above it
 EASE = 3.0           # mm over which the lift's slope eases in past the disc edge
+LIFT_LEAD = 2.1      # mm: the lift starts this far inside the floor's reach (`lift_start`)
 MAX_SLOPE = np.tan(np.radians(40.0))
 LIMB_TOP = 0.5       # a low part whose first solid span ends below this fraction of the height is a limb
 MIN_GAIN = 0.01      # auto bend is kept only if the figure fits at least 1 % larger
@@ -63,7 +64,7 @@ OUTLINE_ROUNDS = 3   # Laplacian passes rounding the fill's grid-stepped outline
 @dataclass
 class ConformSpec:
     bend: float | None = None       # None = automatic, 0 = off, else strength 0..1
-    flat_diameter: float = 18.0     # mm, the disc pressed flat (default: the washer); 0 = off
+    flat_diameter: float = 18.0     # mm, the disc pressed flat (the pipeline: the steel's diameter); 0 = off
     max_depth: float = DEFAULT_MAX_DEPTH  # mm, deepest press for the flat base
     fill: float = DEFAULT_FILL      # mm, largest gap under the figure filled by the flat base (0 = off)
     scale: float | None = None      # print scale to design for (None = the largest that fits)
@@ -103,6 +104,14 @@ def lift_curve(cavity: Cavity, r_flat: float, r_max: float, step: float = 0.05) 
     slope *= np.clip((r - r_flat) / EASE, 0.0, 1.0)
     lift = np.concatenate([[0.0], np.cumsum((slope[1:] + slope[:-1]) / 2 * step)])
     return r, lift
+
+
+def lift_start(cavity: Cavity) -> float:
+    """Where a bend's lift starts at the latest (final mm from the axis): LIFT_LEAD inside how far the figure may
+    reach on the floor (`Cavity.floor_radius`). On a steel's own seat that is the pressed disc's edge, where the lift
+    has always started (M6 washer: 11.1 - 2.1 = 9.0 mm; the gain is sensitive to it: starting 0.2 mm later cut a
+    sitting figure's from 8 % to 0.4 %); on a wider printed floor it moves out with the floor's edge."""
+    return cavity.floor_radius - LIFT_LEAD
 
 
 def band_weight(z: np.ndarray, height: float) -> np.ndarray:
@@ -197,7 +206,7 @@ def _shape(v0: np.ndarray, parts: list[Part], axis: np.ndarray, s: float, k: flo
     w = band_weight(v0[:, 2], height)
     v = v0.copy()
     if k > 0:
-        r, lift = lift_curve(cavity, max(r_flat, 1e-6), float(rr.max()))
+        r, lift = lift_curve(cavity, max(r_flat, lift_start(cavity), 1e-6), float(rr.max()))
         v[:, 2] += k * np.interp(rr, r, lift) / s * w
     v[:, 2] -= v[:, 2].min()
     if r_flat <= 0 or spec.max_depth <= 0:
@@ -265,7 +274,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     base: Part | None = None
     if spec.fill > 0 and s_final > 0:
         # A region the user chose fills every gap in it, joined to the figure's footing or not; the default disc
-        # over the washer only the patches joined to where the figure already stands.
+        # over the steel only the patches joined to where the figure already stands.
         region: Region | None = None
         if spec.fill_shape is not None:
             region = shape_region(spec.fill_shape)
@@ -313,7 +322,7 @@ Region = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
 
 
 def disc_region(centres: list[tuple[float, float]], radius: float) -> Region:
-    """Cells within `radius` of any of `centres` (the washer's disc, a fill circle, the pads under pockets)."""
+    """Cells within `radius` of any of `centres` (the steel disc, a fill circle, the pads under pockets)."""
     def inside(gx: np.ndarray, gy: np.ndarray, step: float) -> np.ndarray:
         out = np.zeros(gx.shape, bool)
         for cx, cy in centres:

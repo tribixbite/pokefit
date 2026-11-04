@@ -1,5 +1,5 @@
 /**
- * Remembered settings: the values a user changes once and wants on every figure (ball, washer,
+ * Remembered settings: the values a user changes once and wants on every figure (ball, steel,
  * magnets, pocket sizes, shape for the ball, print height). Kept in this browser's localStorage,
  * read at start-up as the defaults, so they can also be set before a file is opened.
  *
@@ -12,12 +12,12 @@ const KEY = "pokefit.prefs.v1";
 
 /** Remembered params and the type each must have (null allowed where the param itself allows it). */
 const REMEMBERED = {
-  ball_scale: "number", ball_diameter: "number|null", washer: "string", clearance: "number",
+  ball_scale: "number", ball_diameter: "number|null", steel: "string", floor_diameter: "number|null", clearance: "number",
   figure_height: "number|null", magnets: "number", pocket_diameter: "number", pocket_depth: "number",
   pocket_wall: "number", pocket_ceiling: "number", pocket_grip: "number", pocket_max_seat: "number",
   pocket_seat: "string", settings_source: "string", bend: "number|null", flat_base: "number|null",
   flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null", strengthen: "number",
-  simplify: "number|null", despeckle: "number",
+  simplify: "number|null", simplify_auto: "boolean", despeckle: "number",
 } as const satisfies Partial<Record<keyof Params, string>>;
 
 export type RememberedKey = keyof typeof REMEMBERED;
@@ -45,6 +45,7 @@ export function browserStore(): PrefStore | null {
 function valid(key: RememberedKey, v: unknown): boolean {
   const want = REMEMBERED[key];
   if (v === null) return want.endsWith("|null");
+  if (want === "boolean") return typeof v === "boolean";
   if (want.startsWith("number")) return typeof v === "number" && Number.isFinite(v);
   return typeof v === "string" && v.length > 0 && v.length < 64;
 }
@@ -64,8 +65,12 @@ export function readPrefs(store: PrefStore | null): Prefs {
   try {
     const raw: unknown = JSON.parse(store.getItem(KEY) ?? "{}");
     if (!raw || typeof raw !== "object") return {};
+    const entries = Object.entries(raw);
+    // Saved before steel discs (2026-11-04): the steel was "washer" (a washer someone picked stays picked).
+    const old = entries.find(([k]) => k === "washer");
+    if (old && !entries.some(([k]) => k === "steel")) entries.push(["steel", old[1]]);
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(raw)) {
+    for (const [k, v] of entries) {
       if (k in REMEMBERED && valid(k as RememberedKey, v)) out[k] = v;
     }
     return out as Prefs;

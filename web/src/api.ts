@@ -6,7 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
-  ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, SliceVariants, WasherRow,
+  ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, LimbRegion, SliceVariants, SteelRow,
 } from "./types";
 import { versioned } from "./version";
 
@@ -93,7 +93,7 @@ export function engineMode(): Mode {
   return mode;
 }
 
-/** Engine configuration: washers, filament slots, slicer availability. Decides local vs browser. */
+/** Engine configuration: steels, filament slots, slicer availability. Decides local vs browser. */
 export async function getConfig(): Promise<Config> {
   try {
     const res = await fetch("/api/config", { headers: { Accept: "application/json" } });
@@ -148,7 +148,7 @@ export async function setReference(file: File): Promise<Config> {
   return json<Config>(await call("setReference", [file.name, bytes], [bytes.buffer]));
 }
 
-/** Browser engine: the user's copy of the ball model, so exports include the washer-seat shell. */
+/** Browser engine: the user's copy of the ball model, so exports include the steel-seat shell. */
 export async function setBallModel(file: File): Promise<string> {
   if (mode === "local") throw new Error("The local version reads pokeball.3mf from its folder.");
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -161,9 +161,9 @@ export async function analyse(session: string, params: Params, quick = false): P
   return json<Report>(await call("analyse", [session, JSON.stringify(params), quick]));
 }
 
-export async function washers(session: string, params: Params): Promise<WasherRow[]> {
-  if (mode === "local") return postJson<WasherRow[]>("/api/washers", { session, params });
-  return json<WasherRow[]>(await call("washers", [session, JSON.stringify(params)]));
+export async function steels(session: string, params: Params): Promise<SteelRow[]> {
+  if (mode === "local") return postJson<SteelRow[]>("/api/steels", { session, params });
+  return json<SteelRow[]>(await call("steels", [session, JSON.stringify(params)]));
 }
 
 let lastPreview = "";
@@ -208,6 +208,13 @@ export async function preparePaint(session: string, params: Params,
 }
 
 /** The connected patches of filament `filament`, largest first ("Split by piece"). */
+/** The limb under a tap, for "Reshape a part" (its triangles are highlighted while it is being changed). */
+export async function limb(session: string, params: Params,
+  req: { point: number[]; normal: number[]; angle: number } | { part: number; face: number; angle: number }): Promise<LimbRegion> {
+  if (mode === "local") return postJson<LimbRegion>("/api/limb", { session, params, ...req });
+  return json<LimbRegion>(await call("limb", [session, JSON.stringify(params), JSON.stringify(req)]));
+}
+
 export async function colourPieces(session: string, params: Params, filament: number): Promise<ColourPiece[]> {
   if (mode === "local") {
     return (await postJson<{ pieces: ColourPiece[] }>("/api/colour_pieces", { session, params, filament })).pieces;

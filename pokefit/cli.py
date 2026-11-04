@@ -1,8 +1,8 @@
 """Command line: `python -m pokefit fit|serve|ball`.
 
-  python -m pokefit fit figure.3mf [--ball 0.6 | --diameter 44] [--washer M6] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
+  python -m pokefit fit figure.3mf [--ball 0.6 | --diameter 44] [--steel D20] [--scale 85%] [--magnets 2] [--out DIR] [--slice] [--x10]
   python -m pokefit serve [--port 8765] [--open]
-  python -m pokefit ball [--ball 0.6] [--washer M6]
+  python -m pokefit ball [--ball 0.6] [--steel D20]
   python -m pokefit photos --front F.png [--left L.png] [--back B.png] [--right R.png | --no-mirror-right] --out fig.glb
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from .washer import CATALOGUE, DEFAULT_WASHER
+from .steel import CATALOGUE, DEFAULT_STEEL
 
 ICON = {"pass": "ok  ", "warn": "WARN", "fail": "FAIL", "info": "info"}
 
@@ -85,17 +85,18 @@ def cmd_photos(a: argparse.Namespace) -> int:
 def cmd_fit(a: argparse.Namespace) -> int:
     from .pipeline import Params, analyse, export, open_session, slice_variants
 
-    params = Params(ball_scale=a.ball, ball_diameter=a.diameter, washer=a.washer, clearance=a.clearance,
+    params = Params(ball_scale=a.ball, ball_diameter=a.diameter, steel=a.steel, clearance=a.clearance,
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
                     rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
                     texture_colours=a.texture_colours, texture_details=a.details, bend=_bend(a.bend), flat_base=a.flat_base,
-                    flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth)
+                    flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth,
+                    floor_diameter=None if a.floor in (None, "auto") else float(a.floor))
     s = open_session(a.input)
-    rep, _ = analyse(s, params, recommend=a.washers)
+    rep, _ = analyse(s, params, recommend=a.steels)
     f = rep.fit
     print(f"{rep.object['name']}  ({rep.object['faces']} faces, {len(rep.object['parts'])} parts)")
     print(f"ball {rep.ball['scale']:.0%} (inner Ø {rep.ball['inner_diameter']:.1f} mm): floor z "
-          f"{rep.ball['floor_z']:.1f}, washer {rep.ball['washer']['label']}")
+          f"{rep.ball['floor_z']:.1f}, steel {rep.ball['steel']['label']}")
     if f["scale"] > 0:
         print(f"scale {f['scale']:.1%} -> {f['height_mm']:.1f} mm tall (max {f['max_scale']:.1%} = "
               f"{f['max_height_mm']:.1f} mm), offset ({f['offset'][0]:.1f}, {f['offset'][1]:.1f}) mm")
@@ -103,9 +104,9 @@ def cmd_fit(a: argparse.Namespace) -> int:
         print(f"pocket at ({p['x']:.2f}, {p['y']:.2f}) mm, figure frame, opening {p['z']:.2f} mm above the bed")
     for c in rep.checks:
         print(f"  [{ICON[c['status']]}] {c['title']}: {c['message']}")
-    if rep.washers:
-        print("washer options (largest figure first):")
-        for w in rep.washers:
+    if rep.steels:
+        print("steel options (largest figure first):")
+        for w in rep.steels:
             print(f"  {w['key']:9s} {w['height_mm']:5.1f} mm  {'on steel' if w['pockets_on_steel'] else 'pockets OFF steel'}"
                   f"  {w['label']}")
     print(f"overall: {rep.status.upper()}  ({rep.timings['total']:.1f} s)")
@@ -131,11 +132,11 @@ def cmd_fit(a: argparse.Namespace) -> int:
 def cmd_ball(a: argparse.Namespace) -> int:
     from .ball import Cavity, load_ball
     from .pipeline import CACHE_DIR, DEFAULT_BALL
-    from .washer import get_washer
+    from .steel import get_steel
 
     b = load_ball(DEFAULT_BALL, CACHE_DIR)
     s = a.diameter / (2 * b.r_inner) if a.diameter else a.ball
-    c = Cavity(b, s, get_washer(a.washer), a.clearance)
+    c = Cavity(b, s, get_steel(a.steel), a.clearance)
     print(f"inner R {b.r_inner:.3f} (x{s:.3f} = {c.r_inner:.2f}, inner Ø {2 * c.r_inner:.2f}), "
           f"ring span {b.ring_span:.2f}, aperture {b.aperture:.2f}")
     print(f"floor z {c.floor_z:.2f}, top z {c.top_z:.2f}, room {c.top_z - c.floor_z:.2f} mm")
@@ -159,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--ball", type=float, default=0.6, help="ball print scale (0.6 = the 60%% ball)")
         p.add_argument("--diameter", type=float, help="ball inner diameter in mm (overrides --ball)")
-        p.add_argument("--washer", default=DEFAULT_WASHER, help=f"{', '.join(CATALOGUE)} or 'OD,ID,T' mm")
+        p.add_argument("--steel", "--washer", dest="steel", default=DEFAULT_STEEL,
+                       help=f"steel disc or washer glued in the ball: {', '.join(CATALOGUE)} or 'OD,ID,T' mm (ID 0 = a solid disc)")
         p.add_argument("--clearance", type=float, default=1.0, help="gap to the ball walls, mm")
 
     f = sub.add_parser("fit", help="analyse a figure, optionally export and slice")
@@ -172,8 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--rotate-z", type=float, default=0.0)
     f.add_argument("--magnets", type=int, default=2, choices=[0, 1, 2, 3], help="number of magnet pockets")
     f.add_argument("--no-magnets", action="store_true", help="same as --magnets 0")
-    f.add_argument("--magnet-seat", choices=["washer", "raised"], default="washer",
-                   help="washer: magnets rest on the washer (default); raised: pockets move up into parts "
+    f.add_argument("--magnet-seat", choices=["steel", "washer", "raised"], default="steel",
+                   help="steel: magnets rest on the steel disc (default; 'washer' is the old name); raised: pockets move up into parts "
                         "that float above the bed")
     f.add_argument("--colours", type=int, metavar="N", dest="texture_colours",
                    help="GLB/glTF: reduce the file's colours (texture, vertex colours) to N filaments "
@@ -182,14 +184,17 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--details", type=int, default=0, choices=[0, 1, 2, 3],
                    help="GLB/glTF: keep up to N small, high-contrast features (eyes, a mouth) as their own "
                         "filaments on top of --colours, instead of merging them into a big colour")
-    f.add_argument("--bend", default="auto", help="bend legs/tail lying out past the washer up along the sphere: "
+    f.add_argument("--bend", default="auto", help="bend legs/tail lying out past the steel up along the sphere: "
                                                   "auto (default), off, or a strength 0..1")
-    f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the washer's; 0 = off)")
+    f.add_argument("--floor", default="auto", help="flat floor printed into the bottom shell, mm (auto = the one "
+                   "that fits this figure largest; 0 = the steel's own seat)")
+    f.add_argument("--flat-base", type=float, help="diameter of the flat base, mm (default: the steel's; 0 = off)")
     f.add_argument("--press", type=float, default=1.2, help="press the base flat by up to this, mm (0 = off)")
     f.add_argument("--fill", type=float, default=2.5, help="fill gaps up to this under the base, mm (0 = off)")
     f.add_argument("--paint-depth", type=float, metavar="MM",
                    help="how far paint reaches into the figure (0 = unlimited; default: the project's setting)")
-    f.add_argument("--washers", action="store_true", help="compare every catalogue washer (slower)")
+    f.add_argument("--steels", "--washers", dest="steels", action="store_true",
+                   help="compare every catalogue steel disc and washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")
     f.add_argument("--slice", action="store_true", help="Bambu Studio time/filament, supports off vs auto")
     f.add_argument("--x10", action="store_true", help="also slice a plate of 10")

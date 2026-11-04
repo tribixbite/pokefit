@@ -3,11 +3,11 @@ import pytest
 import trimesh
 
 from conftest import two_footed
-from pokefit.magnets import (Pocket, PocketSpec, auto_pockets, cut_pockets, find_feet, height_field, required_washer,
-                             seat_pockets, validate_pockets)
+from pokefit.magnets import (Pocket, PocketSpec, auto_pockets, cut_pockets, find_feet, height_field, required_steel,
+                             ring_polygon, seat_pockets, validate_pockets)
 from pokefit.model3mf import Part
 
-SPEC = PocketSpec()                     # default: openings on the washer
+SPEC = PocketSpec()                     # default: openings on the steel
 RAISED = PocketSpec(flush=False)        # openings move up into parts above the bed
 
 
@@ -55,7 +55,7 @@ def test_pockets_constrained_to_ring() -> None:
 def test_ring_unreachable_fails() -> None:
     slab = trimesh.creation.box([40, 10, 8]).apply_translation([0, 0, 4])
     pockets, checks = auto_pockets([slab], SPEC, ring=(0.0, 60.0, 5.29, 6.91))
-    assert pockets == [] and "steel ring" in checks[0].message
+    assert pockets == [] and "lies over the steel" in checks[0].message
 
 
 def test_small_feet_fail() -> None:
@@ -93,8 +93,8 @@ def test_cut_skips_untouched_parts(box_feet: trimesh.Trimesh) -> None:
     assert new[1] is parts[1]
 
 
-def test_required_washer() -> None:
-    od, id_ = required_washer([Pocket(-10, 0), Pocket(10, 0)], SPEC)
+def test_required_steel() -> None:
+    od, id_ = required_steel([Pocket(-10, 0), Pocket(10, 0)], SPEC)
     assert od == pytest.approx(20 + 4.18)
     assert id_ == pytest.approx(2 * (10 - 2.09))
 
@@ -211,21 +211,21 @@ def test_height_field_overlapping_parts() -> None:
 def test_too_high_everywhere_fails() -> None:
     m = _raised_body(lift=4.0)                       # seat 3.0 mm > max_seat 2.0
     pockets, checks = auto_pockets([m], RAISED, count=1)
-    assert pockets == [] and checks[0].status == "fail" and "3.0 mm above the washer" in checks[0].message
+    assert pockets == [] and checks[0].status == "fail" and "3.0 mm above the steel" in checks[0].message
 
 
-# --------------------------------------------------------------- on the washer (default)
+# --------------------------------------------------------------- on the steel (default)
 
 
-def test_washer_pocket_under_floating_part() -> None:
-    """Belly 1 mm above the bed: the pocket opens on the washer and only goes 1.2 mm into the belly."""
+def test_steel_pocket_under_floating_part() -> None:
+    """Belly 1 mm above the bed: the pocket opens on the steel and only goes 1.2 mm into the belly."""
     m = _raised_body(lift=1.0)
     pockets, checks = auto_pockets([m], SPEC, count=1)
     assert len(pockets) == 1 and checks[0].status == "pass"
     (p,) = pockets
     assert p.z == 0.0
     (v,) = validate_pockets([m], pockets, SPEC)
-    assert v.status == "pass" and "Sits on the washer" in v.message and "up to 1.0 mm above the washer here" in v.message
+    assert v.status == "pass" and "Sits on the steel" in v.message and "up to 1.0 mm above the steel here" in v.message
     (new,), _ = cut_pockets([_part(m)], pockets, SPEC)
     assert new.vertices[:, 2].min() == pytest.approx(0.0, abs=1e-6)
     r = SPEC.diameter / 2
@@ -233,7 +233,7 @@ def test_washer_pocket_under_floating_part() -> None:
     assert m.volume - new.mesh().volume == pytest.approx(area * (SPEC.depth - 1.0), rel=0.02)
 
 
-def test_washer_pocket_short_grip_warns() -> None:
+def test_steel_pocket_short_grip_warns() -> None:
     """Belly 1.5 mm up: 0.7 mm of pocket left in the figure, less than the 1.2 mm grip: cut, with a warning."""
     m = _raised_body(lift=1.5)
     pockets, _ = auto_pockets([m], SPEC, count=1)
@@ -242,7 +242,7 @@ def test_washer_pocket_short_grip_warns() -> None:
     assert v.status == "warn" and "only 0.7 mm" in v.message and "glue" in v.message
 
 
-def test_washer_too_far_up_fails_with_raised_hint() -> None:
+def test_steel_too_far_up_fails_with_raised_hint() -> None:
     """Belly 2 mm up: 0.2 mm would be walled, which holds nothing; the message gives the raised alternative."""
     m = _raised_body(lift=2.0)
     pockets, checks = auto_pockets([m], SPEC, count=1)
@@ -250,7 +250,7 @@ def test_washer_too_far_up_fails_with_raised_hint() -> None:
     assert "Raised into the figure" in checks[0].message and checks[0].value == pytest.approx(1.0)
 
 
-def test_washer_prefers_where_the_figure_reaches_the_washer() -> None:
+def test_steel_prefers_where_the_figure_reaches_the_steel() -> None:
     """A long body 0.8 mm above the bed with one wide foot at its end: the single pocket goes in the foot,
     although the middle of the footprint (preferred for one pocket) has room too."""
     body = trimesh.creation.box([40, 12, 6]).apply_translation([0, 0, 0.8 + 3])
@@ -263,8 +263,8 @@ def test_washer_prefers_where_the_figure_reaches_the_washer() -> None:
     assert v.status == "pass" and "shows" not in v.message
 
 
-def test_hand_placed_washer_pocket_follows_the_mode() -> None:
-    """A pocket placed by hand under a floating part: seat 0 on the washer, raised otherwise."""
+def test_hand_placed_steel_pocket_follows_the_mode() -> None:
+    """A pocket placed by hand under a floating part: seat 0 on the steel, raised otherwise."""
     m = _raised_body(lift=1.0)
     f = height_field([m], margin=3.0)
     assert seat_pockets(f, [Pocket(0, 0)], SPEC)[0].z == 0.0
@@ -275,4 +275,14 @@ def test_hand_placed_washer_pocket_follows_the_mode() -> None:
     assert seat_pockets(f2, [Pocket(0, 0)], RAISED)[0].z == pytest.approx(0.5, abs=0.02)
     far = _raised_body(lift=2.0)
     (v,) = validate_pockets([far], [Pocket(0, 0)], SPEC)
-    assert v.status == "fail" and "2.0 mm above the washer here" in v.message and "Not cut" in v.message
+    assert v.status == "fail" and "2.0 mm above the steel here" in v.message and "Not cut" in v.message
+
+
+def test_a_solid_disc_takes_a_pocket_at_its_middle() -> None:
+    """With a washer's hole the middle is off the steel; a solid disc's whole area is steel (inner radius 0)."""
+    slab = trimesh.creation.box([8, 8, 8]).apply_translation([0, 0, 4])
+    pockets, _ = auto_pockets([slab], SPEC, ring=(0.0, 0.0, 0.0, 8.07), count=1)
+    assert len(pockets) == 1 and np.hypot(pockets[0].x, pockets[0].y) < 1.0
+    none, checks = auto_pockets([slab], SPEC, ring=(0.0, 0.0, 5.29, 6.91), count=1)
+    assert none == [] and "lies over the steel" in checks[0].message
+    assert ring_polygon((0.0, 0.0, 0.0, 3.0)).area == pytest.approx(np.pi * 9, rel=0.01)

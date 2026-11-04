@@ -7,7 +7,7 @@ Read this first, then `NOTES.md` (the working tracker: open items, measurements,
 
 **pokefit** (live at https://pokefit.party) fits any 3D-printable figure (3MF / STL / OBJ / GLB) inside a
 printed Pokéball (MakerWorld "functional Pokéball - no glue"), scaled to the largest size that fits; cuts
-1–3 pockets for 4 × 2 mm disc magnets so it snaps onto a steel washer glued in the ball; colours
+1–3 pockets for 4 × 2 mm disc magnets so it snaps onto a thin steel disc (or a washer) glued in the ball; colours
 single-colour models (tap-to-paint) and turns a GLB's texture into filament paint; checks printability;
 exports Bambu Studio 3MFs and (locally) slices them with the Bambu Studio CLI.
 
@@ -51,7 +51,7 @@ Optional, for slicing: Bambu Studio installed (Windows default path, or set `POK
 executable). Without it, slice features report "not found" and the slicer tests skip.
 
 Files NOT in the repo (tests needing them skip; get them from the user if needed):
-- `pokeball.3mf` (repo root): the ball model, MakerWorld #2045372. Needed to export the washer-seat shell
+- `pokeball.3mf` (repo root): the ball model, MakerWorld #2045372. Needed to export the bottom shell (flat floor for the steel)
   STL and for `tests/test_ball.py`.
 - `pokeball60goodPrinted.3mf` (repo root): the user's real Bambu project (X2D, 0.4 nozzle, PETG, 0.16 mm,
   process "printed_ball_shells"). Without it the bundled copy `pokefit/profiles/x2d_petg_printed_ball_shells.json`
@@ -84,7 +84,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 |---|---|
 | `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. `analyse(printing=False)` (the UI's first call: `quick` in webapi/server) leaves the printability checks for a second call (`Report.printing_pending`). Start here. |
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
-| `conform.py` | Shape for the ball: bend limbs lying out past the washer up along the sphere, press/fill a flat base over the washer, or over a region (`Params.fill_area`: washer / all / circle / drawn `fill_shape`; `base_fill(region)`). Vertex moves only (paint survives) + a separate "flat base" part. Magnet pads (`Session.pads`, `PocketSpec.pad`) are flat-base parts too. |
+| `conform.py` | Shape for the ball: bend limbs lying out past the floor up along the sphere (`lift_start`: 2.1 mm inside the floor's reach, the tuned start on a steel's own seat), press/fill a flat base over the steel disc, or over a region (`Params.fill_area`: steel / all / circle / drawn `fill_shape`; `base_fill(region)`). Vertex moves only (paint survives) + a separate "flat base" part. Magnet pads (`Session.pads`, `PocketSpec.pad`) are flat-base parts too. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
 | `toolchange.py` | Colour-change cost: per-layer filament use from paint, per-nozzle simulation, best X2D nozzle split, cost per palette size (report `toolchange`), `best_value_count` = a glTF's "auto" palette size (`Session.auto_texture_count`). Calibrated on Bambu slices. |
 | `printer.py` | The printer via beambam's CLI (a subprocess: beambam has its own venv and cannot run in Pyodide): loaded AMS filaments, per-unit nozzle routing, track-switch detection, `print_progress`, `print_file_check` (`beambam analyze`, reads the file only), `CameraProxy` (live view child, tree-killed); colours matched with `remap.match_slots`. Read-only. Credentials live in `~/.x2d/credentials`, never in the repo. |
@@ -99,10 +99,11 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
 | `simplify.py` | Import-time simplification (`Params.simplify`: a triangle count, or a share of the file's 0..1 = the UI levels, `simplify.resolve`): meshoptimizer's WASM (`vendor/`, npm 1.3.0) via wasmtime locally and the worker's WebAssembly in Pyodide (identical output); `meshopt_SimplifyRegularizeLight`, 0.1 % error cap, fold cleanup; paint carried per nearest triangle, glTF colour sampled after (`read_gltf(path, simplify)`). `Session.use_simplify` reloads the file when the setting changes. |
 | `strengthen.py` | Strengthen thin parts (`Params.strengthen` mm): voxel parity fill + EDT local thickness at print size, taper from the join (full target) to the tip (`TIP`), necks get the full target; pushed only across a feature (`ACROSS`: the inward ray must leave the solid nearby), so points and rims do not grow knobs; vertices move only. Runs in `Session._conformed` after conform. |
 | `oldpockets.py` | Re-opening an export: `strip_pockets` (in `FigureObject.parts`, before the load repair) finds pokefit's pockets by shape, removes them (repair closes the holes) and drops "flat base" parts; `Session.old_pockets` -> report `object.old_pockets` -> UI `placeOldPockets` sets manual pockets. |
-| `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball, max-scale fit (Nelder–Mead with restarts), washer-seat shell. |
-| `magnets.py` | Height field of the underside (first solid span + `LATER_SPANS` above it; `bridged`/`padded` fill air over a low paw up to its leg), pocket maps, auto/manual placement (`choose_pockets`: thinned search keeps every patch of room), seat modes `washer` (default) / `raised`. Pads and the pocket map use `Session.pocket_spec` (the fill actually used, after `_auto_fill`). |
+| `fit.py`, `ball.py`, `shell.py` | Cavity model of the ball (`Cavity.floor_diameter`: the flat floor filled into the bottom shell, `floor_radius`), max-scale fit (Nelder–Mead with restarts on an active set of the tightest hull points, checked against all), `best_floor` (the floor that fits the figure largest: `Session.floor`, auto unless `Params.floor_diameter`), the bottom shell with that floor. |
+| `magnets.py` | Height field of the underside (first solid span + `LATER_SPANS` above it; `bridged`/`padded` fill air over a low paw up to its leg), pocket maps, auto/manual placement (`choose_pockets`: thinned search keeps every patch of room), seat modes `steel` (default; `washer` still accepted) / `raised`; a `Ring` with inner radius 0 is a solid disc. Pads and the pocket map use `Session.pocket_spec` (the fill actually used, after `_auto_fill`). |
 | `checks.py`, `planar.py` | Printability checks (watertight, thickness, overhangs, islands, bed contact, supports verdict); section regions without rtree. |
-| `slicer.py`, `remap.py`, `washer.py` | Bambu CLI slicing + settings adaptation; import-file slot matching; washer catalogue. |
+| `slicer.py`, `remap.py`, `steel.py` | Bambu CLI slicing + settings adaptation; import-file slot matching; the steel catalogue (`Steel`: thin discs D20 = 0.8" × 0.01" default, D15; washers M5/M6/M8, US; `id` 0 = solid disc). `Params.from_dict` maps the old `washer` key and values. |
+| `reshape.py` | "Reshape a part": `find_limb` (paint's part region from the tapped triangle, joint, geodesic weight), `apply_limbs` (scale/bend/swing about the joint, eased over `BLEND` of its length; vertices only), `Params.limbs`, `pipeline.limb_region` / `POST /api/limb`. Applied in `Session._shaped_parts` before the floor and conform. |
 | `server.py`, `webapi.py`, `cli.py` | Local HTTP API; the Pyodide-facing API (same functions); CLI. |
 
 | Web (`web/`) | Role |
@@ -110,7 +111,8 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
 | `src/main.ts` | UI state (`state.params` mirrors `Params`), cards, analyse/export flow. |
 | `src/scene.ts` | three.js viewer, ball/figure/pockets, tap picking. |
 | `src/colorize.ts` | Colours card: palette (each swatch shows the slot it prints from), paint modes, brush strokes (scene.ts `setStrokeHandler`), stamp drags (`setStampHandler`: box -> ellipse semi-axes at the hit depth), "Shape map" view (scene.ts `shapeMaterial`: per-vertex crease/relief shader), Mirror, Pick colour, Grow/Shrink last step, Undo/Redo, keyboard shortcuts, GLB "Filaments" slider; `prepare` builds tap structures (and the mirror plane) when painting starts. |
-| `src/paintdock.ts` | While painting, the Colours card's painting controls move (same elements) onto the 3D view; foldable; `scene.setBottomInset` frames the figure above it. |
+| `src/paintdock.ts` | While painting, the Colours card's painting controls move (same elements) onto the 3D view; foldable; `scene.setBottomInset` frames the figure above it; `scene.focusFigure` zooms to the figure while painting, `restoreView` after. |
+| `src/reshape.ts` | "Reshape a part" (Figure card): pick a limb on the view (`scene.highlightFaces`), Size / Bend / Swing / Joint sliders -> `Params.limbs`. |
 | `src/collapse.ts` | Collapsible cards: every panel card's `h2` becomes a toggle; collapsed keys in localStorage `pokefit.collapsed.v1`; `sectionToggle` for folds inside a card ("Prints from", the paint dock). |
 | `src/simplify.ts` | Simplify control maths: levels (`LEVELS`, shares), log-scale slider <-> share, typed count -> budget. |
 | `src/prefs.ts` | Remembered settings (localStorage `pokefit.prefs.v1`): only changed, whitelisted, type-checked params; defaults before a file is open. |

@@ -2,7 +2,7 @@
  * Underside view (looking up at the figure's base, figure frame, final mm) with
  * draggable magnet pockets. Shows the underside heights (dark = on the bed,
  * lighter = higher), the outline of what touches the bed, where a pocket centre
- * keeps its walls (green), and the washer's steel ring as the ball will hold it.
+ * keeps its walls (green), and the steel (a disc, or a washer's ring) as the ball will hold it.
  * The gap fill's circle can be dragged, and its outline drawn freehand (`setDrawing`).
  */
 import { bounds, insideRings, onSteel } from "./geometry";
@@ -96,8 +96,8 @@ export class UndersideEditor {
     // Height image: row 0 is the grid's lowest y, which this mirrored group draws at the bottom.
     g.appendChild(el("image", { href: data.height_png, x: ext[0], y: ext[1], width: ext[2] - ext[0],
       height: ext[3] - ext[1], preserveAspectRatio: "none", class: "u-height" }));
-    g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.washer_od / 2, class: "u-washer" }));
-    g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.washer_id / 2, class: "u-hole" }));
+    g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.steel_od / 2, class: "u-steel" }));
+    if (ring.steel_id > 0) g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: ring.steel_id / 2, class: "u-hole" }));
     g.appendChild(el("circle", { cx: ring.x, cy: ring.y, r: (ring.inner + ring.outer) / 2, class: "u-band",
       "stroke-width": ring.outer - ring.inner }));
     g.appendChild(el("path", { d: ringsPath(data.feet), class: "u-feet", "fill-rule": "evenodd" }));

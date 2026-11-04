@@ -75,9 +75,11 @@ def test_brush_paints_a_disc_of_connected_surface() -> None:
     topo = TopologyCache([part])
     f = _face_at(part, [0, 0, 10], [0, 0, 1])
     faces = region_faces(topo, 0, f, "brush", 15, radius=3)
+    # Every triangle the brush touches (any part of it within 3 mm of the tap), not only those whose centre is.
     c = ball.triangles_center
-    d = np.linalg.norm(c[faces] - c[f], axis=1)
-    assert d.max() <= 3 + 1e-9 and len(faces) == int(np.sum(np.linalg.norm(c - c[f], axis=1) <= 3))
+    closest = trimesh.triangles.closest_point(ball.triangles, np.repeat(c[f][None], len(ball.faces), axis=0))
+    touched = np.nonzero(np.linalg.norm(closest - c[f], axis=1) <= 3)[0]
+    assert sorted(faces.tolist()) == touched.tolist()
     with pytest.raises(ValueError):
         PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "brush"})
 
@@ -180,11 +182,11 @@ def critter(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_pipeline_paint_survives_the_pocket_cut(critter: Path, tmp_path: Path) -> None:
     """Pick the body's top in the preview frame, paint its region, export: the pocketed 3MF carries it."""
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    base = Params(washer="US1/4x1")
+    base = Params(steel="US1/4x1")
     top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
     hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
     assert hit["faces"] >= 2 and hit["distance"] < 1e-6
-    params = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+    params = Params(steel="US1/4x1", colours=["#E05028", "#161616"],
                     paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
     rep, _ = analyse(s, params)
     assert rep.object["colours"] == ["#E05028", "#161616"]
@@ -219,12 +221,12 @@ def test_a_paint_edit_recolours_the_same_preview_and_reuses_the_shape_work(critt
     import base64
 
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    base = Params(washer="US1/4x1")
+    base = Params(steel="US1/4x1")
     analyse(s, base)
     before = preview_faces(s, base)
     top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
     hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
-    params = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+    params = Params(steel="US1/4x1", colours=["#E05028", "#161616"],
                     paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
     after = preview_faces(s, params)
     assert after["signature"] == before["signature"] and after["colours"] == ["#E05028", "#161616"]
@@ -350,11 +352,11 @@ def test_specks_take_the_colour_round_them() -> None:
 
 def test_pick_reports_the_colour_under_the_tap_and_the_mirror(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    base = Params(washer="US1/4x1")
+    base = Params(steel="US1/4x1")
     top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
     hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
     assert hit["filament"] == 1 and hit["mirrored"] is False
-    painted = Params(washer="US1/4x1", colours=["#E05028", "#161616"],
+    painted = Params(steel="US1/4x1", colours=["#E05028", "#161616"],
                      paint=[{"part": hit["part"], "face": hit["face"], "filament": 2, "mode": "region", "angle": 30}])
     assert pick(s, painted, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)["filament"] == 2
     # A head with ears mirrors across its middle: an ear's tap has a twin, and counts both.
@@ -547,7 +549,7 @@ def test_split_by_piece_gives_each_patch_of_a_colour_its_own_filament() -> None:
 
 def test_pieces_of_colour_reports_print_areas(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    params = Params(washer="US1/4x1")
+    params = Params(steel="US1/4x1")
     res = pieces_of_colour(s, params, 1)
     scale = s.paint_scale(params)
     total = sum(float(p.mesh().area) for p in s.figure_parts(params)[:len(s.topology(params))])
@@ -573,13 +575,80 @@ def test_removing_a_colour_renumbers_the_files_filaments(critter: Path, tmp_path
     assert _painted_area(out, 3) == 0
     # Through the pipeline: the critter painted 2 on 1, filament 1 removed (into 2, then renumbered 1).
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    base = Params(washer="US1/4x1")
+    base = Params(steel="US1/4x1")
     top_z = float(np.vstack([p.vertices for p in s.unit_parts(base)])[:, 2].max())
     hit = pick(s, base, [0.0, 0.0, top_z], [0.0, 0.0, 1.0], "region", 30.0)
-    removed = Params(washer="US1/4x1", colours=["#161616"], colour_map=[1, 1],
+    removed = Params(steel="US1/4x1", colours=["#161616"], colour_map=[1, 1],
                      paint=[{"part": hit["part"], "face": hit["face"], "filament": 1, "mode": "region", "angle": 30}])
     rep, final = analyse(s, removed)
     assert rep.object["colours"] == ["#161616"] and s.extruder(removed) == 1
     assert all((p.extruder or 1) == 1 for p in final)
     with pytest.raises(ValueError):
         Params(colour_map=[0])
+
+
+def _line_stroke(part: Part, y: float, z: float, x0: float, x1: float, step: float) -> tuple[list[int], list[float]]:
+    """Faces and points of a straight drag along x at (y, z) on a top face (samples `step` mm apart)."""
+    xs = np.arange(x0, x1 + 1e-9, step)
+    pts = np.c_[xs, np.full_like(xs, y), np.full_like(xs, z)]
+    return [pick_face([part], p, np.array([0.0, 0, 1]))[1] for p in pts], pts.ravel().tolist()
+
+
+def test_a_fine_brush_follows_the_drag_across_big_triangles() -> None:
+    """A 0.25 mm brush dragged across 4 mm triangles paints a 0.5 mm wide line where the drag went: every painted
+    piece lies within the brush of the line, and its area is the line's (length x width + the round ends). The
+    triangle centres the stroke passes are up to ~1.5 mm off the line; a stroke following them, or painting only
+    triangles whose centre is within the brush, was a broken zigzag."""
+    box = trimesh.creation.box([20, 20, 4]).subdivide_to_size(4.0)
+    part = _part(box)
+    topo = TopologyCache([part])
+    faces, pts = _line_stroke(part, 3.0, 2.0, -8.0, 8.0, 0.7)
+    r = 0.25
+    op = PaintOp(0, faces[0], 2, "brush", radius=r, path=tuple(faces[1:]), points=tuple(pts))
+    assert PaintOp.from_dict(op.to_dict()) == op
+    (out,) = apply_paint([part], [op], topo)
+    area, far = 0.0, 0.0
+    for i, a in out.tri_extra.items():
+        fp = attr_paint(a)
+        assert fp is not None
+        for tri, st in leaves(parse_tree(fp.code), list(out.vertices[out.faces[i]])):
+            if st != 2:
+                continue
+            t = np.asarray(tri)
+            area += float(np.linalg.norm(np.cross(t[1] - t[0], t[2] - t[0]))) / 2
+            c = t.mean(axis=0)
+            off = np.hypot(c[1] - 3.0, max(abs(c[0]) - 8.0, 0.0))
+            far = max(far, off - float(np.linalg.norm(t - c, axis=1).max()))
+    assert far <= r + 1e-6
+    assert area == pytest.approx(16 * 2 * r + np.pi * r * r, rel=0.12)
+
+
+def test_a_fine_mirrored_stroke_paints_the_same_line_on_both_sides() -> None:
+    """A 0.3 mm stroke over the head's side, mirrored: the reflected drag is laid back onto the surface there, so the
+    other side gets the same line (equal areas), not nothing where the reflection floats off the surface."""
+    m = _two_eared()
+    part = _part(m)
+    topo = TopologyCache([part])
+    t = topo.part(0)
+    side = np.array([np.cos(0.3), np.sin(0.3), 0.0])
+    up = np.array([0.0, 0.0, 1.0])
+    raw = np.array([10 * (side * np.cos(a) + up * np.sin(a)) for a in np.linspace(-0.3, 0.3, 30)])
+    faces, pts = t.project(raw)
+    op = PaintOp(0, int(faces[0]), 2, "brush", radius=0.3, path=tuple(int(f) for f in faces[1:]),
+                 mirror=True, points=tuple(pts.ravel().tolist()))
+    (out,) = apply_paint([part], [op], topo)
+    lr = m.triangles_center @ side
+    right = left = 0.0
+    for i, a in out.tri_extra.items():
+        fp = attr_paint(a)
+        assert fp is not None
+        for tri, st in leaves(parse_tree(fp.code), list(out.vertices[out.faces[i]])):
+            if st == 2:
+                ar = float(np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0]))) / 2
+                if lr[i] > 0:
+                    right += ar
+                else:
+                    left += ar
+    length = 10 * 0.6
+    assert right == pytest.approx(length * 0.6 + np.pi * 0.09, rel=0.15)
+    assert left == pytest.approx(right, rel=0.15)

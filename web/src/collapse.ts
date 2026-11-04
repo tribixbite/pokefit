@@ -31,7 +31,7 @@ export function saveCollapsed(store: CollapseStore | null, keys: Set<string>): v
   }
 }
 
-/** A stable key for a card: its id, else its heading as a slug ("Ball & washer" -> "ball-washer"). */
+/** A stable key for a card: its id, else its heading as a slug ("Ball & steel" -> "ball-steel"). */
 export function cardKey(id: string, heading: string): string {
   return id || heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }

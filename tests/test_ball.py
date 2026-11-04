@@ -5,7 +5,7 @@ import pytest
 
 from pokefit.ball import SEAT_MARGIN, Cavity, load_ball
 from pokefit.shell import cap_height
-from pokefit.washer import CATALOGUE, get_washer
+from pokefit.steel import CATALOGUE, get_steel
 
 from conftest import BALL_3MF as BALL_JSON, BALL_MODEL as BALL
 
@@ -56,10 +56,24 @@ def test_cavity_floor_and_limits(ball) -> None:
     assert c.allowed_radius(np.array([c.top_z + 0.01]))[0] < 0
 
 
-def test_custom_washer() -> None:
-    w = get_washer("20,6,1.5")
+def test_custom_steel() -> None:
+    w = get_steel("20,6,1.5")
     assert (w.od, w.id, w.thickness) == (20, 6, 1.5)
     lo, hi = w.annulus(4.18)
     assert lo == pytest.approx(3 + 2.09) and hi == pytest.approx(10 - 2.09)
     with pytest.raises(ValueError):
-        get_washer("bogus")
+        get_steel("bogus")
+
+
+def test_a_solid_disc_holds_magnets_anywhere_on_it_and_sits_lower() -> None:
+    """The default steel is the user's thin disc (0.8" x 0.01"): no hole, so a magnet may lie at its middle; its
+    floor is the seat plus 0.25 mm. Custom "OD,0,T" is a disc too."""
+    d = CATALOGUE["D20"]
+    assert d.solid and (d.od, d.thickness) == (pytest.approx(20.32), pytest.approx(0.254))
+    assert d.annulus(4.18) == (0.0, pytest.approx(20.32 / 2 - 2.09))
+    assert CATALOGUE["D15"].od == pytest.approx(14.99) and CATALOGUE["D15"].thickness == pytest.approx(0.508)
+    custom = get_steel("22,0,0.3")
+    assert custom.solid and "disc" in custom.label and custom.annulus(4)[0] == 0.0
+    assert not get_steel("M6").solid and get_steel("M6").to_dict()["solid"] is False
+    cav = Cavity(load_ball(BALL_JSON), 0.6, d, 1.0)
+    assert cav.floor_z == pytest.approx(cav.seat_z + 0.254)

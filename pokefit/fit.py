@@ -1,6 +1,6 @@
 """Largest scale (and XY offset) at which a figure fits the ball cavity.
 
-The figure stands on the cavity floor (washer top). At figure scale `s` and XY
+The figure stands on the cavity floor (the steel's top). At figure scale `s` and XY
 offset `o` (final mm), a figure point q = (x, y, z) — figure frame, lowest
 point at z = 0 — lands at (s·x + o_x, s·y + o_y, floor + s·z). It fits when
 every point's distance from the ball axis is within the cavity's allowed
@@ -17,6 +17,7 @@ offset is a convex problem; Nelder–Mead with a few starts is plenty in 2D.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import shapely
@@ -27,6 +28,11 @@ from .ball import Cavity
 N_SLABS = 200
 HINT_SPAN = 0.15      # max_scale(hint=...): bracket searched around the hint first
 MIN_SCALE = 0.05      # max_scale: smallest scale tried, as a share of the height-limited scale (or of 1)
+ACTIVE = 64           # best_offset: points in the active set it searches on (more join when they limit)
+FLOOR_STEP = 2.0      # best_floor: coarse steps of the flat floor's diameter, mm ...
+FLOOR_FINE = 0.5      # ... then this fine round the best
+FLOOR_MAX = 0.85      # ... up to this share of the ball's inner diameter
+FLOOR_TIE = 0.003     # a smaller floor within this share of the best fit is taken (less filled into the shell)
 
 
 @dataclass
@@ -128,32 +134,25 @@ def best_offset(points: HullPoints, cavity: Cavity, s: float,
     The fit margin alone is concave in the offset, but the annulus term
     (|p + o| >= inner radius) is not, so a coarse grid over plausible offsets
     seeds Nelder-Mead from the three best cells.
+
+    Only the few points nearest the cavity's wall limit the margin, so the search runs on an active set (the
+    ACTIVE tightest points at the start) and every answer is checked against all points: a point that turns out
+    tighter there joins the set and the search goes on from that offset. The optimum over a subset is at least the
+    optimum over all; where all points agree with the subset at its optimum, that offset is the optimum over all.
     """
     allowed = _allowed(points, cavity, s)
     q = s * points.xy
     use_annulus = pockets_unit is not None and annulus is not None
+    qx_all, qy_all = np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1])
 
-    def margins(offs: np.ndarray) -> np.ndarray:
-        """Combined margin for each offset row of `offs` (k, 2)."""
-        d = np.linalg.norm(q[None, :, :] + offs[:, None, :], axis=2)          # (k, n)
-        m = np.min(allowed[None, :] - d, axis=1)
-        if use_annulus:
-            assert pockets_unit is not None and annulus is not None
-            r = np.linalg.norm(s * pockets_unit[None, :, :] + offs[:, None, :], axis=2)
-            m = np.minimum(m, np.min(np.minimum(r - annulus[0], annulus[1] - r), axis=1))
-        return m
+    def full_margin(o: np.ndarray) -> float:
+        """The figure's margin at offset `o` over every point."""
+        return float(np.min(allowed - np.hypot(qx_all + o[0], qy_all + o[1])))
 
-    qx, qy = np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1])
-
-    def neg_margin(o: np.ndarray) -> float:
-        """One offset (Nelder–Mead calls this ~10⁴ times per fit): hypot on columns, no (k, n, 2) array."""
-        if use_annulus:
-            f = -float(margins(o[None, :])[0])
-        else:
-            f = -float(np.min(allowed - np.hypot(qx + o[0], qy + o[1])))
-        if enough is not None and -f >= enough:
-            raise _Enough(np.array(o, float), f)
-        return f
+    def pocket_margin(offs: np.ndarray) -> np.ndarray:
+        assert pockets_unit is not None and annulus is not None
+        r = np.linalg.norm(s * pockets_unit[None, :, :] + offs[:, None, :], axis=2)
+        return np.asarray(np.min(np.minimum(r - annulus[0], annulus[1] - r), axis=1))
 
     centre = -(q.min(axis=0) + q.max(axis=0)) / 2
     starts = [centre]                      # concave case: any start reaches the optimum
@@ -162,18 +161,53 @@ def best_offset(points: HullPoints, cavity: Cavity, s: float,
         half = max(float(np.max(allowed, initial=0.0)), 1.0)
         g = np.linspace(-half, half, 17)
         grid = np.stack(np.meshgrid(g, g), axis=-1).reshape(-1, 2) + centre
-        gm = np.concatenate([margins(grid[i:i + 64]) for i in range(0, len(grid), 64)])
+        gm = np.empty(len(grid))
+        for i in range(0, len(grid), 16):
+            d = np.hypot(qx_all[None, :] + grid[i:i + 16, 0:1], qy_all[None, :] + grid[i:i + 16, 1:2])
+            gm[i:i + 16] = np.min(allowed[None, :] - d, axis=1)
+        gm = np.minimum(gm, pocket_margin(grid))
         starts += [grid[i] for i in np.argsort(-gm)[:3]] + [-s * pockets_unit.mean(axis=0)]
-    best_x, best_f = None, np.inf
-    try:
-        for o0 in starts:
-            x, f = _nelder_mead_restarts(neg_margin, np.asarray(o0, float))
-            if f < best_f:
-                best_x, best_f = x, f
-    except _Enough as hit:
-        return hit.x, -hit.f
-    assert best_x is not None
-    return best_x, -float(best_f)
+
+    def tightest(o: np.ndarray, k: int) -> np.ndarray:
+        m = allowed - np.hypot(qx_all + o[0], qy_all + o[1])
+        return np.argpartition(m, k - 1)[:k] if k < len(m) else np.arange(len(m))
+
+    active = np.unique(np.concatenate([tightest(np.asarray(o0, float), ACTIVE) for o0 in starts]))
+    while True:
+        qx, qy, al = qx_all[active], qy_all[active], allowed[active]
+
+        def neg_margin(o: np.ndarray) -> float:
+            """One offset (Nelder–Mead calls this ~10⁴ times per fit): hypot on columns, no (k, n, 2) array."""
+            f = -float(np.min(al - np.hypot(qx + o[0], qy + o[1])))
+            if use_annulus:
+                f = max(f, -float(pocket_margin(o[None, :])[0]))
+            if enough is not None and -f >= enough:
+                raise _Enough(np.array(o, float), f)
+            return f
+
+        best_x: np.ndarray | None = None
+        best_f = np.inf
+        try:
+            for o0 in starts:
+                x, f = _nelder_mead_restarts(neg_margin, np.asarray(o0, float))
+                if f < best_f:
+                    best_x, best_f = x, f
+        except _Enough as hit:
+            best_x, best_f = hit.x, hit.f
+        assert best_x is not None
+        sub = -float(best_f)
+        real = full_margin(best_x)
+        if use_annulus:
+            real = min(real, float(pocket_margin(best_x[None, :])[0]))
+        if real >= sub - 1e-9 or (enough is not None and real >= enough):
+            return best_x, real
+        # A point outside the set is tighter here: add the tightest ones and go on from this offset.
+        more = tightest(best_x, ACTIVE)
+        grown = np.union1d(active, more)
+        if len(grown) == len(active):          # nothing new (cannot happen with a strictly tighter point): stop
+            return best_x, real
+        active = grown
+        starts = [best_x]
 
 
 def _nelder_mead_restarts(f, x0: np.ndarray, step: float = 1.0, max_restarts: int = 8) -> tuple[np.ndarray, float]:
@@ -205,7 +239,7 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
     brackets the answer within ±HINT_SPAN the bisection starts there (about half the steps).
 
     The cavity fit is bisected first. If the pockets (scaled with the figure)
-    cannot also sit on the washer's steel ring there, the combined constraint
+    cannot also sit on the steel there, the combined constraint
     is bisected below that scale: shrinking the figure only brings the pockets
     closer, and two pockets any distance apart up to the ring's diameter can
     both sit on it, so the combined test is monotone in practice. If not even
@@ -254,3 +288,31 @@ def max_scale(points: HullPoints, cavity: Cavity, pockets_unit: np.ndarray | Non
     off, _ = best_offset(points, cavity, lo, pockets_unit, annulus)
     return FitResult(lo, (float(off[0]), float(off[1])), check_fit(points, cavity, lo, (off[0], off[1])),
                      lo * points.height)
+
+
+def best_floor(points: HullPoints, cavity: Callable[[float], Cavity], d_min: float, d_max: float) -> tuple[float, float]:
+    """(floor diameter, its largest fit scale): the flat floor filled into the bottom shell that lets the figure fit
+    largest. A wider floor sits higher, where the sphere is wider (room for a wide base, less for height); a thin
+    steel disc can lie on any of them. `cavity(d)` builds the cavity for floor diameter d; d_min (the steel's own
+    seat) .. d_max. Coarse steps, then fine ones round the best; the smallest diameter within FLOOR_TIE of the
+    best wins (the fit curve is flat near its top)."""
+    found: dict[float, float] = {}
+    hint: float | None = None
+
+    def scale(d: float) -> float:
+        nonlocal hint
+        d = round(float(np.clip(d, d_min, d_max)), 3)
+        if d not in found:
+            fit = max_scale(points, cavity(d), hint=hint)
+            found[d] = fit.max_scale if fit is not None else 0.0
+            hint = found[d] or hint
+        return found[d]
+
+    for d in [*np.arange(d_min, d_max, FLOOR_STEP), d_max]:
+        scale(d)
+    top = max(found, key=lambda d: found[d])
+    for d in np.arange(top - FLOOR_STEP + FLOOR_FINE, top + FLOOR_STEP, FLOOR_FINE):
+        scale(d)
+    best = max(found.values())
+    pick = min(d for d, v in found.items() if v >= best * (1 - FLOOR_TIE))
+    return pick, found[pick]

@@ -34,12 +34,13 @@ export interface WebApi {
   set_ball_model(name: string, data: Uint8Array): string;
   /** `quick`: the printability checks only if cached (the report says `printing_pending`). */
   run_analyse(sid: string, params: string, quick?: boolean): string;
-  washers(sid: string, params: string): string;
+  steels(sid: string, params: string): string;
   preview(sid: string, params: string, regions: string): { toJs(): Uint8Array; destroy(): void };
   faces(sid: string, params: string, regions: string): string;
   pick_face(sid: string, params: string, req: string): string;
   paint_prepare(sid: string, params: string, req: string): string;
   colour_pieces(sid: string, params: string, req: string): string;
+  limb(sid: string, params: string, req: string): string;
   run_export(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
 }
 

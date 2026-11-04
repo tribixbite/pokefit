@@ -13,8 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, export, open_session, pick, pieces_of_colour,
-                       prepare_paint, preview_faces, preview_glb, safe_stem, washer_table)
+from .pipeline import (Params, Session, analyse, app_config, auto_simplify, export, limb_region, open_session, pick, pieces_of_colour,
+                       prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
 
 WORK = Path("/tmp/pokefit")
@@ -22,7 +22,7 @@ _sessions: dict[str, Session] = {}
 _reference: dict | None = None          # the user's own Bambu project settings, if they loaded one
 _reference_name = ""
 _presets = PresetLibrary()              # imported Bambu presets (no system profiles in the browser)
-_ball_model: Path | None = None         # the user's copy of the ball model (for the washer-seat shell)
+_ball_model: Path | None = None         # the user's copy of the ball model (for the steel seat shell)
 
 
 def _dump(o: Any) -> str:
@@ -68,6 +68,7 @@ def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> 
         s.reference = _reference
     s.presets = _presets
     _sessions[s.id] = s
+    params = auto_simplify(s, params)
     rep, _ = analyse(s, params, printing=not quick)
     return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
 
@@ -87,7 +88,7 @@ def set_reference(name: str, data: Any) -> str:
 
 
 def set_ball_model(name: str, data: Any) -> str:
-    """Accept the user's copy of the ball model so exports include the washer-seat shell."""
+    """Accept the user's copy of the ball model so exports include the steel seat shell."""
     global _ball_model
     from .pipeline import _shell_mesh
     path = WORK / "ball" / Path(name).name
@@ -104,8 +105,8 @@ def run_analyse(sid: str, params_json: str, quick: bool = False) -> str:
     return _dump(rep.to_dict())
 
 
-def washers(sid: str, params_json: str) -> str:
-    return _dump(washer_table(_session(sid), Params.from_dict(json.loads(params_json))))
+def steels(sid: str, params_json: str) -> str:
+    return _dump(steel_table(_session(sid), Params.from_dict(json.loads(params_json))))
 
 
 def _regions(regions_json: str) -> tuple[str, float] | None:
@@ -140,6 +141,14 @@ def paint_prepare(sid: str, params_json: str, req_json: str) -> str:
     return _dump(prepare_paint(_session(sid), Params.from_dict(json.loads(params_json)),
                                str(req.get("mode", "part")), float(req.get("angle", 15.0)),
                                bool(req.get("mirror", False))))
+
+
+def limb(sid: str, params_json: str, req_json: str) -> str:
+    """The limb under a tap (`pipeline.limb_region`): req = {point, normal, angle?} or {part, face, angle?}."""
+    req = json.loads(req_json)
+    at = (int(req["part"]), int(req["face"])) if "part" in req else None
+    return _dump(limb_region(_session(sid), Params.from_dict(json.loads(params_json)), req.get("point"),
+                             req.get("normal"), float(req.get("angle", 15.0)), at))
 
 
 def colour_pieces(sid: str, params_json: str, req_json: str) -> str:

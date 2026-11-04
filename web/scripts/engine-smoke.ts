@@ -160,9 +160,21 @@ legs = [trimesh.creation.box((12.0, 4.0, 4.0)).subdivide().subdivide().subdivide
 for leg, side in zip(legs, (-1, 1)): leg.apply_translation([side * 10.0, 0, 2.0])
 trimesh.util.concatenate([body, *legs]).export("/tmp/sitting.stl")
 `);
-const sitting = JSON.parse(api.load("sitting.stl", pyodide.FS.readFile("/tmp/sitting.stl")));
+// On an M6 washer's own seat (a narrow floor), where bending pays; the floor chosen for it by default is wider.
+const sitting = JSON.parse(api.load("sitting.stl", pyodide.FS.readFile("/tmp/sitting.stl"),
+  JSON.stringify({ steel: "M6", floor_diameter: 0 })));
 const shaped = sitting.report.checks.find((c: { id: string }) => c.id === "conform");
 console.log(`[${secs()} s] conform: ${shaped?.message ?? "none"} parts ${sitting.report.object.parts.length}`);
+const wide = JSON.parse(api.run_analyse(sitting.session, JSON.stringify({ ...sitting.report.params, steel: "D20",
+  floor_diameter: null }), true));
+// Reshape a leg (here a separate box, so it turns about its own middle): the limb under a tap, bent up 40 degrees.
+const legTap = JSON.parse(api.limb(sitting.session, JSON.stringify(wide.params),
+  JSON.stringify({ point: [14.0, 0.0, 4.0], normal: [0, 0, 1], angle: 15 })));
+const bentLeg = JSON.parse(api.run_analyse(sitting.session, JSON.stringify({ ...wide.params,
+  limbs: [{ part: legTap.part, face: legTap.face, angle: 15, scale: 1, bend: 40, swing: 0 }] }), true));
+console.log(`[${secs()} s] floor: auto ${wide.ball.floor_diameter.toFixed(1)} mm, scale ${(wide.fit.max_scale * 100).toFixed(1)} %` +
+  ` (seat: ${(sitting.report.fit.max_scale * 100).toFixed(1)} %); leg: ${legTap.faces.length} triangles, bent: ` +
+  `${(bentLeg.fit.max_scale * 100).toFixed(1)} %`);
 
 // Simplify (meshoptimizer's WebAssembly via the worker's WebAssembly) at load, and a mirror plane (scipy.ndimage).
 pyodide.runPython(`
@@ -190,7 +202,7 @@ const shapeView = JSON.parse(api.faces(dense.session, JSON.stringify(denseParams
 const splitShown = atob(stampFaces.parts[0]).length - atob(plainFaces.parts[0]).length;
 console.log(`[${secs()} s] stamp: ${stamp.faces} faces, ${splitShown} sub-triangles shown, status ${stampRep.status}; ` +
   `shape map ${shapeView.shape?.length ?? 0} part(s)`);
-// A fill outline drawn under the sitting figure, and magnets padded on the washer.
+// A fill outline drawn under the sitting figure, and magnets padded on the steel.
 const outlined = JSON.parse(api.run_analyse(sitting.session, JSON.stringify({ ...sitting.report.params, magnets: 2,
   fill_area: "shape", fill_shape: [[-6, -5], [6, -5], [6, 5], [-6, 5]] })));
 console.log(`[${secs()} s] fill outline: ${outlined.status}, pockets ${outlined.pockets.length}`);
@@ -226,6 +238,10 @@ if (!(shapeView.shape?.length >= 1) || !(atob(shapeView.shape[0]).length > 0)) p
 if (outlined.params.fill_area !== "shape" || outlined.status === undefined) problems.push("fill outline");
 if (pieces.length !== 3) problems.push(`split by piece (${pieces.length} patches, expected 3)`);
 if (!stlEdges.endsWith(", 0 edges not on two")) problems.push(`coloured STL (${stlEdges})`);
+if (!(wide.ball.floor_diameter > 21) || !(legTap.faces.length > 0 && legTap.share < 0.6) ||
+    !(bentLeg.fit.max_scale > 0)) {
+  problems.push("auto floor / reshape a leg");
+}
 if (!shaped || !(sitting.report.fit.conform?.bend > 0) ||
     !sitting.report.object.parts.some((p: { name: string }) => p.name === "flat base")) {   // + a pocket pad: 3
   problems.push("conform (bend + flat base)");
@@ -252,7 +268,7 @@ if (String.fromCharCode(...bytes.slice(0, 4)) !== "glTF") problems.push("preview
 if (!files.some(([n]) => n.endsWith(".3mf"))) problems.push("no 3MF exported");
 if (!rep.checks.some((c: { id: string }) => c.id.startsWith("cut:"))) problems.push("pockets were not cut");
 if (res.status === undefined) problems.push("export result missing status");
-if (haveBall && !files.some(([n]) => n.startsWith("shell_washerseat"))) problems.push(`no shell exported: ${res.note}`);
+if (haveBall && !files.some(([n]) => n.startsWith("shell_floor"))) problems.push(`no shell exported: ${res.note}`);
 if (problems.length) {
   console.error(`FAILED: ${problems.join("; ")}`);
   process.exit(1);

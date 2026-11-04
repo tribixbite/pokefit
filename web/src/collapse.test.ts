@@ -9,7 +9,7 @@ function memory(): CollapseStore & { data: Map<string, string> } {
 describe("collapsible cards", () => {
   it("keys a card by its id, else its heading", () => {
     expect(cardKey("colorCard", "Colours")).toBe("colorCard");
-    expect(cardKey("", "Ball & washer")).toBe("ball-washer");
+    expect(cardKey("", "Ball & steel")).toBe("ball-steel");
     expect(cardKey("", "Print (Bambu Studio)")).toBe("print-bambu-studio");
   });
 

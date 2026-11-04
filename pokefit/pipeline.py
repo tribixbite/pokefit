@@ -24,7 +24,7 @@ import trimesh
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from .ball import Ball, Cavity, load_ball
+from .ball import SEAT_MARGIN, Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
                      supports_verdict, thickness_check)
 from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FILL_OVERLAP, ConformInfo, ConformSpec,
@@ -32,9 +32,9 @@ from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FIL
 from .strengthen import StrengthenInfo, strengthen
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
                        apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
-from .fit import HullPoints, annulus_margin, best_offset, check_fit, max_scale, prepare_points
+from .fit import FLOOR_MAX, HullPoints, annulus_margin, best_floor, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
-                      height_field, pocket_map, required_washer, seat_pockets, validate_pockets)
+                      height_field, pocket_map, required_steel, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
                        remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
@@ -49,12 +49,13 @@ from .repair import repaired
 from .stlcolour import write_coloured_stl
 from .slicer import (SliceResult, adapt_settings, default_slot, grid_positions, reference_settings,
                      resize_filaments, slice_3mf)
-from .washer import CATALOGUE, DEFAULT_WASHER, Washer, get_washer
+from .reshape import apply_limbs, find_limb, find_limb_at, limb_ops
+from .steel import CATALOGUE, DEFAULT_STEEL, Steel, get_steel
 
 ROOT = Path(__file__).resolve().parent.parent
 # The ball's derived measurements (radii, ring profile) ship with the package; the
 # model itself (MakerWorld #2045372) is third-party and only needed locally for
-# the washer-seat shell export.
+# the steel seat shell export.
 BUNDLED_BALL = Path(__file__).resolve().parent / "profiles" / "ball_functional_pokeball.json"
 BALL_MODEL = ROOT / "pokeball.3mf"
 DEFAULT_BALL = BUNDLED_BALL
@@ -63,18 +64,19 @@ DEFAULT_BALL = BUNDLED_BALL
 BUNDLED_REFERENCE = Path(__file__).resolve().parent / "profiles" / "x2d_petg_printed_ball_shells.json"
 DEFAULT_REFERENCE = ROOT / "pokeball60goodPrinted.3mf" if (ROOT / "pokeball60goodPrinted.3mf").exists() else BUNDLED_REFERENCE
 CACHE_DIR = ROOT / ".pokefit_cache"
-SHELL_DISK = 8.0      # outer flat disk of the washer-seat shell, final mm
+SHELL_DISK = 8.0      # outer flat disk of the steel seat shell, final mm
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 SHAPE_CACHE = 4             # fit / underside / printability results kept per session (recent shapes)
 # Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
 COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "colour_map",
-                         "paint_depth",
+                         "paint_depth", "simplify_auto",
                          "texture_colours", "texture_details", "despeckle"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
-DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`)
+DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`) ...
+AUTO_SIMPLIFY = 200_000       # ... or, with `Params.simplify_auto`, load it simplified to this many (`auto_simplify`)
 SIMPLIFY_LOW = 0.07           # the UI's "Low" Simplify level (web/src/simplify.ts LEVELS), a share of the file
 AUTO_FILLS = (4.0, 6.0)        # mm: deeper flat-base fills tried, in order, when no magnet pocket fits at the default
-FILL_AREAS = ("washer", "all", "circle", "shape")
+FILL_AREAS = ("steel", "all", "circle", "shape")
 MAX_SHAPE_POINTS = 400        # points of a drawn fill outline
 SHAPE_COLOUR = "#d9dde4"       # "Shape map" view: the figure's colour under its crease and relief shading
 UNIT_STAMP = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]   # a stamp shape for checking the other fields
@@ -85,7 +87,10 @@ PAD_MARGIN = 0.4              # mm a pocket's pad reaches past its walled disc
 class Params:
     ball_scale: float = 0.6                      # print scale of the ball model (0.6 = the 60 % ball)
     ball_diameter: float | None = None           # inner diameter in mm; overrides ball_scale when set
-    washer: str = DEFAULT_WASHER
+    steel: str = DEFAULT_STEEL
+    # Diameter of the flat floor filled into the bottom shell (the steel is glued on it), mm: None = the one that lets
+    # this figure fit largest (`Session.floor`), 0 = just the steel's own seat. The exported shell is cut to match.
+    floor_diameter: float | None = None
     clearance: float = 1.0
     figure_scale: float | None = None            # None = largest that fits
     # A height in mm to print at (when figure_scale is None): kept across files by the UI, so it is a height, not
@@ -101,8 +106,8 @@ class Params:
     pocket_wall: float = 0.8
     pocket_ceiling: float = 0.6
     pocket_grip: float = 1.2                     # min. pocket height surrounded by wall (sloped undersides)
-    pocket_max_seat: float = 2.0                 # raised, auto placement: highest pocket opening above the washer
-    pocket_seat: str = "washer"                  # "washer": openings on the washer; "raised": into floating parts
+    pocket_max_seat: float = 2.0                 # raised, auto placement: highest pocket opening above the steel
+    pocket_seat: str = "steel"                  # "steel": openings on the steel disc; "raised": into floating parts
     object_id: str | None = None
     slot: int | None = None                      # reference filament slot for slicing/export
     settings_source: str = "reference"           # "reference" (user's printer) or "original"
@@ -123,22 +128,22 @@ class Params:
     # ... plus up to this many "detail" filaments: small features that contrast most with the colour they would
     # merge into (black pupils on a cream head) keep their own (gltf.TextureColours._details). 0..MAX_DETAILS.
     texture_details: int = 0
-    # Conform to the ball's floor (conform.py): bend legs/tails that reach past the washer up along the
+    # Conform to the ball's floor (conform.py): bend legs/tails that reach past the steel up along the
     # sphere (None = automatic, 0 = off, else strength 0..1) and make the base flat over a disc of
-    # `flat_base` mm (None = the washer's diameter, 0 = off): press it by at most `flat_depth` mm,
+    # `flat_base` mm (None = the steel's diameter, 0 = off): press it by at most `flat_depth` mm,
     # then fill gaps up to `flat_fill` mm under the figure with a solid "flat base" part.
     bend: float | None = None
     flat_base: float | None = None
     flat_depth: float = DEFAULT_MAX_DEPTH
     flat_fill: float = DEFAULT_FILL
-    # The flat base's fill over a circle the user places instead of round the washer: {x, y, d} in the figure
+    # The flat base's fill over a circle the user places instead of round the steel: {x, y, d} in the figure
     # frame at scale 1 (file mm, like the figure itself, so it stays put under the figure at any size). Inside
     # it every gap under the figure up to `flat_fill` is filled, connected or not (None = automatic).
     fill_circle: dict[str, float] | None = None
-    # Where gaps are filled: "washer" (round the washer, joined to where the figure stands), "all" (every part
+    # Where gaps are filled: "steel" (round the steel disc, joined to where the figure stands), "all" (every part
     # hovering up to `flat_fill` above the bed, anywhere under the figure), "circle" (`fill_circle`) or "shape"
     # (`fill_shape`: an outline the user drew, [[x, y], ...] in the same frame as `fill_circle`).
-    fill_area: str = "washer"
+    fill_area: str = "steel"
     fill_shape: list[list[float]] | None = None
     # Strengthen thin parts (strengthen.py): thin features get this minimum thickness in mm where they join the
     # figure, tapering toward their tips (0 = off). Measured at `figure_height` if set, else the largest size.
@@ -152,6 +157,12 @@ class Params:
     # (>= 1,000), or to this share of the file's triangles (0 < x < 1: the UI's low / medium / high levels).
     # The shape moves by at most 0.1 % of the figure's size; fewer triangles make every later step faster.
     simplify: float | None = None
+    # Opening a file: a figure of more than DENSE_FACES triangles, with `simplify` unset, loads simplified to
+    # AUTO_SIMPLIFY (`auto_simplify`; the UI then shows that setting, and Off keeps every triangle).
+    simplify_auto: bool = True
+    # Limbs resized or bent (reshape.py `LimbOp` dicts: part, face, angle, scale, bend, swing), applied in order to
+    # the figure as rotated, before the floor is chosen and the conform step runs. None / [] = as in the file.
+    limbs: list[dict[str, Any]] | None = None
     # Painted patches smaller than this (mm² at the print size) take the colour around them: a stray dab costs a
     # filament change on every layer it spans (colorize.Topology.specks). 0 = keep every patch.
     despeckle: float = 0.5
@@ -161,8 +172,13 @@ class Params:
         if isinstance(self.magnets, bool):
             self.magnets = 2 if self.magnets else 0
         self.magnets = max(0, min(3, int(self.magnets)))
-        if self.pocket_seat not in ("washer", "raised"):
-            raise ValueError(f"pocket_seat must be 'washer' or 'raised', not {self.pocket_seat!r}")
+        # Before steel discs (2026-11-04) the steel was always a washer: the old names still mean the same.
+        if self.pocket_seat == "washer":
+            self.pocket_seat = "steel"
+        if self.fill_area == "washer":
+            self.fill_area = "steel"
+        if self.pocket_seat not in ("steel", "raised"):
+            raise ValueError(f"pocket_seat must be 'steel' or 'raised', not {self.pocket_seat!r}")
         if self.colours is not None:
             if not self.colours or not all(isinstance(c, str) and _HEX.fullmatch(c) for c in self.colours):
                 raise ValueError("colours must be a non-empty list of #RRGGBB strings")
@@ -185,8 +201,12 @@ class Params:
             raise ValueError(f"texture_details must be 0..{MAX_DETAILS}")
         if self.bend is not None and not 0 <= float(self.bend) <= 1:
             raise ValueError("bend must be 0..1 (or null for automatic)")
+        if self.limbs:
+            self.limbs = [op.to_dict() for op in limb_ops(self.limbs)]
+        if self.floor_diameter is not None and not 0 <= float(self.floor_diameter) <= 60:
+            raise ValueError("floor_diameter must be 0..60 mm (or null for the best for the figure)")
         if self.flat_base is not None and not 0 <= float(self.flat_base) <= 60:
-            raise ValueError("flat_base must be 0..60 mm (or null for the washer's diameter)")
+            raise ValueError("flat_base must be 0..60 mm (or null for the steel's diameter)")
         if not 0 <= float(self.flat_depth) <= 5:
             raise ValueError("flat_depth must be 0..5 mm")
         if not 0 <= float(self.flat_fill) <= 10:
@@ -200,7 +220,7 @@ class Params:
                 raise ValueError("figure_height must be 1..1000 mm (or null for the largest that fits)")
         if self.fill_area not in FILL_AREAS:
             raise ValueError(f"fill_area must be one of {', '.join(FILL_AREAS)}, not {self.fill_area!r}")
-        if self.fill_circle is not None and self.fill_area == "washer":
+        if self.fill_circle is not None and self.fill_area == "steel":
             self.fill_area = "circle"           # older clients: a circle alone meant "fill inside it"
         if self.fill_shape is not None:
             try:
@@ -244,14 +264,16 @@ class Params:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Params":
+        if "washer" in d and "steel" not in d:
+            d = {**d, "steel": d["washer"]}       # older clients and remembered settings
         known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**known)
 
     @property
     def spec(self) -> PocketSpec:
-        # On the washer, the gap fill also pads each pocket: small gaps under its walled disc are filled, so the
-        # magnet resting on the washer is walled from the washer up (`pocket_pads`).
-        flush = self.pocket_seat == "washer"
+        # On the steel, the gap fill also pads each pocket: small gaps under its walled disc are filled, so the
+        # magnet resting on the steel is walled from the steel up (`pocket_pads`).
+        flush = self.pocket_seat == "steel"
         return PocketSpec(self.pocket_diameter, self.pocket_depth, self.pocket_wall, self.pocket_ceiling,
                           self.pocket_grip, self.pocket_max_seat, flush, float(self.flat_fill) if flush else 0.0)
 
@@ -293,6 +315,8 @@ class Session:
     _pads: dict[str, Part | None] = field(default_factory=dict)            # shape_key -> `pocket_pads` (unit scale)
     _pick_trees: dict[tuple, list[Any]] = field(default_factory=dict)      # figure frame -> `centroid_trees`
     _paint_scale: dict[tuple, float] = field(default_factory=dict)         # `paint_scale` per setup
+    _floors: dict[tuple, float] = field(default_factory=dict)              # `floor` (auto) per setup
+    _shaped: dict[tuple, list[Part]] = field(default_factory=dict)          # orientation + limbs -> parts
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -317,36 +341,71 @@ class Session:
 
     def _key(self, params: Params) -> tuple:
         """Cache key of the figure-frame geometry: the orientation, plus what the conform step
-        depends on when it is on (its settings, the ball size and the clearance; the washer only
+        depends on when it is on (its settings, the ball size and the clearance; the steel only
         through the flat disc's diameter, see `unit_parts`)."""
         return self._spec_key(params, self.conform_spec(params))
+
+    def _figure_key(self, params: Params) -> tuple:
+        """The figure before the conform step: its orientation and the limbs reshaped."""
+        okey = self._orientation(params)
+        return okey + (json.dumps(params.limbs, sort_keys=True),) if params.limbs else okey
 
     def _spec_key(self, params: Params, spec: ConformSpec | None) -> tuple:
         strong = (round(params.strengthen, 3), params.figure_height if params.strengthen else None,
                   round(self.ball_scale(params), 6) if params.strengthen else None,
                   params.clearance if params.strengthen else None)
         if spec is None:
-            return self._orientation(params) + strong
-        return self._orientation(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
+            return self._figure_key(params) + strong + (self._floor_key(params) if params.strengthen else ())
+        return self._figure_key(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
                                              spec.fill_circle, spec.fill_shape, spec.fill_all,
-                                             round(self.ball_scale(params), 6), params.clearance) + strong
+                                             round(self.ball_scale(params), 6), params.clearance) + strong + \
+            self._floor_key(params)
+
+    def _floor_key(self, params: Params) -> tuple:
+        """What of the floor the conform and strengthen steps see: its height and width."""
+        c = self.cavity(params)
+        return (round(c.seat_diameter, 3), round(c.steel.thickness, 4))
+
+    def floor(self, params: Params, steel: Steel | None = None) -> float:
+        """Diameter of the flat floor in the bottom shell: the one asked for (at least the steel's seat), else the
+        one that lets the figure as loaded (rotated, before the conform step) fit largest (`fit.best_floor`).
+        Decided on the unshaped figure, so the conform step can be designed against it."""
+        st = steel or get_steel(params.steel)
+        seat = st.od + SEAT_MARGIN
+        if params.floor_diameter is not None:
+            return max(seat, float(params.floor_diameter))
+        key = (self._figure_key(params), round(self.ball_scale(params), 6), st.od, st.thickness, params.clearance)
+        if key not in self._floors:
+            raw = self._shaped_parts(params)
+            hp = prepare_points(np.vstack([q.vertices for q in raw]))
+            ball_s = self.ball_scale(params)
+            d_max = max(seat, FLOOR_MAX * 2 * self.ball.r_inner * ball_s)
+            d, _ = best_floor(hp, lambda d: Cavity(self.ball, ball_s, st, params.clearance, d), seat, d_max)
+            self._floors[key] = d
+        return self._floors[key]
+
+    def cavity(self, params: Params, steel: Steel | None = None) -> Cavity:
+        """The ball's cavity for these settings: its scale, the steel (`steel` overrides the setting's) on its floor
+        (`floor`), the clearance."""
+        st = steel or get_steel(params.steel)
+        return Cavity(self.ball, self.ball_scale(params), st, params.clearance, self.floor(params, st))
 
     def conform_spec(self, params: Params) -> ConformSpec | None:
         """The conform step's settings, or None when bend and flat base are both off. The default flat-base
         fill is raised (`AUTO_FILLS`) when no magnet pocket fits under the figure with it (`_auto_fill`)."""
-        flat = get_washer(params.washer).od if params.flat_base is None else float(params.flat_base)
+        flat = get_steel(params.steel).od if params.flat_base is None else float(params.flat_base)
         bend = None if params.bend is None else float(params.bend)
         area = params.fill_area
         circle = params.fill_circle if area == "circle" else None
         shape = tuple((float(x), float(y)) for x, y in params.fill_shape) if area == "shape" and params.fill_shape else None
         pressed = flat > 0 and params.flat_depth > 0
-        filled = params.flat_fill > 0 and (flat > 0 or area != "washer")
+        filled = params.flat_fill > 0 and (flat > 0 or area != "steel")
         if bend == 0 and not pressed and not filled:
             return None
         spec = ConformSpec(bend, flat, float(params.flat_depth), float(params.flat_fill),
                            fill_circle=(circle["x"], circle["y"], circle["d"]) if circle else None,
                            fill_shape=shape, fill_all=area == "all")
-        if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None and area == "washer":
+        if spec.fill == DEFAULT_FILL and flat > 0 and params.magnets and params.pockets is None and area == "steel":
             spec = replace(spec, fill=self._auto_fill(params, spec))
         return spec
 
@@ -354,15 +413,14 @@ class Session:
         """The flat-base fill to use at the default setting: DEFAULT_FILL, or the first of AUTO_FILLS under
         which all `params.magnets` pockets fit at the largest size (a figure on four thin legs, like an Eevee,
         has room for none until the base fills the gap under its belly). When no fill holds them all, the
-        first that holds the most (none: DEFAULT_FILL). Decided against the default washer, like the conform
-        shape itself, so every washer in the table sees the same figure."""
+        first that holds the most (none: DEFAULT_FILL)."""
         key = self._spec_key(params, spec) + (params.spec, params.magnets)
         if key not in self._fills:
             self._fills[key] = spec.fill
             most = 0
             for fill in (spec.fill, *AUTO_FILLS):
                 parts = self._conformed(params, replace(spec, fill=fill))
-                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+                cavity = self.cavity(params)
                 free = max_scale(self._points[self._spec_key(params, replace(spec, fill=fill))], cavity)
                 if free is None:
                     break
@@ -401,27 +459,12 @@ class Session:
 
     def _conformed(self, params: Params, spec: ConformSpec | None) -> list[Part]:
         """`unit_parts` with the conform step's settings given (cached under the same key)."""
-        obj = self.obj(params)
         key = self._spec_key(params, spec)
         if key not in self._frames:
-            okey = self._orientation(params)
-            if okey not in self._oriented:
-                parts = world_parts(obj)
-                rot = (trimesh.transformations.rotation_matrix(np.radians(okey[3]), [0, 0, 1]) @
-                       trimesh.transformations.rotation_matrix(np.radians(okey[2]), [0, 1, 0]) @
-                       trimesh.transformations.rotation_matrix(np.radians(okey[1]), [1, 0, 0]))
-                parts = [p.transformed(rot) for p in parts]
-                v = np.vstack([p.vertices for p in parts])
-                mn, mx = v.min(axis=0), v.max(axis=0)
-                shift = trimesh.transformations.translation_matrix([-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2,
-                                                                    -mn[2]])
-                self._oriented[okey] = [p.transformed(shift) for p in parts]
-            parts = self._oriented[okey]
+            parts = self._shaped_parts(params)
             if spec is not None:
-                # Designed against the default washer's floor, so the shape (and every cache keyed
-                # on it) is the same whatever washer is compared; the lift itself depends only on the
-                # sphere and the flat disc.
-                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+                # Designed against this setup's floor (its height and width: `_floor_key` is in the key).
+                cavity = self.cavity(params)
                 # Vertices move, faces keep their order: paint and texture colour carry over.
                 parts, self._conform[key] = conform(parts, cavity, spec)
             if params.strengthen > 0:
@@ -430,10 +473,40 @@ class Session:
             self._points[key] = prepare_points(np.vstack([p.vertices for p in parts]))
         return self._frames[key]
 
+    def _oriented_parts(self, params: Params) -> list[Part]:
+        """The object's parts rotated, XY-centred and on z = 0, before the conform step (cached)."""
+        okey = self._orientation(params)
+        if okey not in self._oriented:
+            parts = world_parts(self.obj(params))
+            rot = (trimesh.transformations.rotation_matrix(np.radians(okey[3]), [0, 0, 1]) @
+                   trimesh.transformations.rotation_matrix(np.radians(okey[2]), [0, 1, 0]) @
+                   trimesh.transformations.rotation_matrix(np.radians(okey[1]), [1, 0, 0]))
+            parts = [p.transformed(rot) for p in parts]
+            v = np.vstack([p.vertices for p in parts])
+            mn, mx = v.min(axis=0), v.max(axis=0)
+            shift = trimesh.transformations.translation_matrix([-(mn[0] + mx[0]) / 2, -(mn[1] + mx[1]) / 2, -mn[2]])
+            self._oriented[okey] = [p.transformed(shift) for p in parts]
+        return self._oriented[okey]
+
+    def _shaped_parts(self, params: Params) -> list[Part]:
+        """`_oriented_parts` with the limbs resized and bent (`Params.limbs`, reshape.py), back on z = 0 (a limb bent
+        down may now be the lowest point). Same triangles in the same order: paint still applies."""
+        if not params.limbs:
+            return self._oriented_parts(params)
+        key = self._figure_key(params)
+        if key not in self._shaped:
+            if len(self._shaped) > 8:
+                self._shaped.clear()
+            parts = apply_limbs(self._oriented_parts(params), limb_ops(params.limbs), self.topology(params))
+            low = float(np.vstack([q.vertices for q in parts])[:, 2].min())
+            self._shaped[key] = [q.transformed(trimesh.transformations.translation_matrix([0, 0, -low]))
+                                 for q in parts] if abs(low) > 1e-9 else parts
+        return self._shaped[key]
+
     def _strengthened(self, params: Params, parts: list[Part], key: tuple) -> list[Part]:
         """`parts` with thin features thickened (strengthen.py), measured at the height asked for or else the
         largest that fits (no magnets); the conform step's flat base is solid already and is left alone."""
-        cavity = Cavity(self.ball, self.ball_scale(params), get_washer(DEFAULT_WASHER), params.clearance)
+        cavity = self.cavity(params)
         v = np.vstack([p.vertices for p in parts])
         free = max_scale(prepare_points(v), cavity)
         s = free.max_scale if free is not None else 0.0
@@ -478,14 +551,14 @@ class Session:
             # "Keep details" adds filaments on top of the automatic count; it never changes it (counted with
             # the details, a Charmander's best value dropped from 3 colours to 2 and lost its yellow belly).
             return self.auto_texture_count(replace(params, texture_details=0))
-        key = (self._key(params), round(self.ball_scale(params), 6), params.washer, params.clearance, params.slot,
+        key = (self._key(params), round(self.ball_scale(params), 6), params.steel, params.floor_diameter,
+               params.clearance, params.slot,
                params.process, self.presets.version if self.presets else 0)
         if key not in self._auto_count:
             if len(self._auto_count) > 16:
                 self._auto_count.clear()
             best = None
-            cavity = Cavity(self.ball, self.ball_scale(params), get_washer(params.washer), params.clearance)
-            free = max_scale(self.points(params), cavity)
+            free = max_scale(self.points(params), self.cavity(params))
             if free is not None and free.max_scale > 0:
                 best = tc.best_value_count(colour_rows(self, params, free.max_scale))
             self._auto_count[key] = best
@@ -583,8 +656,8 @@ class Session:
         return [*parts, Part(pad.name, base, pad.vertices, pad.faces, {}, pad.subtype)]
 
     def pads(self, params: Params) -> Part | None:
-        """Pads under the pockets on the washer (unit scale): every gap up to `flat_fill` under a pocket's walled
-        disc filled to the bed, so a magnet resting on the washer is held all round (the pocket map counts
+        """Pads under the pockets on the steel (unit scale): every gap up to `flat_fill` under a pocket's walled
+        disc filled to the bed, so a magnet resting on the steel is held all round (the pocket map counts
         on them: `PocketSpec.pad`). None without magnets, on the raised seat, with the fill off, or where the
         figure already sits flat over every pocket."""
         spec = self.pocket_spec(params)
@@ -596,10 +669,9 @@ class Session:
             self._pads[key] = None
             scale, _, pockets, _, off = solved(self, params)
             if scale > 0 and pockets:
-                washer = get_washer(params.washer)
-                cavity = Cavity(self.ball, self.ball_scale(params), washer, params.clearance)
-                # Only where the cavity's floor is flat (it rises past the washer): a pad there could not collide.
-                reach = float(cavity.allowed_radius(np.array([cavity.floor_z]))[0])
+                cavity = self.cavity(params)
+                # Only where the cavity's floor is flat (it rises past it): a pad there could not collide.
+                reach = cavity.floor_radius
                 centre = (-off[0] / scale, -off[1] / scale)
                 discs = disc_region([(p.x / scale, p.y / scale) for p in pockets],
                                     (spec.diameter / 2 + spec.wall + PAD_MARGIN) / scale)
@@ -614,14 +686,13 @@ class Session:
         """The print scale paint sizes are judged at: the scale chosen, else the height asked for (capped at the
         largest that fits), else the largest that fits (0 when nothing fits)."""
         key = (self._key(params), params.figure_scale, params.figure_height, round(self.ball_scale(params), 6),
-               params.washer, params.clearance)
+               params.steel, params.floor_diameter, params.clearance)
         if key not in self._paint_scale:
             if params.figure_scale:
                 s = float(params.figure_scale)
             else:
                 hp = self.points(params)
-                cavity = Cavity(self.ball, self.ball_scale(params), get_washer(params.washer), params.clearance)
-                free = max_scale(hp, cavity)
+                free = max_scale(hp, self.cavity(params))
                 s = free.max_scale if free is not None else 0.0
                 if params.figure_height and hp.height > 0:
                     s = min(s, params.figure_height / hp.height) if s > 0 else params.figure_height / hp.height
@@ -730,9 +801,20 @@ def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
     return Session(sid, proj, wd, load_ball(ball_path, CACHE_DIR), ref, simplify=simplify)
 
 
+def auto_simplify(session: Session, params: Params) -> Params:
+    """`params` for a file just opened: with `simplify_auto` and no Simplify setting, a figure denser than
+    DENSE_FACES triangles is simplified to AUTO_SIMPLIFY (MINI EEVEE, 1.45M: open and analyse 39.5 -> 11.5 s, the
+    surface moving 0.02 mm at 25 mm tall). A 3MF reads its meshes on demand, so counting them first costs little."""
+    if not params.simplify_auto or params.simplify is not None:
+        return params
+    if session.obj(params).face_count <= DENSE_FACES:
+        return params
+    return replace(params, simplify=float(AUTO_SIMPLIFY))
+
+
 def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "",
                presets: PresetLibrary | None = None, ams: list[AmsSlot] | None = None) -> dict[str, Any]:
-    """What the UI needs before a file is loaded: washers, defaults, the reference printer's filament slots.
+    """What the UI needs before a file is loaded: the steel discs and washers, defaults, the reference printer's filament slots.
 
     `reference` is a project the user loaded (their own filament slots); default: DEFAULT_REFERENCE.
     `presets` are Bambu presets the user imported: their filaments are listed after the project's
@@ -753,8 +835,8 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         processes += presets.processes(ref)
     ball = load_ball(DEFAULT_BALL)
     return {
-        "washers": [w.to_dict() for w in CATALOGUE.values()],
-        "default_washer": DEFAULT_WASHER,
+        "steels": [w.to_dict() for w in CATALOGUE.values()],
+        "default_steel": DEFAULT_STEEL,
         "ball_scales": [0.6, 1.0],
         "ball_r_inner": ball.r_inner,             # native: inner diameter = 2 · this · scale
         "params": asdict(Params()),
@@ -805,7 +887,7 @@ class Report:
     pockets: list[dict[str, float]]
     checks: list[dict[str, Any]]
     status: str
-    washers: list[dict[str, Any]]
+    steels: list[dict[str, Any]]
     timings: dict[str, float]
     underside: dict[str, Any] = field(default_factory=dict)   # 2D outlines for the pocket editor
     import_map: list[dict[str, Any]] = field(default_factory=list)   # figure filament -> project slot
@@ -817,20 +899,20 @@ class Report:
         return asdict(self)
 
 
-def _steel_band(washer: Washer, diameter: float, relaxed: bool) -> tuple[float, float]:
+def _steel_band(steel: Steel, diameter: float, relaxed: bool) -> tuple[float, float]:
     """Radii allowed for pocket centres: magnet fully on steel, or (relaxed) centre on steel."""
-    return (washer.id / 2, washer.od / 2) if relaxed else washer.annulus(diameter)
+    return (steel.id / 2, steel.od / 2) if relaxed else steel.annulus(diameter)
 
 
 def _pocket_map(session: Session, params: Params, s: float) -> PocketMap:
     return pocket_map(session.underside(params, s), session.pocket_spec(params))
 
 
-def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float, relaxed: bool = False
+def _place(session: Session, params: Params, cavity: Cavity, steel: Steel, s: float, relaxed: bool = False
            ) -> tuple[list[Pocket], list[Check], tuple[float, float]]:
-    """`params.magnets` pockets at figure scale `s` that sit on the steel ring while the figure fits.
+    """`params.magnets` pockets at figure scale `s` that sit on the steel while the figure fits.
 
-    The figure frame's origin is at offset o in the ball frame, so the washer
+    The figure frame's origin is at offset o in the ball frame, so the steel disc
     (on the ball axis) is centred at -o in the figure frame. The fit margin is
     1-Lipschitz in o, so every offset within the best margin m* of the best
     offset o* still fits; o* and 36 such offsets are tried.
@@ -841,7 +923,7 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
     o0 = (float(o_star[0]), float(o_star[1]))
     if m_star < 0:
         return [], [Check("pockets:feet", "Underside", "fail", "Figure does not fit at this size.")], o0
-    lo, hi = _steel_band(washer, spec.diameter, relaxed)
+    lo, hi = _steel_band(steel, spec.diameter, relaxed)
     cands = [o_star] + [o_star + m_star * f * np.array([np.cos(a), np.sin(a)])
                         for f in (0.33, 0.66, 0.95) for a in np.linspace(0, 2 * np.pi, 12, endpoint=False)]
     first: list[Check] = []
@@ -853,7 +935,7 @@ def _place(session: Session, params: Params, cavity: Cavity, washer: Washer, s: 
     return [], first, o0
 
 
-def _offset_for_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s: float,
+def _offset_for_pockets(session: Session, params: Params, cavity: Cavity, steel: Steel, s: float,
                         pockets: list[Pocket]) -> tuple[float, float]:
     """Offset that keeps the figure fitting and puts the given pockets as well on the steel as it can.
 
@@ -867,27 +949,27 @@ def _offset_for_pockets(session: Session, params: Params, cavity: Cavity, washer
     grid = np.stack(np.meshgrid(g, g), axis=-1).reshape(-1, 2)
     grid = grid[np.linalg.norm(grid, axis=1) <= m_star] + o_star
     pxy = np.array([[p.x, p.y] for p in pockets])
-    lo, hi = washer.annulus(params.pocket_diameter)
+    lo, hi = steel.annulus(params.pocket_diameter)
     r = np.linalg.norm(pxy[None, :, :] + grid[:, None, :], axis=2)
     score = np.min(np.minimum(r - lo, hi - r), axis=1)
     best = grid[int(np.argmax(score))]
     return float(best[0]), float(best[1])
 
 
-def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, washer: Washer, s_fit: float,
+def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, steel: Steel, s_fit: float,
                           relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
     """Largest scale <= s_fit where the pockets fit the underside AND sit on the steel.
 
     Not monotone at the small end (walls are absolute mm), so scan down in 4 %
     steps from the fit limit, then bisect between the last failure and the first success.
-    The scan stops at 60 % of the fit size: a washer that needs the figure
-    smaller than that is the wrong washer, and the steel check says so.
+    The scan stops at 60 % of the fit size: a steel disc that needs the figure
+    smaller than that is the wrong size, and the steel check says so.
     """
     best = None
     prev_fail = None
     s = s_fit
     while s >= MIN_SCALE_FOR_MAGNETS * s_fit:      # (no absolute floor: generated GLBs fit at ~4 %)
-        pk, ch, off = _place(session, params, cavity, washer, s, relaxed)
+        pk, ch, off = _place(session, params, cavity, steel, s, relaxed)
         if pk:
             best = (s, pk, ch, off)
             break
@@ -896,7 +978,7 @@ def _largest_with_pockets(session: Session, params: Params, cavity: Cavity, wash
         a, b = best[0], prev_fail
         for _ in range(6):
             mid = (a + b) / 2
-            pk, ch, off = _place(session, params, cavity, washer, mid, relaxed)
+            pk, ch, off = _place(session, params, cavity, steel, mid, relaxed)
             if pk:
                 best, a = (mid, pk, ch, off), mid
             else:
@@ -915,16 +997,16 @@ def _evict(cache: dict) -> None:
         cache.pop(next(iter(cache)))
 
 
-def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
+def _solve(session: Session, params: Params, cavity: Cavity, steel: Steel
            ) -> tuple[float, float, list[Pocket], list[Check], tuple[float, float]]:
     """(scale, max scale, pockets in the figure frame, pocket checks, XY offset)."""
     hp = session.points(params)
     if params.figure_scale is None and params.figure_height is not None:
         # A height asked for: that size, unless it is larger than the largest that fits (with the magnets).
-        auto = _solve(session, replace(params, figure_height=None), cavity, washer)
+        auto = _solve(session, replace(params, figure_height=None), cavity, steel)
         want = params.figure_height / hp.height
         if auto[0] <= 0 or want < auto[0] * (1 - 1e-4):
-            return _solve(session, replace(params, figure_height=None, figure_scale=want), cavity, washer)
+            return _solve(session, replace(params, figure_height=None, figure_scale=want), cavity, steel)
         note = Check("size:height", "Size", "info",
                      f"{params.figure_height:g} mm was asked for; the largest that fits"
                      f"{' with the magnets on the steel' if params.magnets else ''} is {auto[0] * hp.height:.1f} mm, "
@@ -952,7 +1034,7 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
         if not manual:
             return scale, s_fit, [], [], fit_offset(scale)
         return (scale, s_fit, manual, [Check("pockets:feet", "Underside", "info", "Pockets placed by hand.")],
-                _offset_for_pockets(session, params, cavity, washer, scale, manual))
+                _offset_for_pockets(session, params, cavity, steel, scale, manual))
 
     # Shrinking the figure only shrinks the area that can hold a walled pocket
     # (walls are absolute mm). If the pockets do not fit even without the steel
@@ -963,21 +1045,23 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
     if not free_pk:
         return probe, s_fit, free_pk, free_ch + _more_room(session, params), fit_offset(probe)
     if len(free_pk) < n:
-        # Fewer fit than asked: place those like a full set, on the steel ring (a lone pocket placed freely sat
-        # on a Pikachu's centre, over the washer's hole), keeping the "only room for k" warning.
-        scale, top, pk, ch, off = _solve(session, replace(params, magnets=len(free_pk)), cavity, washer)
+        # Fewer fit than asked: place those like a full set, on the steel (a lone pocket placed freely sat on a
+        # Pikachu's centre, over a washer's hole; on a solid disc the steel is a whole disc), keeping the "only room
+        # for k" warning.
+        scale, top, pk, ch, off = _solve(session, replace(params, magnets=len(free_pk)), cavity, steel)
         return scale, top, pk, free_ch + _more_room(session, params) + [c for c in ch if c.id != "pockets:feet"], off
 
     def largest(relaxed: bool) -> tuple[float, list[Pocket], list[Check], tuple[float, float]] | None:
-        key = (session._key(params), session.ball_scale(params), washer.key, params.clearance, spec, n, relaxed)
+        key = (session._key(params), session.ball_scale(params), steel.key, round(cavity.seat_diameter, 3),
+               params.clearance, spec, n, relaxed)
         if key not in session._auto:
-            session._auto[key] = _largest_with_pockets(session, params, cavity, washer, s_fit, relaxed)
+            session._auto[key] = _largest_with_pockets(session, params, cavity, steel, s_fit, relaxed)
         return session._auto[key]
 
     if params.figure_scale is not None:
         sc = params.figure_scale
         for relaxed in (False, True):
-            pk, ch, off = _place(session, params, cavity, washer, sc, relaxed)
+            pk, ch, off = _place(session, params, cavity, steel, sc, relaxed)
             if pk:
                 best = largest(relaxed)
                 return sc, best[0] if best else s_fit, pk, ch, off
@@ -990,8 +1074,8 @@ def _solve(session: Session, params: Params, cavity: Cavity, washer: Washer
             scale, pk, ch, off = best
             if scale < s_fit * 0.999:
                 ch = ch + [Check("pockets:scale", "Size vs. magnets", "info",
-                                 f"Reduced from {s_fit:.1%} to {scale:.1%} so the magnets sit on the washer's "
-                                 f"steel; a larger washer may allow more (see the washer table).")]
+                                 f"Reduced from {s_fit:.1%} to {scale:.1%} so the magnets sit on the steel; "
+                                 f"a larger disc may allow more (Compare steel sizes).")]
             return scale, scale, pk, ch, off
     return s_fit, s_fit, free_pk, free_ch, fit_offset(s_fit)
 
@@ -1000,7 +1084,7 @@ def _more_room(session: Session, params: Params) -> list[Check]:
     """When fewer pockets fit than asked: the settings that can make room under the figure (none on the raised seat,
     which uses the figure's own underside, or when the fill is already the deepest offered)."""
     cspec = session.conform_spec(params)
-    if (params.pocket_seat != "washer" or cspec is None or cspec.fill >= AUTO_FILLS[-1]
+    if (params.pocket_seat != "steel" or cspec is None or cspec.fill >= AUTO_FILLS[-1]
             or not (cspec.flat_diameter > 0 or cspec.fill_all)):          # no flat base: the fill does nothing
         return []
     return [Check("pockets:room", "More magnets", "info",
@@ -1014,16 +1098,15 @@ def solved(session: Session, params: Params) -> tuple[float, float, list[Pocket]
     skey = shape_key(params)
     if skey not in session._solved:
         _evict(session._solved)
-        washer = get_washer(params.washer)
-        cavity = Cavity(session.ball, session.ball_scale(params), washer, params.clearance)
-        session._solved[skey] = _solve(session, params, cavity, washer)
+        cavity = session.cavity(params)
+        session._solved[skey] = _solve(session, params, cavity, cavity.steel)
     return session._solved[skey]
 
 
-def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
-    """Max figure scale with each catalogue washer (magnets full / partial / off steel), best first.
+def steel_table(session: Session, params: Params) -> list[dict[str, Any]]:
+    """Max figure scale with each catalogue steel disc and washer (magnets full / partial / off steel), best first.
 
-    Washers are evaluated in parallel threads: the work is numpy/shapely/
+    They are evaluated in parallel threads: the work is numpy/shapely/
     manifold3d, which release the GIL for most of it. The session's caches are
     warmed first so the threads only read them (each writes its own _auto key).
     """
@@ -1032,24 +1115,24 @@ def washer_table(session: Session, params: Params) -> list[dict[str, Any]]:
 
     session.unit_parts(params)
     height = session.points(params).height
+    floor = session.floor(params)
 
-    def row(key: str, w: Washer) -> dict[str, Any]:
-        cav = Cavity(session.ball, session.ball_scale(params), w, params.clearance)
-        # The same figure shape for every washer (flat disc pinned to the current one's).
-        spec = session.conform_spec(params)
-        p = Params.from_dict({**asdict(params), "washer": key, "figure_scale": None, "figure_height": None,
-                              "pockets": None,
-                              "flat_base": spec.flat_diameter if spec else params.flat_base})
+    def row(key: str, w: Steel) -> dict[str, Any]:
+        # The same figure (its shape as conformed for the current steel and floor) on the same printed floor (at
+        # least this steel's seat): only the steel differs, so the rows compare the steel, not reshaped figures.
+        cav = Cavity(session.ball, session.ball_scale(params), w, params.clearance, floor)
+        p = replace(params, figure_scale=None, figure_height=None, pockets=None)
         _, s_max, pockets, _, off = _solve(session, p, cav, w)
-        steel = "off"
+        on = "off"
         if pockets and len(pockets) == p.magnets:
             pxy = np.array([[q.x, q.y] for q in pockets])
             if annulus_margin(pxy, 1.0, np.array(off), w.annulus(p.pocket_diameter)) >= -1e-6:
-                steel = "full"
+                on = "full"
             elif annulus_margin(pxy, 1.0, np.array(off), (w.id / 2, w.od / 2)) >= -1e-6:
-                steel = "partial"
+                on = "partial"
         return {"key": key, "label": w.label, "max_scale": round(s_max, 4), "height_mm": round(s_max * height, 2),
-                "pockets_on_steel": steel == "full", "steel": steel, "floor_z": round(cav.floor_z, 2)}
+                "pockets_on_steel": on == "full", "steel": on, "floor_z": round(cav.floor_z, 2), "solid": w.solid,
+                "floor_diameter": round(cav.seat_diameter, 1)}
 
     if sys.platform == "emscripten":      # the browser build has no threads
         rows = [row(*kv) for kv in CATALOGUE.items()]
@@ -1071,8 +1154,8 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     session.use_simplify(params.simplify)
     t: dict[str, float] = {}
     t0 = time.time()
-    washer = get_washer(params.washer)
-    cavity = Cavity(session.ball, session.ball_scale(params), washer, params.clearance)
+    cavity = session.cavity(params)
+    steel = cavity.steel
     hp = session.points(params)
     unit = session.figure_parts(params)
     obj = session.obj(params)
@@ -1091,7 +1174,7 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     if scale <= 0:
         checks.append(Check("fit", "Fits in the ball", "fail",
                             "Does not fit even when very small — check the orientation (z up) and the file's units."))
-        rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict, [],
+        rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, steel), fit_dict, [],
                      [c.to_dict() for c in checks], "fail", [], t)
         return rep, unit
 
@@ -1137,7 +1220,7 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     if skey not in session._undersides:
         _evict(session._undersides)
         fill = [m for p, m in zip(final, meshes) if p.name == FILL_NAME]
-        session._undersides[skey] = _underside(session, params, meshes, scale, washer, off, fill)
+        session._undersides[skey] = _underside(session, params, meshes, scale, steel, off, fill)
     underside = session._undersides[skey]
     if params.magnets:
         checks.extend(pchecks)
@@ -1145,25 +1228,29 @@ def analyse(session: Session, params: Params, recommend: bool = False,
             field_s = session.underside(params, scale)
             pocket_checks = validate_pockets(field_s, pockets, pspec)  # pocket:N (+ pocket:gap)
             checks.extend(pocket_checks)
-            lo, hi = washer.annulus(params.pocket_diameter)
+            lo, hi = steel.annulus(params.pocket_diameter)
             pxy = np.array([[p.x, p.y] for p in pockets])
             am = annulus_margin(pxy, 1.0, np.array(off), (lo, hi))
-            am_centre = annulus_margin(pxy, 1.0, np.array(off), (washer.id / 2, washer.od / 2))
+            am_centre = annulus_margin(pxy, 1.0, np.array(off), (steel.id / 2, steel.od / 2))
             if am >= -1e-6:
-                checks.append(Check("steel", "Magnets on the washer", "pass",
-                                    f"{'The pocket sits' if len(pockets) == 1 else 'All pockets sit'} on the "
-                                    f"steel ring ({lo:.1f}–{hi:.1f} mm from the centre)."))
+                where = (f"steel disc (magnet centres up to {hi:.1f} mm from its centre)" if steel.solid else
+                         f"washer's steel ring ({lo:.1f}–{hi:.1f} mm from the centre)")
+                checks.append(Check("steel", "Magnets on the steel", "pass",
+                                    f"{'The magnet lies' if len(pockets) == 1 else 'All magnets lie'} fully on the "
+                                    f"{where}."))
             elif am_centre >= -1e-6:
-                checks.append(Check("steel", "Magnets on the washer", "warn",
+                checks.append(Check("steel", "Magnets on the steel", "warn",
                                     f"{'The pocket centre is' if len(pockets) == 1 else 'Pocket centres are'} on "
                                     "the steel but the magnets overhang its edge "
                                     f"by up to {-am:.1f} mm, so they hold with roughly half force. "
-                                    "A larger washer avoids this (Compare washers).", round(am, 2)))
+                                    "A larger disc avoids this (Compare steel sizes).", round(am, 2)))
             else:
-                od, idd = required_washer(pockets, pspec)
-                checks.append(Check("steel", "Magnets on the washer", "fail",
-                                    f"Pockets miss the steel by {-am:.1f} mm with this washer; needs OD ≥ {od:.1f} mm "
-                                    f"and hole ≤ {idd:.1f} mm.", round(am, 2)))
+                od, idd = required_steel(pockets, pspec)
+                need = (f"a disc of Ø ≥ {od:.1f} mm" if steel.solid else
+                        f"a washer of OD ≥ {od:.1f} mm and hole ≤ {idd:.1f} mm, or a solid disc of Ø ≥ {od:.1f} mm")
+                checks.append(Check("steel", "Magnets on the steel", "fail",
+                                    f"Pockets miss the steel by {-am:.1f} mm with this {'disc' if steel.solid else 'washer'}"
+                                    f"; needs {need}.", round(am, 2)))
             # Per-pocket checks come first, in pocket order; a failed one is not cut.
             cuttable = [p for p, c in zip(pockets, pocket_checks) if c.status != "fail"]
             final, cut_checks = cut_pockets(final, cuttable, pspec)
@@ -1196,10 +1283,10 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     toolchange = toolchange_info(session, params, final, scale)
     t["toolchange"] = time.time() - t4
 
-    washers = washer_table(session, params) if recommend else []
+    steels = steel_table(session, params) if recommend else []
     t["total"] = time.time() - t0
-    rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, washer), fit_dict,
-                 [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), washers,
+    rep = Report(asdict(params), _obj_info(session, obj, params), _ball_info(cavity, steel), fit_dict,
+                 [p.to_dict() for p in pockets], [c.to_dict() for c in checks], worst(checks), steels,
                  {k: round(v, 2) for k, v in t.items()}, underside,
                  [m.to_dict() for m in session.slot_matches(params)], toolchange, pending)
     return rep, final
@@ -1280,10 +1367,10 @@ def _conform_check(info: ConformInfo, raised_fill: float | None = None) -> Check
     said = []
     if info.bend > 0:
         gain = info.scale_after / info.scale_before - 1 if info.scale_before else 0.0
-        said.append(f"legs/tail beyond the washer bent up by up to {info.lift_mm:.1f} mm"
+        said.append(f"legs/tail beyond the steel bent up by up to {info.lift_mm:.1f} mm"
                     f"{' (automatic)' if info.auto else ''}, so it fits {gain:+.1%} larger")
     if info.flat_depth_mm > 0:
-        said.append(f"base pressed {info.flat_depth_mm:.1f} mm flat over the washer")
+        said.append(f"base pressed {info.flat_depth_mm:.1f} mm flat over the steel")
     if info.fill_mm2 > 0:
         said.append(f"a {info.fill_mm2:.0f} mm² flat base fills the gap under it"
                     + (f" (gaps up to {raised_fill:g} mm: with less, no magnet pocket fits)" if raised_fill else ""))
@@ -1309,23 +1396,23 @@ def _rings(geom: Any) -> list[list[list[float]]]:
     return out
 
 
-def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], scale: float, washer: Washer,
+def _underside(session: Session, params: Params, meshes: list[trimesh.Trimesh], scale: float, steel: Steel,
                off: tuple[float, float], fill: list[trimesh.Trimesh] | None = None) -> dict[str, Any]:
     """Figure-frame 2D data for the pocket editor.
 
     feet: outline of what touches the bed; fill: outline of the flat base the conform step added (the gap fill:
     what "Fill gaps" changed); valid: outline of where a pocket centre satisfies every rule; height: the underside
-    as an image (darker = lower, transparent = no material) over `extent` [x0, y0, x1, y1]; ring: the washer's
-    steel ring as the ball holds it.
+    as an image (darker = lower, transparent = no material) over `extent` [x0, y0, x1, y1]; ring: where the
+    magnets lie fully on the steel (a disc, or a washer's ring) as the ball holds it.
     """
-    lo, hi = washer.annulus(params.pocket_diameter)
+    lo, hi = steel.annulus(params.pocket_diameter)
     feet = find_feet(meshes)
     base = find_feet(fill) if fill else []
     f = session.underside(params, scale)
     out: dict[str, Any] = {"feet": _rings(unary_union(feet) if feet else None),
                            "fill": _rings(unary_union(base) if base else None), "valid": [],
                            "ring": {"x": -off[0], "y": -off[1], "inner": lo, "outer": hi,
-                                    "washer_od": washer.od, "washer_id": washer.id},
+                                    "steel_od": steel.od, "steel_id": steel.id},
                            "pocket_d": params.pocket_diameter}
     out.update(_height_image(f))
     if params.magnets:
@@ -1443,7 +1530,7 @@ def _auto_count(session: Session, params: Params) -> int:
     return session.auto_texture_count(params) or session.project.texture.auto_count
 
 
-def _ball_info(cavity: Cavity, washer: Washer) -> dict[str, Any]:
+def _ball_info(cavity: Cavity, steel: Steel) -> dict[str, Any]:
     z, r = cavity.profile(160)
     s = cavity.scale
     return {"scale": s, "r_inner": cavity.r_inner, "r_outer": cavity.ball.r_outer * s,
@@ -1451,8 +1538,9 @@ def _ball_info(cavity: Cavity, washer: Washer) -> dict[str, Any]:
             "floor_z": cavity.floor_z, "seat_z": cavity.seat_z, "top_z": cavity.top_z,
             "ring_span": cavity.ball.ring_span * s, "ring_h": [h * s for h in cavity.ball.ring_h],
             "ring_r": [x * s for x in cavity.ball.ring_r], "aperture": cavity.ball.aperture * s,
-            "profile_z": z.tolist(), "profile_r": r.tolist(), "washer": washer.to_dict(),
-            "annulus": list(washer.annulus(4.18)), "clearance": cavity.clearance}
+            "profile_z": z.tolist(), "profile_r": r.tolist(), "steel": steel.to_dict(),
+            "floor_diameter": cavity.seat_diameter, "floor_radius": cavity.floor_radius,
+            "annulus": list(steel.annulus(4.18)), "clearance": cavity.clearance}
 
 
 # ------------------------------------------------------------------ outputs
@@ -1718,6 +1806,35 @@ def pieces_of_colour(session: Session, params: Params, filament: int) -> dict[st
                                               "faces": p.faces} for p in found]}
 
 
+def limb_region(session: Session, params: Params, point: list[float] | None, normal: list[float] | None,
+                angle: float = 15.0, at: tuple[int, int] | None = None) -> dict[str, Any]:
+    """The limb under a tap on the 3D preview (figure frame, scale 1), or at triangle `at` = (part, face), for
+    "Reshape a part": the triangle that names it in a `reshape.LimbOp` (part, face), its triangles (the view
+    highlights them), its length along the surface at the print size and whether it meets the body (a separate
+    piece turns about its own middle)."""
+    session.use_simplify(params.simplify)
+    if at is not None:
+        pi, fi = int(at[0]), int(at[1])
+    elif point is not None:
+        parts = session.unit_parts(params)
+        pi, fi, _ = pick_face(parts, np.asarray(point, float)[:3],
+                              None if normal is None else np.asarray(normal, float)[:3],
+                              trees=_pick_trees_for(session, params))
+    else:
+        raise ValueError("a limb needs a point or a triangle")
+    if pi < 0:
+        raise ValueError("no triangle near that point")
+    topo = session.topology(params)
+    if pi >= len(topo):
+        raise ValueError("That is the flat base under the figure, not a part of it.")
+    # A tap (not a stored limb's own triangle and angle) steps down to a smaller angle if this one takes the body.
+    limb, angle = find_limb_at(topo, pi, fi, angle) if at is None else (find_limb(topo, pi, fi, angle), angle)
+    s = session.paint_scale(params) or 1.0
+    return {"part": pi, "face": fi, "angle": angle, "faces": limb.faces.tolist(),
+            "share": round(float(topo.part(pi).areas[limb.faces].sum() / max(topo.part(pi).areas.sum(), 1e-12)), 4),
+            "length_mm": round(limb.length * s, 2), "joined": bool(len(limb.joint))}
+
+
 def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
     plane = topo.mirror()
     return {"ok": plane.error <= MIRROR_MAX_ERROR, "error": round(plane.error, 4),
@@ -1762,9 +1879,16 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     if pi >= len(topo):
         raise ValueError("That is the flat base under the figure: it prints in the figure's main colour.")
     path: list[int] = []
+    # A stroke's own points, in the frame paint operations live in: the brush follows where the drag went.
+    points: list[float] = []
+    if mode == "brush" and stroke:
+        points.extend(_file_point(session, params, pi, fi, np.asarray(point, float)[:3]))
     for sample in (stroke or [])[:MAX_PATH]:
         sp, sf, _ = at(sample["point"], sample.get("normal"))
-        if sp == pi and sf != fi and (not path or path[-1] != sf):
+        if sp != pi:
+            continue
+        points.extend(_file_point(session, params, sp, sf, np.asarray(sample["point"], float)[:3]))
+        if sf != fi and (not path or path[-1] != sf):
             path.append(sf)
     figure = session.figure_parts(params)
     states: dict[int, PaintState] = {}
@@ -1778,7 +1902,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     if stamp_axes is not None:
         stamp = _stamp_frame(session, params, pi, fi, np.asarray(point, float)[:3], np.asarray(stamp_axes, float))
     op = PaintOp.from_dict(PaintOp(pi, fi, 0, mode, angle, radius, tuple(path), mirror, grow, level,
-                                   stamp).to_dict())
+                                   stamp, tuple(points)).to_dict())
     sides = op_faces(topo, op, state)
     n = sum(len(f) for _, f in sides)
     area = 0.0
@@ -1790,7 +1914,22 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     shown = fp.majority if fp is not None and fp.majority > 0 else (figure[pi].extruder or session.extruder(params))
     return {"part": pi, "face": fi, "distance": dist, "faces": int(n), "path": path,
             "share": round(len(sides[0][1]) / max(1, len(parts[pi].faces)), 4), "area_mm2": round(area, 2),
-            "mirrored": len(sides) > 1, "filament": int(shown), **({"stamp": list(stamp)} if stamp else {})}
+            "mirrored": len(sides) > 1, "filament": int(shown), **({"stamp": list(stamp)} if stamp else {}),
+            **({"points": [round(x, 5) for x in points]} if points else {})}
+
+
+def _file_point(session: Session, params: Params, pi: int, fi: int, point: np.ndarray) -> tuple[float, float, float]:
+    """A point on triangle `fi` of part `pi` in the figure frame (scale 1), at the same spot of the same triangle in
+    the frame paint operations live in (the file's, before rotation and the conform step)."""
+    fig_tri = session.unit_parts(params)[pi]
+    src = session.topology(params)._parts[pi]
+    a, b, c = fig_tri.vertices[fig_tri.faces[fi]]
+    # Barycentric coordinates of the point in the figure-frame triangle, applied to the same triangle in the file.
+    m = np.column_stack([b - a, c - a])
+    uv, *_ = np.linalg.lstsq(m, point - a, rcond=None)
+    sa, sb, sc = src.vertices[src.faces[fi]]
+    q = sa + uv[0] * (sb - sa) + uv[1] * (sc - sa)
+    return float(q[0]), float(q[1]), float(q[2])
 
 
 def _stamp_frame(session: Session, params: Params, pi: int, fi: int, point: np.ndarray, axes: np.ndarray
@@ -1800,14 +1939,7 @@ def _stamp_frame(session: Session, params: Params, pi: int, fi: int, point: np.n
     the axes turned back by the figure's rotation."""
     if len(axes) != 6 or not np.isfinite(axes).all():
         raise ValueError("stamp_axes must be 6 numbers (two semi-axes)")
-    fig_tri = session.unit_parts(params)[pi]
-    src = session.topology(params)._parts[pi]
-    a, b, c = fig_tri.vertices[fig_tri.faces[fi]]
-    # Barycentric coordinates of the point in the figure-frame triangle, applied to the same triangle in the file.
-    m = np.column_stack([b - a, c - a])
-    uv, *_ = np.linalg.lstsq(m, point - a, rcond=None)
-    sa, sb, sc = src.vertices[src.faces[fi]]
-    centre = sa + uv[0] * (sb - sa) + uv[1] * (sc - sa)
+    centre = np.asarray(_file_point(session, params, pi, fi, point))
     _, rx, ry, rz = session._orientation(params)
     rot = (trimesh.transformations.rotation_matrix(np.radians(rz), [0, 0, 1]) @
            trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0]) @
@@ -1840,7 +1972,7 @@ def safe_stem(name: str) -> str:
 
 
 def export(session: Session, params: Params, out_dir: str | Path, ball_model: Path | None = None) -> dict[str, Any]:
-    """Write the figure 3MF, its import variant, a coloured STL (`stlcolour`), the washer-seat shell STL and a
+    """Write the figure 3MF, its import variant, a coloured STL (`stlcolour`), the steel seat shell STL and a
     JSON report.
 
     `<stem>_pokefit_<pct>.3mf` opens as a project (File > Open). `..._import.3mf`
@@ -1858,14 +1990,14 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     stem = safe_stem(session.project.path.name)
     f3 = write_project(session.project, obj.name, session.extruder(params), final, out_dir / f"{stem}_pokefit_{pct}.3mf",
                        settings=export_settings(session, params))
-    shell_path = out_dir / f"shell_washerseat_{pct}_{safe_stem(params.washer)}.stl"
+    shell_path = out_dir / f"shell_floor{session.cavity(params).seat_diameter:.1f}mm_{pct}.stl"
     shell_note = ""
     try:
         shell = _shell_mesh(ball_model or BALL_MODEL)
-        fs = flat_spot(shell, ball_s, SHELL_DISK, get_washer(params.washer).od + 0.4)
+        fs = flat_spot(shell, ball_s, SHELL_DISK, session.cavity(params).seat_diameter)   # the floor the fit used
         fs.mesh.export(shell_path)
     except (OSError, ValueError, RuntimeError) as exc:
-        shell_path, shell_note = None, f"washer-seat shell not written: {exc}"  # type: ignore[assignment]
+        shell_path, shell_note = None, f"steel seat shell not written: {exc}"  # type: ignore[assignment]
     # For "Import geometry only" into the user's own project: filaments renumbered to its slots.
     imp = None
     matches = [m for m in session.slot_matches(params) if m.used]

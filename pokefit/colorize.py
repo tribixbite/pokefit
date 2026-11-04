@@ -71,6 +71,9 @@ DEFAULT_ANGLE = 15.0        # degrees; "part" mode (Bambu's smart fill, the "reg
 MAX_PATH = 4000             # triangles on one brush stroke's path
 MAX_GROW = 20.0             # mm (file units): the most an operation's area grows or shrinks
 JOIN_STEPS = 8              # a stroke step up to this many brush radii long is filled in; longer ones jumped
+JOIN_EDGES = 4              # ... or up to this many triangles long (a fine brush on a coarse mesh)
+BRUSH_STEPS = 4             # a brush's edge is drawn in sub-triangles at most 1/4 of its radius
+PROJECT_NEAREST = 8         # `Topology.project` checks the triangles with this many nearest centres
 BOUNDED = ("wand", "part", "region", "fill")  # fills that stop where the colour changes
 MAX_LEVEL = 8              # wand: furthest step from its first answer to a smaller or larger one
 WAND_CONVEX = 0.5           # a ridge counts this much of its bend (a feature's edge is mostly a groove or a step's foot)
@@ -131,6 +134,10 @@ class PaintOp:
     # "stamp": an ellipse laid on the surface like a decal, (centre, semi-axis u, semi-axis v) as 9 numbers in the
     # topology's frame (file mm; `Topology.stamp_field`); `face` is the triangle under its centre.
     stamp: tuple[float, ...] = ()
+    # "brush": where the drag went, 3 numbers per sample (the tap first) in the topology's frame (file mm). The
+    # stroke follows these, not the centres of the triangles it crossed (`path`): with a brush finer than the
+    # triangles those zigzag by more than the brush. Older strokes without them fall back to the centres.
+    points: tuple[float, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PaintOp":
@@ -138,7 +145,8 @@ class PaintOp:
                  float(d.get("angle", DEFAULT_ANGLE)), float(d.get("radius", 0.0)),
                  tuple(int(f) for f in d.get("path") or ()), bool(d.get("mirror", False)),
                  float(d.get("grow", 0.0)), int(d.get("level", 0)),
-                 tuple(float(x) for x in d.get("stamp") or ()))
+                 tuple(float(x) for x in d.get("stamp") or ()),
+                 tuple(float(x) for x in d.get("points") or ()))
         if op.mode not in MODES:
             raise ValueError(f"paint mode must be one of {', '.join(MODES)}, not {op.mode!r}")
         if not (0 <= op.filament <= 64):
@@ -151,6 +159,11 @@ class PaintOp:
             raise ValueError("only a brush stroke has a path")
         if len(op.path) > MAX_PATH:
             raise ValueError(f"a stroke has at most {MAX_PATH} points")
+        if op.points:
+            if op.mode != "brush":
+                raise ValueError("only a brush stroke has points")
+            if len(op.points) % 3 or len(op.points) > 3 * (MAX_PATH + 1) or not np.isfinite(op.points).all():
+                raise ValueError(f"a stroke's points are 3 numbers each, at most {MAX_PATH + 1} of them")
         if abs(op.level) > MAX_LEVEL:
             raise ValueError(f"level must be within ±{MAX_LEVEL}")
         if not (abs(op.grow) <= MAX_GROW and np.isfinite(op.grow)):
@@ -182,7 +195,15 @@ class PaintOp:
             d["stamp"] = list(self.stamp)
         else:
             del d["stamp"]
+        if self.points:
+            d["points"] = list(self.points)
+        else:
+            del d["points"]
         return d
+
+    def stroke(self) -> np.ndarray | None:
+        """The drag's points (k, 3), topology frame; None for a tap or an older stroke without them."""
+        return np.asarray(self.points, float).reshape(-1, 3) if self.points else None
 
 
 @dataclass
@@ -198,18 +219,25 @@ class Field:
     fn: Callable[[np.ndarray], np.ndarray] | None = None
     small: bool = False         # the area can lie inside one triangle (a small stamp on a low-poly mesh)
     detail: float | None = None  # mm: split crossed triangles finer than SOFT_DEPTH until this fine (`_depth`)
+    # The triangles the area really reaches, when known exactly (a brush: any part within its radius): what a tap
+    # reports as painted. A line finer than its triangles crosses them with every corner, and the centre, outside.
+    touched: np.ndarray | None = None
 
     def corners(self, topo: "Topology", faces: np.ndarray | None = None) -> np.ndarray:
         """(k, 3) `phi` at the corners of `faces` (default: all of `self.faces`), in each triangle's corner order."""
         return np.asarray(self.phi[topo.vfaces[self.faces if faces is None else faces]])
 
     def inside(self, topo: "Topology") -> np.ndarray:
-        """The faces mostly inside (centre <= 0): the area as whole triangles (counts, areas, mirror matching)."""
+        """The faces mostly inside (centre <= 0), or the ones it reaches when that is known (`touched`): the area
+        as whole triangles (counts, areas, mirror matching)."""
+        if self.touched is not None:
+            return np.asarray(self.touched)
         return np.asarray(self.faces[self.corners(topo).mean(axis=1) <= 0])
 
     def restricted(self, allowed: np.ndarray) -> "Field":
         """Only the faces in `allowed` (a mask): another colour's triangles are never touched."""
-        return Field(self.faces[allowed[self.faces]], self.phi, self.fn, self.small, self.detail)
+        touched = None if self.touched is None else self.touched[allowed[self.touched]]
+        return Field(self.faces[allowed[self.faces]], self.phi, self.fn, self.small, self.detail, touched)
 
 
 @dataclass
@@ -252,33 +280,77 @@ class Topology:
             keep = self.angles < angle
         return self._components(keep)
 
-    def brush(self, seeds: list[int], radius: float) -> np.ndarray:
-        """Faces within `radius` of a seed's centre and connected to a seed inside those balls: one dab, or
-        a stroke (a dab per point along it; a thin ridge between two dabs is not bridged)."""
+    def brush(self, seeds: list[int], radius: float, points: np.ndarray | None = None) -> np.ndarray:
+        """Faces the brush touches (any part of the triangle within `radius` of the stroke, not only its centre: a
+        brush finer than the triangles still paints every one it crosses) and connected to a seed among them: one
+        dab, or a stroke (a thin ridge between two dabs is not bridged). `points`: where the drag went (default:
+        the seeds' centres)."""
         seed = np.asarray(seeds, np.int64)
-        centres = self.centroids[seed]
-        if len(seed) > 1:
-            # Join consecutive samples (a fast drag leaves gaps a fill would leak through): points along each
-            # step at most half a radius apart. A step longer than JOIN_STEPS radii jumped to another surface
-            # (the drag crossed a silhouette) and is not bridged.
-            a, b = centres[:-1], centres[1:]
-            n = np.ceil(np.linalg.norm(b - a, axis=1) / (radius * 0.5)).astype(np.int64)
-            n[n > JOIN_STEPS * 2] = 1
-            k = np.repeat(np.arange(len(a)), n.astype(np.intp))
-            t = (np.arange(len(k)) - np.repeat(np.cumsum(n) - n, n.astype(np.intp))) / n[k]
-            centres = np.vstack([a[k] + (b[k] - a[k]) * t[:, None], centres[-1:]])
-        near = self._near(centres, radius)
+        centres = self._stroke_line(seed, radius, 0.5, points)
+        near = self._touched(centres, radius)
         near[seed] = True
         lab = self._components(near[self.pairs[:, 0]] & near[self.pairs[:, 1]])
         return np.nonzero(near & np.isin(lab, lab[seed]))[0]
 
-    def _near(self, points: np.ndarray, radius: float) -> np.ndarray:
-        """Triangles whose centre lies within `radius` of any of `points` (a mask)."""
+    def _stroke_line(self, seed: np.ndarray, radius: float, spacing: float, points: np.ndarray | None
+                     ) -> np.ndarray:
+        """The stroke's points (default: the seeds' centres) with points filled in along each step, at most
+        `spacing` brush radii apart (a fast drag leaves gaps a fill would leak through). A step longer than
+        JOIN_STEPS radii, and than JOIN_EDGES triangles, jumped to another surface (the drag crossed a silhouette)
+        and is not bridged."""
+        centres = self.centroids[seed] if points is None or not len(points) else np.asarray(points, float)
+        if len(centres) < 2:
+            return centres
+        a, b = centres[:-1], centres[1:]
+        ln = np.linalg.norm(b - a, axis=1)
+        k = np.maximum(1, np.ceil(ln / (radius * spacing))).astype(np.intp)
+        k[ln > max(JOIN_STEPS * radius, JOIN_EDGES * self.edge_length())] = 1
+        t = (np.arange(int(k.sum())) - np.repeat(np.cumsum(k) - k, k)) / np.repeat(k, k)
+        i = np.repeat(np.arange(len(a)), k)
+        return np.vstack([a[i] + (b[i] - a[i]) * t[:, None], centres[-1:]])
+
+    def _touched(self, points: np.ndarray, radius: float) -> np.ndarray:
+        """Triangles any part of which lies within `radius` of any of `points` (a mask): exact point-triangle
+        distances for the triangles whose bounding ball reaches that far."""
+        from trimesh.triangles import closest_point
+
         near = np.zeros(self.n_faces, bool)
-        hits = self.tree.query_ball_point(points, r=radius) if len(points) else []
-        if len(hits):
-            near[np.concatenate([np.asarray(h, np.int64) for h in hits])] = True
+        if not len(points):
+            return near
+        tri = self.verts[self.vfaces]
+        bound = np.linalg.norm(tri - self.centroids[:, None], axis=2).max(axis=1)
+        reach = radius + float(bound.max())
+        hits = self.tree.query_ball_point(points, r=reach)
+        cnt = np.fromiter((len(h) for h in hits), np.intp, len(hits))
+        if not cnt.sum():
+            return near
+        f = np.concatenate([np.asarray(h, np.int64) for h in hits if len(h)])
+        q = np.repeat(np.arange(len(points)), cnt)
+        d0 = np.linalg.norm(self.centroids[f] - points[q], axis=1)
+        sure = d0 <= radius
+        near[f[sure]] = True
+        maybe = ~sure & (d0 <= radius + bound[f]) & ~near[f]
+        f, q = f[maybe], q[maybe]
+        if len(f):
+            # One check per triangle and point pair; a triangle many points reach is checked against each.
+            cp = closest_point(tri[f], points[q])
+            near[f[np.linalg.norm(cp - points[q], axis=1) <= radius]] = True
         return near
+
+    def project(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(faces, points on them): the closest point of the surface to each of `points` (among the triangles
+        with the PROJECT_NEAREST nearest centres), e.g. a stroke reflected across the mirror plane."""
+        from trimesh.triangles import closest_point
+
+        k = min(PROJECT_NEAREST, self.n_faces)
+        _, idx = self.tree.query(points, k=k)
+        idx = np.asarray(idx, np.int64).reshape(len(points), k)
+        tri = self.verts[self.vfaces[idx.ravel()]]
+        cp = closest_point(tri, np.repeat(points, k, axis=0)).reshape(len(points), k, 3)
+        d = np.linalg.norm(cp - points[:, None], axis=2)
+        j = d.argmin(axis=1)
+        rows = np.arange(len(points))
+        return idx[rows, j], cp[rows, j]
 
     def _rim(self, inside: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """(faces of a region on its edge, faces outside it along that edge)."""
@@ -423,20 +495,18 @@ class Topology:
             return np.asarray(np.where(inner, -dd, dd) - offset)
         return Field(faces, phi - offset, exact)
 
-    def brush_field(self, seeds: list[int], radius: float) -> "Field":
-        """A brush dab or stroke with a round edge: distance from each vertex to the stroke (the seeds' centres,
-        joined) minus `radius`, over the triangles `brush` covers and the ring round them."""
-        faces = self.brush(seeds, radius)
-        centres = self.centroids[np.asarray(seeds, np.int64)]
-        if len(centres) > 1:
-            a, b = centres[:-1], centres[1:]
-            ln = np.linalg.norm(b - a, axis=1)
-            k = np.maximum(1, np.ceil(ln / (radius / 8))).astype(np.intp)
-            k[ln > JOIN_STEPS * radius] = 1          # a jump to another surface (the drag crossed a silhouette)
-            t = (np.arange(int(k.sum())) - np.repeat(np.cumsum(k) - k, k)) / np.repeat(k, k)
-            i = np.repeat(np.arange(len(a)), k)
-            centres = np.vstack([a[i] + (b[i] - a[i]) * t[:, None], centres[-1:]])
-        return self._distance_field(faces, centres, radius)
+    def brush_field(self, seeds: list[int], radius: float, points: np.ndarray | None = None) -> "Field":
+        """A brush dab or stroke with a round edge: distance from each point to the stroke (`points`, else the
+        seeds' centres, joined) minus `radius`, over the triangles `brush` covers and the ring round them. Read
+        exactly between the corners and split finely enough for the brush (a line finer than the triangles it
+        crosses runs through them with every corner outside)."""
+        faces = self.brush(seeds, radius, points)
+        centres = self._stroke_line(np.asarray(seeds, np.int64), radius, 1 / 8, points)
+        fld = self._distance_field(faces, centres, radius)
+        fld.small = True
+        fld.detail = radius / BRUSH_STEPS
+        fld.touched = faces
+        return fld
 
     def _distance_field(self, faces: np.ndarray, centres: np.ndarray, radius: float) -> "Field":
         """`Field` of the points within `radius` of `centres`, limited to `faces` and the ring of faces round them."""
@@ -1192,10 +1262,19 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
     separate pieces) and paint whole triangles."""
     n = topo.n_faces(op.part)
     sides = [(op.part, op.face, tuple(f for f in op.path if 0 <= f < n))]
+    strokes = [op.stroke()]
     if op.mirror:
         twin = topo.mirrored(op.part, op.face, sides[0][2])
         if twin is not None and twin[:2] != (op.part, op.face):
             sides.append(twin)
+            if strokes[0] is not None:
+                # The drag reflected and laid back onto the surface there (a figure is never exactly symmetric; a
+                # fine brush floating off it would paint nothing). Its triangles are the twin's path.
+                faces, pts = topo.part(twin[0]).project(topo.mirror().reflect(strokes[0]))
+                strokes.append(pts)
+                sides[1] = (twin[0], twin[1], tuple(dict.fromkeys(int(f) for f in faces if int(f) != twin[1])))
+            else:
+                strokes.append(None)
     out: list[Cover] = []
     for k, (pi, fi, path) in enumerate(sides):
         t = topo.part(pi)
@@ -1213,7 +1292,7 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
             out.append(Cover(pi, np.zeros(0, np.int64), t.stamp_field(fi, centre, u, v)))
             continue
         if op.mode == "brush":
-            fld = t.brush_field([fi, *path], max(op.radius + op.grow, 1e-3))
+            fld = t.brush_field([fi, *path], max(op.radius + op.grow, 1e-3), strokes[k])
             out.append(Cover(pi, fld.faces, fld))
             continue
         if op.mode == "wand" and k == 1:
@@ -1426,10 +1505,13 @@ def colour_pieces(topo: TopologyCache, parts: list[Part], filament: int, default
         lab = t._components(sel[t.pairs[:, 0]] & sel[t.pairs[:, 1]])
         idx = np.flatnonzero(sel)
         labs = lab[idx]
-        area = np.bincount(labs, weights=t.areas[idx])
+        # Areas of the shape as given (bent, pressed: what prints), not of the file's triangles.
+        tri = parts[i].vertices[parts[i].faces]
+        areas = np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1) / 2
+        area = np.bincount(labs, weights=areas[idx])
         count = np.bincount(labs)
         # Seed per patch: whole (not split) triangles first, then the largest.
-        order = np.lexsort((-t.areas[idx], st.split()[idx], labs))
+        order = np.lexsort((-areas[idx], st.split()[idx], labs))
         first = np.ones(len(order), bool)
         first[1:] = labs[order][1:] != labs[order][:-1]
         for f in idx[order][first].tolist():

@@ -26,7 +26,7 @@ def _by_id(rep) -> dict:
 
 def test_analyse_two_footed(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path)
-    rep, final = analyse(s, Params(ball_scale=0.6, washer="US1/4x1"))
+    rep, final = analyse(s, Params(ball_scale=0.6, steel="US1/4x1"))
     c = _by_id(rep)
     assert c["fit"]["status"] == "pass"
     assert 0 < rep.fit["scale"] <= rep.fit["max_scale"] + 1e-9
@@ -34,7 +34,8 @@ def test_analyse_two_footed(critter: Path, tmp_path: Path) -> None:
     assert c["steel"]["status"] == "pass"
     assert all(c[f"pocket:{i}"]["status"] == "pass" for i in (1, 2))
     # Pockets were cut: volume dropped by about two pockets.
-    before = sum(trimesh.Trimesh(p.vertices, p.faces).volume for p in s.unit_parts(Params())) * rep.fit["scale"] ** 3
+    before = sum(trimesh.Trimesh(p.vertices, p.faces).volume
+                 for p in s.unit_parts(Params(ball_scale=0.6, steel="US1/4x1"))) * rep.fit["scale"] ** 3
     after = sum(trimesh.Trimesh(p.vertices, p.faces).volume for p in final)
     assert before - after == pytest.approx(2 * np.pi * 2.09 ** 2 * 2.2, rel=0.05)
     # Fits the cavity within the clearance: the limiting margin is ~0 at max scale.
@@ -73,13 +74,13 @@ def test_too_big_scale_fails(critter: Path, tmp_path: Path) -> None:
 
 def test_export_files(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path / "w")
-    out = export(s, Params(washer="US1/4x1"), tmp_path / "out")
+    out = export(s, Params(steel="US1/4x1"), tmp_path / "out")
     f3 = Path(out["figure_3mf"])
     assert f3.name == "critter_pokefit_60.3mf"
     back = read_project(f3).default_object()
     # Paint survived: the top face triangles are still painted.
     assert sum(len(p.tri_extra) for p in back.parts) >= 2
-    # The washer-seat shell is cut from the third-party ball model, present only locally.
+    # The steel-seat shell is cut from the third-party ball model, present only locally.
     from pokefit.pipeline import BALL_MODEL
     if BALL_MODEL.exists():
         assert trimesh.load(out["shell_stl"]).is_watertight
@@ -93,12 +94,12 @@ def test_paint_depth_reaches_the_exported_settings(critter: Path, tmp_path: Path
     from pokefit.pipeline import BUNDLED_REFERENCE
     s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
     for depth, want in ((0.8, "0.8"), (0, "0")):
-        out = export(s, Params(washer="US1/4x1", paint_depth=depth), tmp_path / f"out{depth}")
+        out = export(s, Params(steel="US1/4x1", paint_depth=depth), tmp_path / f"out{depth}")
         with zipfile.ZipFile(out["figure_3mf"]) as z:
             st = json.loads(z.read("Metadata/project_settings.config"))
         assert st["mmu_segmented_region_max_width"] == want
     # None keeps the project's own value (the bundled reference has "0").
-    out = export(s, Params(washer="US1/4x1"), tmp_path / "outnone")
+    out = export(s, Params(steel="US1/4x1"), tmp_path / "outnone")
     with zipfile.ZipFile(out["figure_3mf"]) as z:
         st = json.loads(z.read("Metadata/project_settings.config"))
     assert st.get("mmu_segmented_region_max_width") == "0"
@@ -124,21 +125,21 @@ def test_preview_glb(critter: Path, tmp_path: Path) -> None:
 @pytest.mark.skipif(not REAL_DRAGON.exists(), reason="real dragon 3MF not present")
 def test_real_dragon_end_to_end(tmp_path: Path) -> None:
     s = open_session(REAL_DRAGON, BALL_3MF, None, tmp_path)
-    rep, _ = analyse(s, Params(ball_scale=0.6, washer="M6"))
+    rep, _ = analyse(s, Params(ball_scale=0.6, steel="M6"))
     c = _by_id(rep)
     assert c["fit"]["status"] == "pass"
     assert rep.fit["height_mm"] > 30
     assert len(rep.pockets) == 2 and c["steel"]["status"] == "pass"
-    out = export(s, Params(ball_scale=0.6, washer="M6"), tmp_path / "out")
+    out = export(s, Params(ball_scale=0.6, steel="M6"), tmp_path / "out")
     with zipfile.ZipFile(out["figure_3mf"]) as z:
         assert "3D/Objects/object_1.model" in z.namelist()
 
 
 def test_manual_pockets_keep_fit_and_bad_pocket_not_cut(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path)
-    auto, _ = analyse(s, Params(washer="US1/4x1"))
+    auto, _ = analyse(s, Params(steel="US1/4x1"))
     good = auto.pockets[0]
-    rep, final = analyse(s, Params(washer="US1/4x1", figure_scale=auto.fit["scale"],
+    rep, final = analyse(s, Params(steel="US1/4x1", figure_scale=auto.fit["scale"],
                                    pockets=[good, {"x": 40.0, "y": 0.0}]))
     c = _by_id(rep)
     assert c["fit"]["status"] == "pass"                      # the fit is never traded for the steel ring
@@ -153,12 +154,12 @@ def test_magnet_count(critter: Path, tmp_path: Path) -> None:
     s = open_session(critter, BALL_3MF, None, tmp_path)
     # Each 9 mm foot holds one pocket; a third would go under the belly 11 mm up (over max_seat).
     for n, placed in ((1, 1), (3, 2)):
-        rep, _ = analyse(s, Params(washer="US1/4x1", magnets=n))
+        rep, _ = analyse(s, Params(steel="US1/4x1", magnets=n))
         c = _by_id(rep)
         assert len(rep.pockets) == placed, (n, c["pockets:feet"]["message"])
         assert c["pockets:feet"]["status"] == ("pass" if n == placed else "warn")
         assert all(c[f"pocket:{i + 1}"]["status"] != "fail" for i in range(placed))
-        assert all(p["z"] == 0 for p in rep.pockets)              # flat feet: magnets sit on the washer
+        assert all(p["z"] == 0 for p in rep.pockets)              # flat feet: magnets sit on the steel
         assert rep.underside["height_png"].startswith("data:image/png;base64,")
         assert len(rep.underside["extent"]) == 4 and rep.underside["valid"]
 
@@ -169,7 +170,7 @@ def test_export_import_variant(critter: Path, tmp_path: Path) -> None:
     from pokefit.pipeline import BUNDLED_REFERENCE
 
     s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
-    out = export(s, Params(washer="US1/4x1"), tmp_path / "out")
+    out = export(s, Params(steel="US1/4x1"), tmp_path / "out")
     imp = read_project(out["import_3mf"], as_written=True)
     targets = s.reference["filament_colour"]
     assert imp.colours == targets                                    # carries the project's own slots
@@ -202,3 +203,34 @@ def test_units_hint_for_tiny_files(tmp_path: Path) -> None:
     c = _by_id(rep)
     assert c["units"]["status"] == "info" and "metres" in c["units"]["message"]
     assert rep.fit["height_mm"] > 10                     # still fitted to the ball in mm
+
+
+def test_older_washer_names_still_mean_the_steel() -> None:
+    """Settings saved before steel discs: "washer" was the steel's key, and the value of the magnet seat and the
+    fill area; they map onto the new names (the remembered washer is kept)."""
+    p = Params.from_dict({"washer": "M8", "pocket_seat": "washer", "fill_area": "washer"})
+    assert (p.steel, p.pocket_seat, p.fill_area) == ("M8", "steel", "steel")
+    assert Params.from_dict({"washer": "M8", "steel": "D15"}).steel == "D15"
+    assert Params().steel == "D20"
+
+
+def test_a_dense_figure_opens_simplified_unless_asked_otherwise(tmp_path: Path) -> None:
+    """Over DENSE_FACES triangles with Simplify unset (and `simplify_auto` on), the file opens at AUTO_SIMPLIFY; a
+    Simplify setting of the user's, or `simplify_auto` off, is kept; a small figure is left alone."""
+    from pokefit.pipeline import AUTO_SIMPLIFY, DENSE_FACES, auto_simplify
+
+    dense = trimesh.creation.icosphere(subdivisions=7, radius=10)           # 327,680 triangles
+    assert len(dense.faces) > DENSE_FACES
+    stl = tmp_path / "dense.stl"
+    dense.export(stl)
+    s = open_session(stl, BALL_3MF, None, tmp_path / "w")
+    p = auto_simplify(s, Params())
+    assert p.simplify == AUTO_SIMPLIFY
+    s.use_simplify(p.simplify)
+    loaded = sum(len(q.faces) for q in s.unit_parts(p))
+    assert abs(loaded - AUTO_SIMPLIFY) < 0.05 * AUTO_SIMPLIFY
+    assert auto_simplify(s, Params(simplify=0.5)).simplify == 0.5
+    assert auto_simplify(s, Params(simplify_auto=False)).simplify is None
+    small = tmp_path / "small.stl"
+    trimesh.creation.icosphere(subdivisions=3).export(small)
+    assert auto_simplify(open_session(small, BALL_3MF, None, tmp_path / "w2"), Params()).simplify is None

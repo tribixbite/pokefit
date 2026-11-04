@@ -19,7 +19,7 @@ all scaled by the ball scale and reduced by the clearance. The ring radius at
 each depth is the minimum over all angles (conservative: the latch notch sets
 it near the button).
 
-The floor is the top of the steel washer resting on the washer seat (inner
+The floor is the top of the steel (a disc or washer, steel.py) resting on its seat (inner
 flat of diameter OD + seat_margin filled into the bottom shell's pole).
 """
 from __future__ import annotations
@@ -35,11 +35,11 @@ import trimesh
 from .model3mf import Part, read_project
 from .planar import regions
 from .shell import cap_height, fit_sphere, shell_spheres
-from .washer import Washer
+from .steel import Steel
 
 SHELL_NAME = "0_ball_shell"
 RING_NAME = "1_inner_black"
-SEAT_MARGIN = 0.4   # washer seat diameter = OD + this, so the washer drops in (final mm)
+SEAT_MARGIN = 0.4   # seat diameter = the steel's OD + this, so the steel drops in (final mm)
 RING_STEP = 0.25    # profile sampling step along the axis, native mm
 
 
@@ -149,8 +149,14 @@ class Cavity:
 
     ball: Ball
     scale: float
-    washer: Washer
+    steel: Steel
     clearance: float = 1.0
+    # Diameter of the flat floor filled into the bottom shell's pole (the steel is glued on it, centred), final mm;
+    # None or anything smaller than the steel = the steel's own seat (OD + SEAT_MARGIN). A thin disc can lie on a
+    # wider floor: the floor then sits higher, where the sphere is wider (room for a wide base), at the cost of
+    # height. Beyond the steel the floor is the seat itself, lower by the steel's thickness (0.25 mm for a thin
+    # disc); the figure is fitted as if it stood at the steel's top everywhere, which is conservative.
+    floor_diameter: float | None = None
 
     @property
     def r_inner(self) -> float:
@@ -158,17 +164,25 @@ class Cavity:
 
     @property
     def seat_diameter(self) -> float:
-        return self.washer.od + SEAT_MARGIN
+        """The flat floor in the bottom pole: the steel's seat, or the wider floor asked for."""
+        return max(self.steel.od + SEAT_MARGIN, float(self.floor_diameter or 0.0))
 
     @property
     def seat_z(self) -> float:
-        """Top of the washer seat (inner flat filled into the bottom pole)."""
+        """Top of the seat for the steel (inner flat filled into the bottom pole)."""
         return -cap_height(self.r_inner, self.seat_diameter)
 
     @property
     def floor_z(self) -> float:
-        """Top face of the washer: where the figure stands."""
-        return self.seat_z + self.washer.thickness
+        """Top face of the steel disc or washer: where the figure stands."""
+        return self.seat_z + self.steel.thickness
+
+    @property
+    def floor_radius(self) -> float:
+        """How far from the axis the figure may reach at the floor (`allowed_radius` there, ignoring the ring, which
+        never reaches the floor): out to here it can lie flat; further out it must rise with the sphere (the conform
+        step bends limbs lying beyond it up along the sphere)."""
+        return float(np.sqrt(max(self.r_inner ** 2 - self.floor_z ** 2, 0.0)) - self.clearance)
 
     @property
     def top_z(self) -> float:

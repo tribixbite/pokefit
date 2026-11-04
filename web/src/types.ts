@@ -17,7 +17,13 @@ export interface Params {
   ball_scale: number;
   /** Inner diameter of the ball in mm; overrides ball_scale when set. */
   ball_diameter: number | null;
-  washer: string;
+  steel: string;
+  /** Flat floor printed into the bottom shell, mm: null = the best for the figure, 0 = the steel's own seat. */
+  floor_diameter: number | null;
+  /** Opening a figure of more than 300k triangles with `simplify` unset: load it simplified to 200k. */
+  simplify_auto: boolean;
+  /** Limbs resized or bent ("Reshape a part"), in order. */
+  limbs?: LimbOp[] | null;
   clearance: number;
   figure_scale: number | null;
   /** Degrees, any angle; applied about X, then Y, then Z. */
@@ -33,10 +39,10 @@ export interface Params {
   pocket_ceiling: number;
   /** Min. pocket height surrounded by wall (on a sloped underside the magnet may stand proud below it). */
   pocket_grip: number;
-  /** Automatic placement: highest pocket opening above the washer. */
+  /** Automatic placement: highest pocket opening above the steel. */
   pocket_max_seat: number;
-  /** "washer": every opening on the washer; "raised": openings move up into parts above the bed. */
-  pocket_seat: "washer" | "raised";
+  /** "steel": every opening on the steel; "raised": openings move up into parts above the bed. */
+  pocket_seat: "steel" | "raised";
   /** Import file: figure filament -> project slot (1-based). */
   filament_map: Record<string, number> | null;
   /** Colorize: filament colours (index 0 = filament 1); null = the file's. */
@@ -54,14 +60,14 @@ export interface Params {
   settings_source: "reference" | "original";
   /** An imported process preset's name; null = the project's own process. */
   process: string | null;
-  /** Conform to the ball floor: bend strength (null = auto, 0 = off), flat base Ø (null = washer), press, fill (mm). */
+  /** Conform to the ball floor: bend strength (null = auto, 0 = off), flat base Ø (null = steel), press, fill (mm). */
   bend: number | null;
   flat_base: number | null;
   flat_depth: number;
   flat_fill: number;
-  /** Fill the flat base over this circle instead of round the washer: figure frame at scale 1 (file mm). */
+  /** Fill the flat base over this circle instead of round the steel: figure frame at scale 1 (file mm). */
   fill_circle: { x: number; y: number; d: number } | null;
-  /** Where gaps are filled: round the washer, under the whole figure, in `fill_circle`, or in `fill_shape`. */
+  /** Where gaps are filled: round the steel, under the whole figure, in `fill_circle`, or in `fill_shape`. */
   fill_area: FillArea;
   /** An outline drawn in the underside view, [[x, y], ...] at scale 1 like `fill_circle`. */
   fill_shape: number[][] | null;
@@ -78,12 +84,14 @@ export interface Params {
   despeckle: number;
 }
 
-export interface Washer {
+export interface Steel {
   key: string;
   label: string;
   od: number;
+  /** Hole diameter; 0 = a solid disc. */
   id: number;
   thickness: number;
+  solid: boolean;
 }
 
 export interface BallInfo {
@@ -100,7 +108,10 @@ export interface BallInfo {
   aperture: number;
   profile_z: number[];
   profile_r: number[];
-  washer: Washer;
+  steel: Steel;
+  /** The flat floor's diameter the fit used (auto or asked for), and how far out the figure may reach on it. */
+  floor_diameter: number;
+  floor_radius: number;
   annulus: [number, number];
   clearance: number;
 }
@@ -146,7 +157,7 @@ export interface ObjectInfo {
 }
 
 /** part: up to concave valleys; region: up to any crease; piece: connected shell; brush: a disc; face: one triangle. */
-export type FillArea = "washer" | "all" | "circle" | "shape";
+export type FillArea = "steel" | "all" | "circle" | "shape";
 
 export type PaintMode = "wand" | "part" | "region" | "piece" | "fill" | "brush" | "face" | "stamp";
 
@@ -169,6 +180,8 @@ export interface PaintOp {
   level?: number;
   /** Stamp: the ellipse (centre, semi-axis u, semi-axis v; 9 numbers in the file's frame), from `PickResult.stamp`. */
   stamp?: number[];
+  /** Brush stroke: where the drag went (3 numbers per sample, the tap first; file frame), from `PickResult.points`. */
+  points?: number[];
   /** UI only (the engine ignores it): steps made together ("Split by piece") share it and undo as one. */
   group?: number;
 }
@@ -223,6 +236,31 @@ export interface PrepareResult {
   mirror?: { ok: boolean; error: number; normal: number[] };
 }
 
+/** A resized or bent limb (reshape.py `LimbOp`): the tapped triangle names it, as for paint. */
+export interface LimbOp {
+  part: number;
+  face: number;
+  /** Joint angle: the limb ends at a valley sharper than this (degrees). */
+  angle: number;
+  /** Size about the joint (1 = as is). */
+  scale: number;
+  /** Degrees: tip up (+) / down; an upright limb tips to the front. */
+  bend: number;
+  /** Degrees: tip sideways. */
+  swing: number;
+}
+
+/** The limb under a tap (`pipeline.limb_region`). */
+export interface LimbRegion {
+  part: number;
+  face: number;
+  angle: number;
+  faces: number[];
+  share: number;
+  length_mm: number;
+  joined: boolean;
+}
+
 export interface PickResult {
   part: number;
   face: number;
@@ -238,6 +276,8 @@ export interface PickResult {
   filament: number;
   /** Stamp: the ellipse in the paint operation's frame. */
   stamp?: number[];
+  /** Brush stroke: the drag's points in the paint operation's frame. */
+  points?: number[];
 }
 
 export interface Underside {
@@ -245,7 +285,7 @@ export interface Underside {
   /** The flat base the gap fill added (absent from older reports). */
   fill?: number[][][];
   valid: number[][][];
-  ring: { x: number; y: number; inner: number; outer: number; washer_od: number; washer_id: number };
+  ring: { x: number; y: number; inner: number; outer: number; steel_od: number; steel_id: number };
   pocket_d: number;
   /** Underside heights as an image (dark = on the bed), drawn over `extent` [x0, y0, x1, y1]. */
   height_png: string;
@@ -261,7 +301,7 @@ export interface PocketPos {
   z: number;
 }
 
-export interface WasherRow {
+export interface SteelRow {
   key: string;
   label: string;
   max_scale: number;
@@ -270,6 +310,8 @@ export interface WasherRow {
   /** full = magnets wholly on steel, partial = centres on steel, off = not on steel. */
   steel: "full" | "partial" | "off";
   floor_z: number;
+  /** The floor every row is fitted on: this figure's. */
+  floor_diameter: number;
 }
 
 export interface Report {
@@ -281,7 +323,7 @@ export interface Report {
   import_map: SlotMatch[];
   checks: Check[];
   status: Status;
-  washers: WasherRow[];
+  steels: SteelRow[];
   timings: Record<string, number>;
   underside: Underside;
   /** Estimated colour changes (pokefit/toolchange.py); empty for a one-colour figure. */
@@ -384,8 +426,8 @@ export interface PresetNote {
 }
 
 export interface Config {
-  washers: Washer[];
-  default_washer: string;
+  steels: Steel[];
+  default_steel: string;
   ball_scales: number[];
   params: Params;
   slots: Slot[];
