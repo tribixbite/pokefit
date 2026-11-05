@@ -226,6 +226,13 @@ Serve locally (`python -m pokefit serve`), open http://127.0.0.1:8765/, upload w
 file-upload on the `Open figure` input (don't click it — it opens a native dialog). The "Cut" view hides
 the ball shell for checking colours. Phone layout: emulate ~390 × 844 (a same-origin iframe works when
 the window can't be resized). Avoid browser alert dialogs. Check the console for errors after each flow.
+Files over the upload tool's 10 MB: fetch them from a server you run and set `fileInput.files` with a DataTransfer.
+The browser engine (Pyodide, like the live site): serve a copy of `web/dist` with any static server (the page uses
+the worker when `/api/config` is missing). Brush strokes: dispatch `pointerdown`/`pointermove`/`pointerup`
+PointerEvents on the canvas from JS (the tool's drags do not stroke; a stroke that misses the figure reaches
+OrbitControls, whose `setPointerCapture` then throws for the fake pointer id). Time engine calls by wrapping
+`Worker.prototype.postMessage` and matching reply ids. Long scripts: start them without awaiting and read results
+from `window` later (the JS tool times out at 45 s).
 
 ## Where things stand
 
