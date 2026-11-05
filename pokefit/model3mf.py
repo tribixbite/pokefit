@@ -488,13 +488,19 @@ def remesh_part(original: Part, mesh: trimesh.Trimesh) -> Part:
     fm = face_map(original.vertices, original.faces, v, f)
     extra: dict[int, str] = {}
     old_extra = original.tri_extra
-    match = fm.match.tolist()
-    shift = fm.shift.tolist()
-    for i in np.nonzero(fm.match >= 0)[0].tolist():
-        ex = old_extra.get(match[i])
+    # Files often give every triangle one of a few attribute strings (a Jolteon: 4 on 300k), so each (string,
+    # rotation) is re-laid once (`relaid`): a regex per triangle took 0.5 s per cut part.
+    relaid: dict[tuple[str, int], str] = {}
+    hit = np.nonzero(fm.match >= 0)[0]
+    for i, m, r in zip(hit.tolist(), fm.match[hit].tolist(), fm.shift[hit].tolist()):
+        ex = old_extra.get(m)
         if ex:
-            r = shift[i]
-            extra[i] = remap_paint_attrs(ex, (r, (r + 1) % 3, (r + 2) % 3))
+            if r:
+                got = relaid.get((ex, r))
+                if got is None:
+                    got = relaid[(ex, r)] = remap_paint_attrs(ex, (r, (r + 1) % 3, (r + 2) % 3))
+                ex = got
+            extra[i] = ex
     for i, j in zip(fm.unmatched.tolist(), fm.nearest.tolist()):
         if j in old_extra:
             extra[i] = whole_paint_attrs(old_extra[j])

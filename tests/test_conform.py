@@ -268,3 +268,24 @@ def test_fill_everywhere_and_a_drawn_shape(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="fill_shape"):
         Params(fill_area="shape", fill_shape=[[0, 0], [1, 1]])
     assert Params(fill_circle={"x": 0, "y": 0, "d": 4}).fill_area == "circle"   # older clients
+
+
+def test_the_fill_is_never_taller_than_the_gaps_it_fills() -> None:
+    """A body whose underside rises from the bed (z 0) to 4 mm over 4 mm: a 1 mm fill fills only where the
+    underside is at most 1 mm up, so the base's top stays within 1 mm + the overlap (a cell was admitted by its lowest
+    point and built up to its highest: a 0.5 mm fill came out 1.4 mm tall under a Jolteon)."""
+    wedge = trimesh.Trimesh([[-8, -5, 0], [-4, -5, 4], [-4, 5, 4], [-8, 5, 0], [-8, -5, 8], [-4, -5, 8], [-4, 5, 8],
+                             [-8, 5, 8]],
+                            [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                             [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]])
+    wedge.fix_normals()
+    wedge = wedge.subdivide_to_size(0.5)
+    part = Part("body", 1, np.asarray(wedge.vertices, float), np.asarray(wedge.faces, np.int64), {}, "normal_part")
+    everywhere = lambda gx, gy, step: np.ones(gx.shape, bool)                         # noqa: E731
+    overlap = 0.1
+    base = base_fill([part], everywhere, 1.0, 0.25, overlap, 1, connected=False)
+    assert base is not None
+    v = base.vertices
+    assert v[:, 2].max() <= 1.0 + overlap + 1e-6                                     # no taller than the gap
+    assert v[:, 0].max() <= -8 + 4 * 1.0 / 4 + 0.3                                   # nowhere the underside is higher
+    assert v[:, 0].min() < -7.5                                                       # and it does fill the low end

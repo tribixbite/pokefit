@@ -28,7 +28,8 @@
   strength comes from the share of the low footprint beyond the steel disc that is a limb (free space above it, not a
   solid column) and the low footprint's aspect ratio; it is kept only if the figure then fits ≥ 1 % larger. The
   base over the steel disc is made flat: bumps pressed down by up to 1.2 mm, then gaps up to 2.5 mm between the
-  underside and the floor filled by a separate solid "flat base" part (main colour; at the default, raised to 4
+  underside and the floor (the figure's lowest point) filled by a separate solid "flat base" part, never taller than
+  the gap it fills (plus 0.4 mm hidden inside the figure) (main colour; at the default, raised to 4
   or 6 mm when the magnets asked for do not fit otherwise, e.g. a figure on four thin legs). Air above a low piece is
   a gap too: a paw on the bed under a leg starting within the fill height is filled up to the leg, so pockets beside
   it are walled; when fewer magnets fit than asked, the Magnets card offers the deeper fill. "Fill where": round the steel disc
@@ -44,13 +45,17 @@
   pointing up or down tips to the front or back) and Swing (sideways), about the joint. The change eases in over the
   first third of the part (walking along its surface), so it bends in a curve and the body is untouched; only
   vertices move, so paint is kept. The fit, floor and magnets follow the new shape. Nothing stops a part bent into
-  the body.
+  the body. Base width (x1-x3), Reach (5-100 % of the part's length) and Taper (0.25-4): strengthen where it joins by
+  widening only the part's base about its own centre line, fading to nothing at the reach (taper below 1 stays wide
+  for longer, above 1 falls off right after the joint); the rest of the part keeps its size.
 - Strengthen thin parts (off by default; 1.2 / 1.6 / 2 mm): local thickness is measured at the print size (voxels
   and a distance transform); only across a feature (where the inward ray leaves the solid within ~1.5-3 x its
   thickness), so points and rims (ear tips, a lightning-bolt tail's point) keep their shape instead of swelling into
   knobs; a thin feature (ear, tail tip, flame) gets the minimum where it joins the figure,
   tapering to 40 % of it at its tip, and a thin neck between two thick parts gets it all along. Vertices move
-  out along smoothed normals, blended into the surface around, so colours are kept.
+  out along smoothed directions (not across creases), blended into the surface around, never into a gap more than
+  about half way, and no triangle is turned over, so dense sculpts and simplified meshes do not wrinkle; colours
+  are kept.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
   largest that fits is used, with a note. Settings that are changed (ball, steel, floor, magnets, pockets, height, shape,
   strengthen, simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the

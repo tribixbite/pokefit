@@ -24,6 +24,9 @@ export interface ReshapeHost {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const DEFAULT_ANGLE = 15;
+/** Base widening defaults (reshape.py `LimbOp`): fades over half the part, linearly. */
+const DEFAULT_REACH = 0.5;
+const DEFAULT_STEEP = 1;
 
 /** A short description of a change ("120 %, bend 30°"). */
 export function describeLimb(op: LimbOp): string {
@@ -31,13 +34,14 @@ export function describeLimb(op: LimbOp): string {
   if (op.scale !== 1) bits.push(`${Math.round(op.scale * 100)} %`);
   if (op.bend) bits.push(`bend ${op.bend > 0 ? "+" : ""}${op.bend}°`);
   if (op.swing) bits.push(`swing ${op.swing > 0 ? "+" : ""}${op.swing}°`);
+  if ((op.thicken ?? 1) !== 1) bits.push(`base ×${+(op.thicken ?? 1).toFixed(2)}`);
   return bits.join(", ") || "unchanged";
 }
 
 /** `ops` with `op` put in place of the one naming the same limb (`index`), or added; dropped when it changes nothing. */
 export function withLimb(ops: LimbOp[], index: number, op: LimbOp): LimbOp[] {
   const out = [...ops];
-  const changes = op.scale !== 1 || op.bend !== 0 || op.swing !== 0;
+  const changes = op.scale !== 1 || op.bend !== 0 || op.swing !== 0 || (op.thicken ?? 1) !== 1;
   if (index >= 0 && index < out.length) {
     if (changes) out[index] = op;
     else out.splice(index, 1);
@@ -50,13 +54,17 @@ export class Reshape {
   private busy = false;
   /** The limb being edited: its region and its place in `params.limbs` (-1: not reshaped yet). */
   private current: { region: LimbRegion; index: number } | null = null;
+  /** Base widening fade for a part not widened yet (a widened one keeps its own in its `LimbOp`). */
+  private fade = { reach: DEFAULT_REACH, steep: DEFAULT_STEEP };
 
   constructor(private host: ReshapeHost) {
     $("limbPick").addEventListener("click", () => this.setPicking(!this.picking));
     $("limbDone").addEventListener("click", () => this.close());
-    $("limbReset").addEventListener("click", () => this.change({ scale: 1, bend: 0, swing: 0 }));
+    $("limbReset").addEventListener("click", () => this.change({ scale: 1, bend: 0, swing: 0, thicken: 1 }));
     const sliders: [string, keyof LimbOp, (v: number) => number][] = [
       ["limbScale", "scale", (v) => v / 100], ["limbBend", "bend", (v) => v], ["limbSwing", "swing", (v) => v],
+      ["limbThicken", "thicken", (v) => v / 100], ["limbReach", "reach", (v) => v / 100],
+      ["limbSteep", "steep", (v) => v],
     ];
     for (const [id, key, conv] of sliders) {
       const el = $<HTMLInputElement>(id);
@@ -120,6 +128,9 @@ export class Reshape {
     $<HTMLInputElement>("limbScale").value = String(Math.round(op.scale * 100));
     $<HTMLInputElement>("limbBend").value = String(op.bend);
     $<HTMLInputElement>("limbSwing").value = String(op.swing);
+    $<HTMLInputElement>("limbThicken").value = String(Math.round((op.thicken ?? 1) * 100));
+    $<HTMLInputElement>("limbReach").value = String(Math.round((op.reach ?? DEFAULT_REACH) * 100));
+    $<HTMLInputElement>("limbSteep").value = String(op.steep ?? DEFAULT_STEEP);
     $<HTMLInputElement>("limbAngle").value = String(op.angle);
     this.render();
   }
@@ -127,11 +138,13 @@ export class Reshape {
   /** The operation being edited, as stored (or unchanged, for a limb not reshaped yet). */
   private op(): LimbOp {
     const c = this.current;
-    if (!c) return { part: 0, face: 0, angle: DEFAULT_ANGLE, scale: 1, bend: 0, swing: 0 };
+    const fade = { reach: this.fade.reach, steep: this.fade.steep };
+    if (!c) return { part: 0, face: 0, angle: DEFAULT_ANGLE, scale: 1, bend: 0, swing: 0, thicken: 1, ...fade };
     const ops = this.host.params().limbs ?? [];
     return c.index >= 0 && ops[c.index]
       ? ops[c.index]
-      : { part: c.region.part, face: c.region.face, angle: c.region.angle, scale: 1, bend: 0, swing: 0 };
+      : { part: c.region.part, face: c.region.face, angle: c.region.angle, scale: 1, bend: 0, swing: 0, thicken: 1,
+          ...fade };
   }
 
   private change(delta: Partial<LimbOp>): void {
@@ -140,13 +153,18 @@ export class Reshape {
     const p = this.host.params();
     const ops = p.limbs ?? [];
     const next = { ...this.op(), ...delta };
+    // Reach and taper are kept for a part not widened yet (set them first, then the base width).
+    if (delta.reach !== undefined) this.fade.reach = delta.reach;
+    if (delta.steep !== undefined) this.fade.steep = delta.steep;
     const out = withLimb(ops, c.index, next);
     // Where it now sits in the list (added at the end, kept, or gone).
     c.index = out.length > ops.length ? out.length - 1 : out.length < ops.length ? -1 : c.index;
+    const same = JSON.stringify(out) === JSON.stringify(ops);
     p.limbs = out.length ? out : null;
+    this.open(c.region, c.index);
+    if (same) return;               // a fade setting on a part not widened: the shape is the same
     p.figure_scale = null;          // the largest that fits changes with the shape
     p.pockets = null;
-    this.open(c.region, c.index);
     this.host.apply();
   }
 
@@ -179,6 +197,9 @@ export class Reshape {
     $("limbScaleVal").textContent = `${$<HTMLInputElement>("limbScale").value} %`;
     $("limbBendVal").textContent = `${$<HTMLInputElement>("limbBend").value}°`;
     $("limbSwingVal").textContent = `${$<HTMLInputElement>("limbSwing").value}°`;
+    $("limbThickenVal").textContent = `×${(+$<HTMLInputElement>("limbThicken").value / 100).toFixed(2)}`;
+    $("limbReachVal").textContent = `${$<HTMLInputElement>("limbReach").value} %`;
+    $("limbSteepVal").textContent = (+$<HTMLInputElement>("limbSteep").value).toFixed(2);
     $("limbAngleVal").textContent = `${$<HTMLInputElement>("limbAngle").value}°`;
   }
 

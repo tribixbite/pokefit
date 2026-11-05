@@ -204,7 +204,7 @@
         <div class="reshape" role="group" aria-label="Reshape a part">
           <div class="row">
             <button id="limbPick" class="btn" type="button" aria-pressed="false" title="Then tap a tail, ear, leg or arm on the 3D view: it is found up to the valley where it meets the body, like paint's Part mode">Pick a part</button>
-            <span class="muted">Resize or bend a tail, ear or leg</span>
+            <span class="muted">Resize, bend or strengthen a tail, ear or leg</span>
           </div>
           <label class="range-row" id="limbAngleRow" hidden title="Where the part ends: at a valley sharper than this. Smaller: shallower valleys count as joints too, so a tap takes less (try it when a tap takes the body); larger: only deep joints, so it takes more.">Joint <input id="limbAngle" type="range" min="2" max="60" step="1" value="15" /> <span id="limbAngleVal" class="muted"></span></label>
           <p id="limbInfo" class="hint"></p>
@@ -212,6 +212,10 @@
             <label class="range-row">Size <input id="limbScale" type="range" min="30" max="300" step="5" value="100" /> <span id="limbScaleVal" class="muted"></span></label>
             <label class="range-row" title="Tip up (+) or down (−) at the joint; a part pointing up or down tips to the front (+) or back">Bend <input id="limbBend" type="range" min="-150" max="150" step="5" value="0" /> <span id="limbBendVal" class="muted"></span></label>
             <label class="range-row" title="Tip sideways at the joint (+ = counter-clockwise seen from above)">Swing <input id="limbSwing" type="range" min="-150" max="150" step="5" value="0" /> <span id="limbSwingVal" class="muted"></span></label>
+            <p class="hint">Strengthen where it joins: widen the part at its joint only, fading out along it (the rest keeps its size).</p>
+            <label class="range-row" title="How much wider the part gets right at its joint (×1 = as it is)">Base width <input id="limbThicken" type="range" min="100" max="300" step="5" value="100" /> <span id="limbThickenVal" class="muted"></span></label>
+            <label class="range-row" title="How far along the part the widening fades out, as a share of its length from the joint">Reach <input id="limbReach" type="range" min="5" max="100" step="5" value="50" /> <span id="limbReachVal" class="muted"></span></label>
+            <label class="range-row" title="The fade's curve: below 1 stays wide for longer and drops near the end of the reach; above 1 drops off steeply right after the joint">Taper <input id="limbSteep" type="range" min="0.25" max="4" step="0.25" value="1" /> <span id="limbSteepVal" class="muted"></span></label>
             <div class="row">
               <button id="limbReset" class="btn" type="button">As it was</button>
               <button id="limbDone" class="btn" type="button">Done</button>
@@ -559,8 +563,8 @@
           body filled with a solid flat base) so the magnets have room. Set the bend to <i>Off</i> and the sizes to 0 to keep the
           model exactly as it is.</li>
         <li><b>Turn it</b> — rotate about X, Y and Z by any angle (45° works) if the model is not standing upright.</li>
-        <li><b>Reshape a part</b> (Figure card) — <i>Pick a part</i>, tap a tail, ear or leg, then change its size or bend it at the
-          joint (up, down or sideways). Tap it again later to change it; × puts it back.</li>
+        <li><b>Reshape a part</b> (Figure card) — <i>Pick a part</i>, tap a tail, ear or leg, then change its size, bend it at the
+          joint (up, down or sideways), or widen just its base where it joins (Base width, Reach, Taper). Tap it again later to change it; × puts it back.</li>
         <li><b>The view</b> — <i>Ball</i> off shows the figure alone; <i>Cut</i> halves the ball; <i>Space</i> shows the room it may use.</li>
         <li><b>Export</b> — the figure 3MF (opens as a Bambu Studio project), an <i>import</i> variant whose colours are renumbered to
           your own project's filament slots (for <i>Import geometry only</i>), and a JSON report. <i>Project or presets…</i> also

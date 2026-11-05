@@ -248,6 +248,12 @@ export interface LimbOp {
   bend: number;
   /** Degrees: tip sideways. */
   swing: number;
+  /** Base width factor at the joint (1 = as is), fading over `reach` of the limb's length. */
+  thicken?: number;
+  /** Share of the limb's length the base widening fades over (0.05..1). */
+  reach?: number;
+  /** The fade's exponent: < 1 stays wide longer, > 1 falls off near the joint (0.25..4). */
+  steep?: number;
 }
 
 /** The limb under a tap (`pipeline.limb_region`). */

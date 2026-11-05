@@ -26,15 +26,15 @@ from shapely.ops import unary_union
 
 from .ball import SEAT_MARGIN, Ball, Cavity, load_ball
 from .checks import (bed_contact_check, merged, islands_check, mesh_checks, overhang_check, printable_solid,
-                     supports_verdict, thickness_check)
+                     self_intersections, supports_verdict, thickness_check)
 from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FILL_OVERLAP, ConformInfo, ConformSpec,
-                      base_fill, conform, disc_region)
+                      Shaped, base_fill, conform_fill, conform_shape, disc_region)
 from .strengthen import StrengthenInfo, strengthen
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
                        PaintReplay, apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
 from .fit import FLOOR_MAX, HullPoints, annulus_margin, best_floor, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
-                      height_field, pocket_map, required_steel, seat_pockets, validate_pockets)
+                      height_field, pocket_map, pockets_cut_cached, required_steel, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
                        remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
@@ -318,6 +318,8 @@ class Session:
     _paint_scale: dict[tuple, float] = field(default_factory=dict)         # `paint_scale` per setup
     _floors: dict[tuple, float] = field(default_factory=dict)              # `floor` (auto) per setup
     _shaped: dict[tuple, list[Part]] = field(default_factory=dict)          # orientation + limbs -> parts
+    _selfint: dict[str, list[Check]] = field(default_factory=dict)          # object id -> self-intersection checks
+    _shapes: dict[tuple, Shaped] = field(default_factory=dict)              # conform step before its fill
 
     def obj(self, params: Params) -> FigureObject:
         return self.project.object(params.object_id) if params.object_id else self.project.default_object()
@@ -466,8 +468,15 @@ class Session:
             if spec is not None:
                 # Designed against this setup's floor (its height and width: `_floor_key` is in the key).
                 cavity = self.cavity(params)
-                # Vertices move, faces keep their order: paint and texture colour carry over.
-                parts, self._conform[key] = conform(parts, cavity, spec)
+                # Vertices move, faces keep their order: paint and texture colour carry over. The bend and press
+                # do not depend on the fill settings: a fill edit (or `_auto_fill` trying deeper fills) re-fills.
+                skey = self._spec_key(params, replace(spec, fill=0.0, fill_circle=None, fill_shape=None,
+                                                      fill_all=False))
+                if skey not in self._shapes:
+                    if len(self._shapes) > 4:
+                        self._shapes.clear()
+                    self._shapes[skey] = conform_shape(parts, cavity, spec)
+                parts, self._conform[key] = conform_fill(self._shapes[skey], spec)
             if params.strengthen > 0:
                 parts = self._strengthened(params, parts, key)
             self._frames[key] = parts
@@ -854,13 +863,17 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
     }
 
 
-def input_checks(session: Session, params: Params) -> list[Check]:
-    """Mesh soundness of the source parts (scale-independent, computed once per object)."""
+def input_checks(session: Session, params: Params, printing: bool = True) -> list[Check]:
+    """Mesh soundness of the source parts (scale-independent, computed once per object). The self-intersection
+    checks (the slow part: pymeshlab, local only) come with the printability checks: `printing=False` leaves them
+    out unless they were made already."""
     obj = session.obj(params)
+    if printing and obj.id not in session._selfint:
+        session._selfint[obj.id] = [self_intersections(p) for p in obj.parts]
     if obj.id not in session.input_checks:
         checks: list[Check] = []
         for p in obj.parts:
-            checks.extend(mesh_checks(p))
+            checks.extend(mesh_checks(p, intersections=False))
         if obj.old_pockets:
             n = len(obj.old_pockets)
             base = (f" Its flat base ({obj.old_bases} part{'s' if obj.old_bases > 1 else ''}) was taken off too: the "
@@ -877,7 +890,7 @@ def input_checks(session: Session, params: Params) -> list[Check]:
                                    + ("Every edge now joins exactly two faces." if sound else
                                       "Some problems are left (below)."), obj.repaired.split))
         session.input_checks[obj.id] = checks
-    return session.input_checks[obj.id]
+    return [*session.input_checks[obj.id], *session._selfint.get(obj.id, [])]
 
 
 @dataclass
@@ -1161,7 +1174,7 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     hp = session.points(params)
     unit = session.figure_parts(params)
     obj = session.obj(params)
-    checks: list[Check] = list(input_checks(session, params))
+    checks: list[Check] = list(input_checks(session, params, printing))
     if (dense := _dense_hint(obj, params)) is not None:
         checks.append(dense)
     t["input_checks"] = time.time() - t0
@@ -1217,6 +1230,7 @@ def analyse(session: Session, params: Params, recommend: bool = False,
                             round(sinfo.thin_share, 4)))
 
     t2 = time.time()
+    uncut = False                         # pockets left uncut by a quick analysis (the full one cuts them)
     pspec = session.pocket_spec(params)
     meshes = [p.mesh() for p in final]
     if skey not in session._undersides:
@@ -1255,8 +1269,13 @@ def analyse(session: Session, params: Params, recommend: bool = False,
                                     f"; needs {need}.", round(am, 2)))
             # Per-pocket checks come first, in pocket order; a failed one is not cut.
             cuttable = [p for p, c in zip(pockets, pocket_checks) if c.status != "fail"]
-            final, cut_checks = cut_pockets(final, cuttable, pspec)
-            checks.extend(cut_checks)
+            # The quick analysis shows the fit and where the pockets go (the preview draws them on the uncut figure):
+            # cutting them (~2 s on 300k triangles) waits for the full one unless that cut was made already.
+            if printing or pockets_cut_cached(final, cuttable, pspec):
+                final, cut_checks = cut_pockets(final, cuttable, pspec)
+                checks.extend(cut_checks)
+            else:
+                uncut = True
     t["pockets"] = time.time() - t2
 
     t3 = time.time()
@@ -1266,10 +1285,11 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     ignore = [(p.x, p.y, params.pocket_diameter / 2, p.z + params.pocket_depth) for p in pockets] if params.magnets else []
     # Geometry only: a colour edit re-analyses the same shape, so the checks are reused.
     pkey = (parts_digest(final), layer, angle, repr(ignore))
-    pending = not printing and pkey not in session._printing
+    pending = not printing and (uncut or pkey not in session._printing)
     if pending:
         checks.append(Check("printing", "Print checks", "info",
-                            "Checking wall thickness, overhangs, layers that start in mid-air and bed contact…"))
+                            ("Cutting the magnet pockets, checking" if uncut else "Checking")
+                            + " wall thickness, overhangs, layers that start in mid-air and bed contact…"))
     elif pkey not in session._printing:
         solid = printable_solid(final)
         found = [thickness_check(solid), overhang_check(solid, angle, ignore),

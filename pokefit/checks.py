@@ -55,8 +55,9 @@ def shell_volumes(m: trimesh.Trimesh, edge_counts: np.ndarray, edge_inverse: np.
     return vol.tolist()
 
 
-def mesh_checks(part: Part) -> list[Check]:
-    """Watertight, manifold, winding, degenerate faces, stray shells, self-intersections."""
+def mesh_checks(part: Part, intersections: bool = True) -> list[Check]:
+    """Watertight, manifold, winding, degenerate faces, stray shells, self-intersections (`intersections`: about
+    2.5 s on a 300k-triangle part, so the first quick analysis leaves them to `self_intersections`)."""
     m = merged(part)
     name, pid = part.name, part.name
     out: list[Check] = []
@@ -111,8 +112,14 @@ def mesh_checks(part: Part) -> list[Check]:
                          f"{len(vols)} separate shells (intended pieces such as eyes are normal).",
                          len(vols)))
 
-    out.append(_self_intersections(m, name, pid))
+    if intersections:
+        out.append(_self_intersections(m, name, pid))
     return out
+
+
+def self_intersections(part: Part) -> Check:
+    """The self-intersection check of `mesh_checks` alone."""
+    return _self_intersections(merged(part), part.name, part.name)
 
 
 def _self_intersections(m: trimesh.Trimesh, name: str, pid: str) -> Check:

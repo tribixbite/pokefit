@@ -85,3 +85,23 @@ def test_annulus_reduces_scale() -> None:
     assert free is not None and held is not None
     assert held.max_scale < free.max_scale
     assert held.max_scale * 4 <= 4.5 + 1e-6
+
+
+def test_prepare_points_hulls_are_those_of_every_vertex() -> None:
+    """The octagon pre-filter (`_maybe_on_hull`) drops only points inside their slab's hull: the hull corners are
+    the same as shapely's hulls of all the vertices (a noisy cloud, a slab of collinear points, a slab of one point)."""
+    import shapely
+
+    rng = np.random.default_rng(5)
+    v = np.vstack([rng.normal(size=(20000, 3)) * [5, 3, 4],
+                   np.column_stack([np.linspace(-2, 2, 50), np.linspace(1, 3, 50), np.full(50, 30.0)]),
+                   [[0.5, 0.5, -20.0]] * 7])
+    hp = prepare_points(v, n_slabs=40)
+    z = v[:, 2] - v[:, 2].min()
+    edges = np.linspace(0.0, z.max(), 41)
+    idx = np.clip(np.searchsorted(edges, z, side="right") - 1, 0, 39)
+    for k in np.unique(idx):
+        hull = shapely.convex_hull(shapely.multipoints(v[idx == k, :2]))
+        want = {tuple(np.round(c, 9)) for c in shapely.get_coordinates(hull)}
+        got = {tuple(np.round(c, 9)) for c in hp.xy[np.isclose(hp.z_lo, edges[k])]}
+        assert got == want, k

@@ -12,6 +12,14 @@ in a smooth curve instead of a kink:
 
     v' = pivot + R(swing * w) R(bend * w) ((v - pivot) * (1 + (scale - 1) * w))
 
+**Thicken the base** (`thicken`, `reach`, `steep`): a limb is often thinnest where it joins the body (an ear's
+root), so it can be widened there alone: each cross-section moves out from the limb's own centre line by
+(thicken - 1) * (1 - u)^steep, where u is the distance from the joint along the surface over `reach` of the limb's
+length (0 at the joint, 1 from there on: the rest of the limb keeps its size). The centre line is the centroid of
+each ring of equal surface distance from the joint (`_centre_line`), so a curved ear widens round its own curve.
+The joint ring widens too, which stretches the body's triangles round it into a fillet. Applied before the size and
+bend change, in the limb's own shape.
+
 Directions are the figure's (after its rotation; z up, the front at -y): `bend` > 0 lifts the tip (a limb pointing
 up or down tips toward the front instead), `swing` turns it round the axis at right angles to both (for a limb lying
 flat: round the vertical, counter-clockwise seen from above). Nothing stops a bent limb running into the body:
@@ -30,6 +38,10 @@ from .model3mf import Part
 BLEND = 0.35        # share of the limb's length (from the joint, along the surface) over which a change eases in
 MAX_SHARE = 0.4     # a "limb" with more of its part's surface (area) than this is the body: refused (tails, ears, legs: 2-25 %)
 SCALE_RANGE = (0.3, 3.0)
+THICKEN_RANGE = (1.0, 3.0)   # the base's width factor at the joint
+REACH_RANGE = (0.05, 1.0)    # share of the limb's length the widening fades over
+STEEP_RANGE = (0.25, 4.0)    # the fade's exponent: < 1 stays wide longer, > 1 falls off near the joint
+CENTRE_BANDS = 24            # rings of surface distance the centre line is averaged over (within `reach`)
 MAX_ANGLE = 150.0   # degrees, |bend| and |swing|
 UPRIGHT = 0.8       # a limb whose direction is within ~37 degrees of vertical bends toward the front, not up
 MAX_LIMBS = 24
@@ -47,11 +59,15 @@ class LimbOp:
     scale: float = 1.0             # size about the joint
     bend: float = 0.0              # degrees, tip up (> 0) or down
     swing: float = 0.0             # degrees, sideways
+    thicken: float = 1.0           # width factor at the joint, fading over `reach` (module doc)
+    reach: float = 0.5             # share of the limb's length the widening fades over
+    steep: float = 1.0             # the fade's exponent
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LimbOp":
         op = cls(int(d["part"]), int(d["face"]), float(d.get("angle", DEFAULT_ANGLE)), float(d.get("scale", 1.0)),
-                 float(d.get("bend", 0.0)), float(d.get("swing", 0.0)))
+                 float(d.get("bend", 0.0)), float(d.get("swing", 0.0)), float(d.get("thicken", 1.0)),
+                 float(d.get("reach", 0.5)), float(d.get("steep", 1.0)))
         if op.part < 0 or op.face < 0:
             raise ValueError("a limb's part and face must be >= 0")
         if not 0.0 < op.angle <= 180.0:
@@ -60,6 +76,10 @@ class LimbOp:
             raise ValueError(f"a limb's size must be {SCALE_RANGE[0]:g}..{SCALE_RANGE[1]:g}, not {op.scale}")
         if not (abs(op.bend) <= MAX_ANGLE and abs(op.swing) <= MAX_ANGLE):
             raise ValueError(f"a limb's bend and swing must be within ±{MAX_ANGLE:g} degrees")
+        for name, value, (lo, hi) in (("base width", op.thicken, THICKEN_RANGE), ("reach", op.reach, REACH_RANGE),
+                                      ("taper", op.steep, STEEP_RANGE)):
+            if not lo <= value <= hi:
+                raise ValueError(f"a limb's {name} must be {lo:g}..{hi:g}, not {value}")
         return op
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,7 +87,7 @@ class LimbOp:
 
     @property
     def changes(self) -> bool:
-        return self.scale != 1.0 or self.bend != 0.0 or self.swing != 0.0
+        return self.scale != 1.0 or self.bend != 0.0 or self.swing != 0.0 or self.thicken != 1.0
 
 
 @dataclass
@@ -79,6 +99,7 @@ class Limb:
     weight: np.ndarray     # per entry of `verts`: 0 on the joint, easing to 1 at BLEND of its length
     joint: np.ndarray      # merged vertices it shares with the rest of the part (empty: a separate piece)
     length: float          # longest walk from the joint along it, file mm (0: a separate piece)
+    dist: np.ndarray       # per entry of `verts`: walk from the joint along the surface, file mm (`length` if none)
 
 
 def find_limb(topo: TopologyCache, part: int, face: int, angle: float = DEFAULT_ANGLE) -> Limb:
@@ -98,16 +119,17 @@ def find_limb(topo: TopologyCache, part: int, face: int, angle: float = DEFAULT_
     verts = np.unique(t.vfaces[faces])
     joint = np.intersect1d(verts, np.unique(t.vfaces[~inside]), assume_unique=True)
     if not len(joint):
-        return Limb(part, faces, verts, np.ones(len(verts)), joint, 0.0)
+        return Limb(part, faces, verts, np.ones(len(verts)), joint, 0.0, np.zeros(len(verts)))
     graph = t.vertex_graph()[verts][:, verts]
     starts = np.searchsorted(verts, joint)
     dist = np.asarray(dijkstra(graph, indices=starts, min_only=True))
     reach = np.isfinite(dist)
     length = float(dist[reach].max()) if reach.any() else 0.0
     if length <= 0:
-        return Limb(part, faces, verts, np.zeros(len(verts)), joint, 0.0)
-    u = np.clip(np.where(reach, dist, length) / (BLEND * length), 0.0, 1.0)
-    return Limb(part, faces, verts, u * u * (3 - 2 * u), joint, length)
+        return Limb(part, faces, verts, np.zeros(len(verts)), joint, 0.0, np.zeros(len(verts)))
+    walk = np.where(reach, dist, length)
+    u = np.clip(walk / (BLEND * length), 0.0, 1.0)
+    return Limb(part, faces, verts, u * u * (3 - 2 * u), joint, length, walk)
 
 
 def find_limb_at(topo: TopologyCache, part: int, face: int, angle: float = DEFAULT_ANGLE) -> tuple[Limb, float]:
@@ -152,6 +174,36 @@ def limb_axes(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return bend, swing
 
 
+def _centre_line(pts: np.ndarray, u: np.ndarray, bands: int = CENTRE_BANDS) -> np.ndarray:
+    """Per point, the limb's centre at its distance from the joint: the centroid of the points in each ring of
+    equal distance (`u` in [0, 1], `bands` rings), interpolated along u. A ring of surface points round a limb has
+    its centroid on the limb's axis, wherever the limb curves."""
+    k = np.minimum((u * bands).astype(np.int64), bands - 1)
+    n = np.bincount(k, minlength=bands).astype(np.float64)
+    have = n > 0
+    sums = np.stack([np.bincount(k, weights=pts[:, j], minlength=bands) for j in range(3)], axis=1)
+    centres = sums[have] / n[have][:, None]
+    at = np.bincount(k, weights=u, minlength=bands)[have] / n[have]       # mean u of each ring
+    if len(at) == 1:
+        return np.repeat(centres, len(pts), axis=0)
+    return np.stack([np.interp(u, at, centres[:, j]) for j in range(3)], axis=1)
+
+
+def thickened(pts: np.ndarray, walk: np.ndarray, length: float, op: LimbOp) -> np.ndarray:
+    """`pts` (a limb's vertices; `walk`: their distance from the joint along the surface) widened at the base:
+    moved out from the centre line by (thicken - 1) * (1 - u)^steep, u = walk / (reach * length) (module doc)."""
+    if op.thicken == 1.0 or length <= 0:
+        return pts
+    u = np.clip(walk / (op.reach * length), 0.0, 1.0)
+    g = (op.thicken - 1.0) * (1.0 - u) ** op.steep
+    near = u < 1.0
+    out = pts.copy()
+    if near.any():
+        centre = _centre_line(pts[near], u[near])
+        out[near] = pts[near] + (pts[near] - centre) * g[near][:, None]
+    return out
+
+
 def apply_limbs(parts: list[Part], ops: list[LimbOp], topo: TopologyCache) -> list[Part]:
     """`parts` (figure frame, the same triangles as `topo`'s parts) with each limb resized and bent, in order (a
     later one sees the earlier ones' result). Operations on parts that are not there are skipped."""
@@ -176,7 +228,8 @@ def apply_limbs(parts: list[Part], ops: list[LimbOp], topo: TopologyCache) -> li
             direction = far - pivot if np.linalg.norm(far - pivot) > 1e-9 else np.array([1.0, 0.0, 0.0])
         bend_axis, swing_axis = limb_axes(direction)
         w = limb.weight
-        rel = (pos[limb.verts] - pivot) * (1 + (op.scale - 1) * w)[:, None]
+        base = thickened(pos[limb.verts], limb.dist, limb.length, op)
+        rel = (base - pivot) * (1 + (op.scale - 1) * w)[:, None]
         rel = _rotate(rel, bend_axis, np.radians(op.bend) * w)
         rel = _rotate(rel, swing_axis, np.radians(op.swing) * w)
         moved = pos.copy()

@@ -31,7 +31,7 @@ already flat needs t ≈ 0 and is left alone.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Callable
 
 import numpy as np
@@ -221,8 +221,24 @@ def _shape(v0: np.ndarray, parts: list[Part], axis: np.ndarray, s: float, k: flo
     return _Shaped(v, t, share, axis)
 
 
+@dataclass
+class Shaped:
+    """The conform step before its fill (`conform_shape`): what `conform_fill` builds the flat base on. The fill
+    settings do not change it, so a fill edit (or `Session._auto_fill` trying deeper fills) only re-fills."""
+    parts: list[Part]               # bent and pressed, no flat base yet
+    info: ConformInfo
+    axis: np.ndarray                # figure-frame XY of the ball axis it was designed for
+    scale: float                    # the print scale it was designed for (0: does not fit)
+    r_flat: float                   # final mm, the pressed disc's radius (0 = off)
+
+
 def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[Part], ConformInfo]:
     """Figure-frame parts (scale 1, lowest point z = 0) bent and flattened for the ball (module doc)."""
+    return conform_fill(conform_shape(parts, cavity, spec), spec)
+
+
+def conform_shape(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> Shaped:
+    """Bend and press (`conform` without the flat base: `spec`'s fill settings are not read)."""
     info = ConformInfo(auto=spec.bend is None)
     v0 = np.vstack([p.vertices for p in parts]).astype(np.float64)
     v0[:, 2] -= v0[:, 2].min()
@@ -230,7 +246,7 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     first = _fit(v0, cavity)
     if first is None or height <= 0:
         info.note = "does not fit; left as is"
-        return parts, info
+        return Shaped(parts, info, np.zeros(2), 0.0, 0.0)
     info.scale_before = first[0]
     s0 = float(spec.scale) if spec.scale else first[0]
     r_flat = spec.flat_diameter / 2 if spec.flat_diameter > 0 else 0.0
@@ -271,6 +287,13 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
     info.lift_mm = float(np.max(best.v[:, 2] - v0[:, 2]) * (s0 if spec.scale else best_scale))
     s_final = s0 if spec.scale else best_scale
     out = parts if best.depth == 0 and info.bend == 0 else _with_vertices(parts, best.v)
+    return Shaped(out, info, np.asarray(best.axis, np.float64), s_final, r_flat)
+
+
+def conform_fill(shaped: Shaped, spec: ConformSpec) -> tuple[list[Part], ConformInfo]:
+    """`shaped` plus the flat base `spec` asks for (its fill settings), and the conform step's report."""
+    out, s_final, r_flat = shaped.parts, shaped.scale, shaped.r_flat
+    info = replace(shaped.info)
     base: Part | None = None
     if spec.fill > 0 and s_final > 0:
         # A region the user chose fills every gap in it, joined to the figure's footing or not; the default disc
@@ -285,10 +308,10 @@ def conform(parts: list[Part], cavity: Cavity, spec: ConformSpec) -> tuple[list[
             region = everywhere
         if region is not None:
             base = base_fill(out, region, spec.fill / s_final, FILL_CELL / s_final, FILL_OVERLAP / s_final,
-                             parts[0].extruder, connected=False)
+                             out[0].extruder, connected=False)
         elif r_flat > 0:
-            base = base_fill(out, disc_region([tuple(best.axis)], r_flat / s_final), spec.fill / s_final,
-                             FILL_CELL / s_final, FILL_OVERLAP / s_final, parts[0].extruder)
+            base = base_fill(out, disc_region([(float(shaped.axis[0]), float(shaped.axis[1]))], r_flat / s_final),
+                             spec.fill / s_final, FILL_CELL / s_final, FILL_OVERLAP / s_final, out[0].extruder)
     if base is not None:
         out = [*out, base]
         info.fill_mm2 = float(base.mesh().area_faces[base.mesh().face_normals[:, 2] < -0.9].sum()) * s_final ** 2
@@ -377,19 +400,19 @@ def base_fill(parts: list[Part], region: Region, max_gap: float, cell: float, ov
     blocks = lo[:cy * b, :cx * b].reshape(cy, b, cx, b)
     zmin = blocks.min(axis=(1, 3))
     under = np.isfinite(blocks).all(axis=(1, 3))
-    # The top reaches the HIGHEST underside point of its cell (+ overlap), so no gap is left where the
-    # underside slopes (a Pikachu's feet: 0.3-1 mm gaps when capped two cells above the lowest), but stays
-    # below the top of that first solid span. Points of the cell more than `max_gap` above its lowest are not
-    # underside the base fills (a cell on the footprint's edge that "sees" the chin far up).
-    low = np.isfinite(blocks) & (blocks <= zmin[:, None, :, None] + max_gap)
-    zmax = np.where(under, np.where(low, blocks, -np.inf).max(axis=(1, 3)), np.inf)
+    # A cell is filled only when ALL of its underside is at most `max_gap` above the bed: the base fills gaps up
+    # to that height and nothing more (admitting a cell by its lowest point and building it up to the highest
+    # made a 0.5 mm fill 1.4 mm tall on a Jolteon, its edges showing under the belly 3-5 mm up). The top reaches
+    # the highest underside point of the cell (+ overlap, hidden in the figure), so a sloping underside leaves
+    # no gap (a Pikachu's feet), and stays below the top of that first solid span.
+    zmax = np.where(under, blocks.max(axis=(1, 3)), np.inf)
     span_top = hi[:cy * b, :cx * b].reshape(cy, b, cx, b).min(axis=(1, 3))
     step = field.step * b
     xs = field.x0 + (np.arange(cx) * b + (b - 1) / 2) * field.step
     ys = field.y0 + (np.arange(cy) * b + (b - 1) / 2) * field.step
     gx, gy = np.meshgrid(xs, ys)
     inside = region(gx, gy, step)
-    mask = ndimage.binary_opening(under & inside & (zmin <= max_gap))
+    mask = ndimage.binary_opening(under & inside & (zmax <= max_gap))
     if not mask.any():
         return None
     if connected:

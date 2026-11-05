@@ -55,12 +55,51 @@ def prepare_points(vertices: np.ndarray, n_slabs: int = N_SLABS) -> HullPoints:
     # collinear slab keeps its end points). One vectorised GEOS call: scipy's qhull per slab cost a
     # temporary file each on Windows (~0.4 s per figure).
     present, slab = np.unique(idx, return_inverse=True)
-    order = np.argsort(slab.reshape(-1), kind="stable")          # shapely wants the points grouped by slab
-    hulls = shapely.convex_hull(shapely.multipoints(v[order, :2], indices=slab.reshape(-1)[order]))
+    slab = slab.reshape(-1)
+    order = np.argsort(slab, kind="stable")          # shapely wants the points grouped by slab
+    order = order[_maybe_on_hull(v[order, :2], slab[order])]
+    hulls = shapely.convex_hull(shapely.multipoints(v[order, :2], indices=slab[order]))
     xy, which = shapely.get_coordinates(hulls, return_index=True)
     k = present[which]
     mn, mx = v[:, :2].min(axis=0), v[:, :2].max(axis=0)
     return HullPoints(np.asarray(xy, np.float64), edges[k], edges[k + 1], height, (mn + mx) / 2)
+
+
+_DIRS = np.array([[np.cos(a), np.sin(a)] for a in np.arange(8) * np.pi / 4])   # by angle: hull order
+
+
+def _maybe_on_hull(xy: np.ndarray, group: np.ndarray) -> np.ndarray:
+    """Mask of the points (grouped: `group` sorted) that may be corners of their group's 2D convex hull.
+
+    Akl–Toussaint: each group's extreme points in 8 directions span an octagon inside its hull, and a point strictly
+    inside it cannot be a hull corner. Building shapely points for every vertex was most of `prepare_points` (0.16 of
+    0.28 s for 300k vertices, of which ~6,000 are hull corners); this keeps a few per cent of them. The hulls of what is
+    kept are exactly the hulls of all."""
+    n = len(xy)
+    if n == 0:
+        return np.zeros(0, bool)
+    starts = np.r_[0, np.nonzero(np.diff(group))[0] + 1]
+    gid = np.repeat(np.arange(len(starts)), np.diff(np.r_[starts, n]))
+    proj = xy @ _DIRS.T                                      # (n, 8)
+    keep = np.zeros(n, bool)
+    corners = np.empty((len(starts), 8, 2))
+    for k in range(8):
+        best = np.maximum.reduceat(proj[:, k], starts)
+        # The first point of each group reaching its maximum: the group's extreme point in direction k.
+        at = np.where(proj[:, k] >= best[gid], np.arange(n), n)
+        first = np.minimum.reduceat(at, starts)
+        keep[first] = True
+        corners[:, k] = xy[first]
+    x, y = xy[:, 0], xy[:, 1]
+    inside = np.ones(n, bool)
+    for k in range(8):
+        a, b = corners[:, k], corners[:, (k + 1) % 8]
+        ex, ey = b[:, 0] - a[:, 0], b[:, 1] - a[:, 1]
+        # cross(e, p - a) = ex·y − ey·x + c per group; strictly left of every edge is strictly inside. A repeated
+        # corner (no edge) says nothing: its line is made to pass every point.
+        c = np.where((ex == 0) & (ey == 0), 1.0, ey * a[:, 0] - ex * a[:, 1])
+        inside &= ex[gid] * y - ey[gid] * x + c[gid] > 1e-12
+    return keep | ~inside
 
 
 @dataclass

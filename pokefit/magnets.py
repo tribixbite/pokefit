@@ -46,6 +46,7 @@ round). Nothing is cut where a rule fails; the failure is reported with numbers.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 import trimesh
@@ -693,6 +694,40 @@ def _cut(part: Part, pockets: list[Pocket], spec: PocketSpec) -> tuple[np.ndarra
     return out
 
 
+# The cut parts with their paint carried over (`remesh_part`, ~0.3 s for 300k triangles), by the same key as
+# `_CUTS`, kept with the source part's name, filament and paint: the quick and the full analysis cut the same
+# parts, and a later analysis of an unchanged figure (a magnet setting undone) does too.
+_REMESHED: dict[tuple[bytes, str], tuple[tuple[str, int, str, dict[int, Any]], Part]] = {}
+
+
+def _remeshed(part: Part, pockets: list[Pocket], spec: PocketSpec, v: np.ndarray, f: np.ndarray) -> Part:
+    """`remesh_part` of the cut mesh (v, f), reused when the same part with the same paint was cut the same way."""
+    key = (digest(part.vertices, part.faces), repr((pockets, spec)))
+    src = (part.name, part.extruder, part.subtype, part.tri_extra)
+    hit = _REMESHED.get(key)
+    if hit is not None and hit[0][:3] == src[:3] and hit[0][3] == src[3]:
+        return hit[1]
+    out = remesh_part(part, trimesh.Trimesh(v, f, process=False))
+    while len(_REMESHED) >= CUT_CACHE:
+        _REMESHED.pop(next(iter(_REMESHED)))
+    _REMESHED[key] = (src, out)
+    return out
+
+
+def _cuts_part(part: Part, tb: np.ndarray) -> bool:
+    """Whether a part is one `cut_pockets` cuts (a solid part reaching the pockets' bounding box `tb`)."""
+    lo, hi = part.vertices.min(axis=0), part.vertices.max(axis=0)
+    return part.subtype == "normal_part" and not (np.any(hi < tb[0]) or np.any(lo > tb[1]))
+
+
+def pockets_cut_cached(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> bool:
+    """Whether `cut_pockets` would only read its caches (every part it cuts was cut the same way already)."""
+    if not pockets:
+        return True
+    tb = np.asarray(pocket_solid(pockets, spec).bounding_box()).reshape(2, 3)
+    return all((digest(p.vertices, p.faces), repr((pockets, spec))) in _CUTS for p in parts if _cuts_part(p, tb))
+
+
 def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> tuple[list[Part], list[Check]]:
     """Subtract the pockets from every part they touch; returns new parts + per-part results."""
     if not pockets:
@@ -701,8 +736,7 @@ def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> t
     tb = np.asarray(tool.bounding_box()).reshape(2, 3)
     out, checks = [], []
     for part in parts:
-        lo, hi = part.vertices.min(axis=0), part.vertices.max(axis=0)
-        if part.subtype != "normal_part" or np.any(hi < tb[0]) or np.any(lo > tb[1]):
+        if not _cuts_part(part, tb):
             out.append(part)
             continue
         try:
@@ -716,7 +750,7 @@ def cut_pockets(parts: list[Part], pockets: list[Pocket], spec: PocketSpec) -> t
             out.append(part)
             continue
         v, f, removed = cut
-        out.append(remesh_part(part, trimesh.Trimesh(v, f, process=False)))
+        out.append(_remeshed(part, pockets, spec, v, f))
         checks.append(Check(f"cut:{part.name}", f"Cut {part.name}", "pass",
                             f"Removed {removed:.1f} mm³ for {len(pockets)} pocket(s).", round(removed, 2)))
     return out, checks

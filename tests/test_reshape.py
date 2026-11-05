@@ -128,3 +128,36 @@ def test_a_tap_on_a_shallow_joint_steps_down_to_a_smaller_angle() -> None:
         find_limb(topo, 0, f, 100.0)                   # past the 90-degree joint: the body
     limb, used = find_limb_at(topo, 0, f, 100.0)
     assert used < 90 and len(limb.joint) > 8
+
+
+def _radius(v: np.ndarray, x0: float, x1: float) -> float:
+    """Mean distance from the tail's axis (y = 0, z = 5) of the vertices with x0 <= x < x1."""
+    sel = (v[:, 0] >= x0) & (v[:, 0] < x1)
+    return float(np.hypot(v[sel, 1], v[sel, 2] - 5).mean())
+
+
+def test_thicken_widens_the_base_only_and_tapers_along_the_tail() -> None:
+    """Base width x2 over the first 40 % of the tail: the root's radius doubles, the middle grows less, the far
+    half and the body stay as they were, and paint and triangles carry over."""
+    extra = {3: 'paint_color="8"'}
+    part = _part(_tailed(), extra)
+    topo = TopologyCache([part])
+    f = _tail_face(part)
+    v0 = part.vertices
+    (wide,) = apply_limbs([part], [LimbOp(0, f, thicken=2.0, reach=0.4, steep=1.0)], topo)
+    v1 = wide.vertices
+    assert np.array_equal(wide.faces, part.faces) and wide.tri_extra == extra
+    root0, root1 = _radius(v0, 10.2, 11.0), _radius(v1, 10.2, 11.0)
+    mid0, mid1 = _radius(v0, 13.0, 14.0), _radius(v1, 13.0, 14.0)
+    assert root1 / root0 == pytest.approx(1.95, abs=0.1)    # x2 at the joint ring, a little less 1 mm along
+    assert 1.05 < mid1 / mid0 < root1 / root0              # tapering
+    far = v0[:, 0] > 10 + 0.4 * 17.5 + 1                   # past the reach (of the longest walk) nothing moves
+    assert np.allclose(v1[far], v0[far])
+    inner = v0[:, 0] < 10 - 1e-6
+    assert np.allclose(v1[inner], v0[inner])              # the body's own vertices stay (the joint ring is the limb's)
+    # A steeper taper keeps less of the width 3 mm out; a gentler one more.
+    (steep,) = apply_limbs([part], [LimbOp(0, f, thicken=2.0, reach=0.4, steep=3.0)], topo)
+    (soft,) = apply_limbs([part], [LimbOp(0, f, thicken=2.0, reach=0.4, steep=0.4)], topo)
+    assert _radius(steep.vertices, 13.0, 14.0) < mid1 < _radius(soft.vertices, 13.0, 14.0)
+    with pytest.raises(ValueError, match="base width"):
+        LimbOp.from_dict({"part": 0, "face": f, "thicken": 5.0})

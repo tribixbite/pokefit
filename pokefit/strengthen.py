@@ -30,13 +30,30 @@ the point of a lightning-bolt tail, the edge of a flat fin) "outward" runs along
 it and leaves far away. Pushing those grew the point outward and rounded it into a knob (worst at 2.5-4 mm);
 they now keep their place, and the sheet behind them still thickens.
 
+Even where the surface curves: a push 2-3 edges long along normals that differ by a few degrees between
+neighbours (fur spikes, the hollow of an ear, every curve of a dense sculpt) moved neighbours apart sideways, so
+the triangles tilted into wrinkles, and turned 500-1,000 triangles over on a Jolteon at any simplify level: what
+looked like the model's flaws magnified (most on a simplified mesh, whose long uneven triangles the smoothing
+passes, counted in edges, reach unevenly). So the moves end up smooth by construction:
+- **Sizes**: after the passes, one implicit smoothing over an eighth of a target in mm evens the gates' steps;
+- **Directions** (`_Graph.smooth`, `crease_lap`): the move vectors are diffused over a quarter target of surface
+  (one implicit heat step with edge weights in mm, so the radius is the same on a dense sculpt and on a simplified
+  mesh of long, uneven triangles; edges count by how much their normals agree, so the two sides of a crease or of a
+  thin sheet's rim do not mix), and each keeps its own length;
+- **Gaps** (`clear`): a vertex moves under half the open space in front of it (a claw against the body);
+- **No folds** (`_unfold`): a well-shaped triangle the moves turn over has its corners' moves halved until none is.
+
+Measured on a 300k / 60k / 20k-triangle Jolteon at 2 mm: triangles turned over 1015 / 472 / 972 -> 90 / 35 / 82.
+
 Limits: the thickness is measured at one print size (the height asked for, else the largest that
-fits); a smaller print has thinner features. Pushing out the two sides of a narrow gap (a claw
-against the body) can make them touch; the slicer unions them. Nothing moves below the bed.
+fits); a smaller print has thinner features. A groove narrower than a voxel (an incised line, like the one round
+an ear's inner panel) is not seen as a gap: its sides still close it and cross (the slicer unions them; the view
+shows a ragged seam there). Nothing moves below the bed.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 from scipy import ndimage
@@ -56,6 +73,10 @@ TIP = 0.4            # a thin feature's far end is thickened to this share of th
 ROOT_MIN = 6         # vertices a join needs to count (fewer: measuring noise)
 NORMAL_ROUNDS = 80   # most smoothing passes over the push direction and the push
 MAX_VOXELS = 30_000_000  # coarser voxels beyond this (a very large figure or a fine target)
+GAP_SHARE = 0.45     # a vertex moves at most this share of the open space in front of it (`clear`)
+FOLD_DEG = 90.0      # a triangle whose normal turns more than this has turned over (`_unfold`)
+UNFOLD_ROUNDS = 12   # halvings at most
+SLIVER = 0.05        # ... of triangles at least this well shaped
 
 
 @dataclass
@@ -71,10 +92,11 @@ class StrengthenInfo:
 
 
 def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points: np.ndarray,
-                 inward: np.ndarray, reach: float, voxel: float) -> tuple[np.ndarray, np.ndarray]:
+                 inward: np.ndarray, reach: float, voxel: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per point (on the surface): the largest distance to the surface found along `inward` up to `reach` (about
-    half the local thickness, capped near `reach` for thick material), and how far along `inward` the solid ends
-    (`reach` when it does not end within it). All in the same units."""
+    half the local thickness, capped near `reach` for thick material), how far along `inward` the solid ends
+    (`reach` when it does not end within it), and how far OUT (against `inward`) the next solid is (`reach` when
+    none is within it: open space). All in the same units."""
     tri = np.vstack([v[f] for v, f in zip(meshes_v, meshes_f)]).astype(np.float64)
     lo, hi = tri.reshape(-1, 3).min(axis=0), tri.reshape(-1, 3).max(axis=0)
     h = voxel
@@ -105,7 +127,19 @@ def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points:
         leave = entered & ~ins & (exit_at >= reach)
         exit_at[leave] = t
         entered |= ins
-    return r, exit_at
+    # Outward: the first solid sample after one outside (the first sample may still be inside the own surface).
+    clear = np.full(len(points), reach)
+    out_seen = np.zeros(len(points), bool)
+    for t in np.linspace(h, reach, int(np.clip(np.ceil(reach / h), SAMPLES, 64))):
+        p = points + inward * t
+        j = np.clip(np.round((p[:, 0] - xs[0]) / h).astype(np.intp), 0, len(xs) - 1)
+        i = np.clip(np.round((p[:, 1] - ys[0]) / h).astype(np.intp), 0, len(ys) - 1)
+        k = np.clip(np.round((p[:, 2] - zs[0]) / h).astype(np.intp), 0, len(zs) - 1)
+        ins = inside[i, j, k]
+        hit = out_seen & ins & (clear >= reach)
+        clear[hit] = t
+        out_seen |= ~ins
+    return r, exit_at, clear
 
 
 class _Graph:
@@ -130,7 +164,56 @@ class _Graph:
         a = coo_matrix((np.ones(2 * len(self.edges)), (np.r_[self.edges[:, 0], self.edges[:, 1]],
                                                         np.r_[self.edges[:, 1], self.edges[:, 0]])), shape=(n, n)).tocsr()
         self.mean = diags(1.0 / np.maximum(np.asarray(a.sum(axis=1)).ravel(), 1)) @ a   # neighbours' mean
-        self.edge = float(np.median(np.linalg.norm(self.pos[self.edges[:, 0]] - self.pos[self.edges[:, 1]], axis=1)))
+        self.elen = np.linalg.norm(self.pos[self.edges[:, 0]] - self.pos[self.edges[:, 1]], axis=1)
+        self.edge = float(np.median(self.elen)) if len(self.elen) else 0.0
+        # For `smooth`: edge weights 1 / length^2 and each vertex's share deg / 4 (on an even mesh 4 / deg x the sum
+        # of (x_j - x_i) / h^2 is the Laplacian), so a radius is the same mm on any triangles.
+        self.w = 1.0 / np.maximum(self.elen, 1e-6 * max(self.edge, 1e-12)) ** 2
+        self.share = np.maximum(np.asarray(a.sum(axis=1)).ravel(), 1) / 4.0
+        self._crease: Any = None
+        self._plain: Any = None
+
+    def _laplacian(self, w: np.ndarray) -> Any:
+        """D - W for symmetric edge weights `w` (one per edge)."""
+        n, e = self.n, self.edges
+        ww = coo_matrix((np.r_[w, w], (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(n, n)).tocsr()
+        return diags(np.asarray(ww.sum(axis=1)).ravel()) - ww
+
+    def plain_lap(self) -> Any:
+        """The Laplacian in mm (`smooth`), every edge counting."""
+        if self._plain is None:
+            self._plain = self._laplacian(self.w)
+        return self._plain
+
+    def crease_lap(self) -> Any:
+        """The Laplacian with each edge weighted by how much its ends' normals agree (0 from a right angle on):
+        smoothing with it does not mix the two sides of a crease or of a thin sheet's rim."""
+        if self._crease is None:
+            e = self.edges
+            agree = np.clip((self.normals[e[:, 0]] * self.normals[e[:, 1]]).sum(axis=1), 0.0, 1.0) ** 2
+            self._crease = self._laplacian(self.w * agree)
+        return self._crease
+
+    def smooth(self, x: np.ndarray, radius: float, lap: Any) -> np.ndarray:
+        """`x` (per vertex, one or more columns) diffused over about `radius` of surface: one implicit heat step,
+        (M + tau L) y = M x with tau = radius^2 / 8 (what (radius / edge)^2 passes of 0.5 x + 0.5 x the neighbours'
+        mean do on an even mesh), by conjugate gradients."""
+        from scipy.sparse.linalg import cg
+
+        if radius <= 0 or self.n == 0:
+            return x
+        a = diags(self.share) + (radius * radius / 8.0) * lap
+        pre = diags(1.0 / a.diagonal())
+        cols = x.reshape(len(x), -1).astype(np.float64)
+        out = np.empty_like(cols)
+        for j in range(cols.shape[1]):
+            b = self.share * cols[:, j]
+            try:
+                y, _ = cg(a, b, x0=cols[:, j], rtol=1e-6, maxiter=500, M=pre)
+            except TypeError:                     # scipy < 1.12 names it `tol`
+                y, _ = cg(a, b, x0=cols[:, j], tol=1e-6, maxiter=500, M=pre)
+            out[:, j] = y
+        return out.reshape(x.shape)
 
     def smooth_normals(self, radius: float) -> np.ndarray:
         """Normals averaged over about `radius` of surface (a noisy sculpt's own normals make lumpy pushes)."""
@@ -159,6 +242,32 @@ class _Graph:
         return d
 
 
+def _unfold(pos: np.ndarray, faces: np.ndarray, disp: np.ndarray) -> np.ndarray:
+    """`disp` (per vertex moves) with the corners of every triangle it would turn over (normal turning more than
+    FOLD_DEG) halved, repeated until none does (at most UNFOLD_ROUNDS times; then those corners do not move).
+    Merged-vertex frame."""
+    def normals(v: np.ndarray) -> np.ndarray:
+        n = np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
+        return np.asarray(n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-30))
+
+    before = normals(pos)
+    # Slivers (a long edge over a tiny height) turn over at the least move and show nothing: only well-shaped ones
+    # count (twice the area over the longest edge squared: 0.87 for an equilateral triangle).
+    e0, e1, e2 = (pos[faces[:, k]] - pos[faces[:, (k + 1) % 3]] for k in range(3))
+    area2 = np.linalg.norm(np.cross(e0, e1), axis=1)
+    longest = np.maximum.reduce([np.einsum("ij,ij->i", e, e) for e in (e0, e1, e2)])
+    ok = area2 > SLIVER * longest
+    limit = np.cos(np.radians(FOLD_DEG))
+    out = disp.copy()
+    for k in range(UNFOLD_ROUNDS + 1):
+        bad = ok & ((before * normals(pos + out)).sum(axis=1) < limit)
+        if not bad.any():
+            break
+        corners = np.unique(faces[bad])
+        out[corners] = 0.0 if k == UNFOLD_ROUNDS else out[corners] / 2
+    return out
+
+
 def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Part], StrengthenInfo]:
     """Figure-frame parts (scale 1) with thin features thickened to `target` mm at print scale `scale` where they
     join the figure, tapering to TIP x target at their far ends (module doc). Only solid parts move."""
@@ -174,7 +283,7 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
     # normals: a vertex's own normal beside a sharp convex edge runs along the wall and reads a solid box as thin.
     # TODO: a sharp 90-degree join (a flat fin on a box) then reads thick for its first ~half target (smoothed
     # normals tilt into the box there); sculpted figures join smoothly, so this is left as is.
-    radius, exits = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
+    radius, exits, clears = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
                                  np.vstack([graphs[i].pos for i in solid]), np.vstack([normals[i] for i in solid]),
                                  REACH * t_unit, vox)
     out = list(parts)
@@ -184,6 +293,7 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
         thick = 2 * radius[start:start + g.n]
         # Pushed only across the feature (module doc): 1 where the solid ends within ACROSS[0] x its thickness
         # along the inward ray, 0 past ACROSS[1] x (a rim, an edge or a point: the ray runs along the feature).
+        clear = clears[start:start + g.n]
         across = np.clip((ACROSS[1] * thick - exits[start:start + g.n]) / ((ACROSS[1] - ACROSS[0]) * thick + 1e-12),
                          0.0, 1.0)
         start += g.n
@@ -234,9 +344,21 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
         for _ in range(SMOOTH):
             push = 0.5 * push + 0.5 * (g.mean @ push)
         push *= gate                                       # ... and so did the last rounding passes
-        v = parts[i].vertices + (nrm * push[:, None])[g.ids]
+        # The passes above count in edges (capped): on a dense sculpt they reach a fraction of a mm and leave the
+        # gates' per-vertex steps, which the push raised as wrinkles. One last smoothing over an eighth of a target
+        # in mm (`_Graph.smooth`) evens them on any mesh.
+        push = np.maximum(g.smooth(push, t_unit / 8, g.plain_lap()), 0.0)
+        # Even where the surface curves (module doc): not into a narrow gap, smoothed directions
+        # (each move keeps its length: round a rod thinner than the radius, opposite sides' moves partly cancel;
+        # where they cancel outright, the vertex's own normal), then no triangle turned over.
+        push = np.minimum(push, np.maximum(clear - vox, 0.0) * GAP_SHARE)
+        way = g.smooth(nrm * push[:, None], t_unit / 4, g.crease_lap())
+        size = np.linalg.norm(way, axis=1, keepdims=True)
+        way = np.where(size > 1e-3 * push[:, None], way / np.maximum(size, 1e-30), nrm)
+        disp = _unfold(g.pos, g.ids[parts[i].faces], way * push[:, None])
+        v = parts[i].vertices + disp[g.ids]
         v[:, 2] = np.maximum(v[:, 2], parts[i].vertices[:, 2].min())     # nothing below the bed
-        push_max = max(push_max, float(push.max()))
+        push_max = max(push_max, float(np.linalg.norm(disp, axis=1).max()))
         q = parts[i]
         out[i] = Part(q.name, q.extruder, v, q.faces, q.tri_extra, q.subtype)
     info.thin_share = thin_n / max(total, 1)

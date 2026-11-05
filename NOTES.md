@@ -144,27 +144,33 @@ exist only on the original Windows machine (ask the user for the files).
    printed shell must type its floor); (c) thin-steel hold strength not measured; (d) `Steel` labels show 20.32 x
    0.254; (e) Bambu 2.8.2.61 "invalid config, load geometry data only" on every geometry-only import cannot be
    avoided from the file (fixed in 2.9.1); the slicer CLI was not retested on 2.9.1.
-17. **Crease noise, paint lag, export links/names** (2026-11-04). The user's Jolteon (object `jolteon.stl` in
-   `~/Downloads/Eevee+Evolutions.3mf`, 573k triangles, used at 300k):
-   - "Part"/"Crease" gave thousands of regions: Part 11 deg 7,759 (only ~20 over 0.01 % of the surface; the rest
-     1.7 % of it, slivers along valleys bent sharply on every side), Crease 30 deg 3,102. A fill on either side
-     left them unpainted: the pale line round a painted ear. `Topology._absorb`: regions under `MIN_REGION` (1e-4)
-     of their piece go, triangle by triangle across the gentlest edge, to the regions round them -> 23 / 1 regions.
-     Scratchpad `jolt_regions.py`, `jolt_areas.py`.
-   - Paint lag, three causes. (1) Every step replayed every earlier one: `colorize.PaintReplay` (Session `_replay`)
-     keeps the paint after recent lists. (2) The Jolteon gives all 300k triangles a `paint_supports` string: four
-     Python loops over every triangle per step (`face_colours`, `used_filaments`, `painted_mesh`, `PaintState`
-     init/`extra`) now work per distinct value (`paint.distinct_attrs`). (3) `painted_mesh` decoded every split
-     triangle of every earlier stroke: cached by (code, corners) (`pipeline._LEAVES`). 20 x 1.5 mm brush strokes,
-     CPython (scratchpad `jolt_many.py`): before 0.8 -> 12.7 s per step (+0.6 s each); after 0.55-1.1 s, flat.
-     Browser engine (Pyodide, static copy of dist): 1.15-1.45 s per stroke over 12 strokes (pick ~160 ms, colours
-     1.0-1.3 s). Brush samples ray-cast all 300k triangles on the main thread: now a BVH (`three-mesh-bvh` 0.8.3)
-     on hidden pick copies (`scene.pickTargets`), 0.1-0.4 ms per sample. Left: a stroke with soft edges changes the
-     preview geometry, so the whole mesh is re-sent and the BVH rebuilt in the background (not timed on the main
-     thread); the remaining step time is mostly `paint.overlay` (Python recursion per split triangle).
-   - Export: the old links go when Export is clicked (and on a figure change); a figure from a file of several
-     names the files (`pipeline.export_stem`: "jolteon_pokefit_60.3mf").
-18. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+17. **Crease noise, paint lag, export links/names** (2026-11-04, 1af978a; details in its commit). Open: a stroke with
+   soft edges re-sends the whole preview mesh and rebuilds the BVH (main-thread time not measured); the rest of a
+   paint step (~1.2 s in the browser engine on the 300k Jolteon) is mostly `paint.overlay` (Python recursion).
+18. **Fill height, faster analysis, base widening, smoother thickening** (2026-11-05). Test figure: the Jolteon
+   (`~/Downloads/Eevee+Evolutions.3mf`, simplify 300k), scripts in the session scratchpad (`jolt_fill2.py`,
+   `jolt_edits.py`, `strength_probe.py`, `strength_ear.py`).
+   - "Fill gaps up to" made the base taller than the gap: a cell was admitted by its lowest underside point and built
+     to its highest. 0.5 mm fill: base 1.39 mm tall, edges under the belly 2.8-4.9 mm up; 2.5 mm: 5.04 mm tall.
+     Now a cell needs ALL its underside within the fill: 0.9 mm (0.5 + 0.4 overlap) and 2.9 mm. Open: the default
+     still rises to 4 / 6 mm when the magnets asked for do not fit (`_auto_fill`, reported in the conform check).
+   - Analysis, first result after an edit (CPython, s): open 13.3 -> 9.3, fill 9.2 -> 6.2, rotate 10.0 -> 7.6,
+     clearance 10.1 -> 8.5. How: conform's bend+press cached apart from its fill (`Session._shapes`); quick analysis
+     leaves the pocket cut and the self-intersection check (pymeshlab, 2.5 s, local only) to the full one; cut
+     parts' paint re-laid per distinct string and cached (`magnets._REMESHED`); `fit.prepare_points` pre-filters
+     hull candidates (`_maybe_on_hull`, 0.28 -> 0.16 s). The full (second) analysis is slower by what moved (open:
+     6.5 -> 11 s). Tried and dropped: SLSQP/secant fit search (no faster: the margin is kinked, `max_scale` is
+     ~0.1 s already) and a narrower floor-search bracket (0.3 s saved, but it picked another floor: 29.72 -> 30.22).
+     Open: `best_floor` (~2 s, 17 fits) and the auto-bend trial (~1 s, rejected for the Jolteon) dominate an open.
+   - Reshape a part: Base width (x1-3) / Reach / Taper widen a limb only round its joint (`reshape.thickened`).
+     Checked in the local UI on the Jolteon's ear (Joint 10 deg: 5.2 mm, 4 % of the surface). A tap on the inner ear
+     takes only the panel inside its incised line (deeper than 60 deg); tap the rim.
+   - Thicken thin parts wrinkled curves (worst on dense or simplified meshes). Cause: pushes 2-3 edges long along
+     normals differing by a few degrees between neighbours. Triangles turned over at 2 mm, 300k / 60k / 20k:
+     1015 / 472 / 972 -> 90 / 35 / 82. Open: an incised line narrower than a voxel (round the ear's inner panel)
+     still closes with a ragged seam; a slope cap and implicit smoothing of the push sizes were tried and dropped
+     (they thinned the test neck to 1.1 mm and broke the cone's taper).
+19. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
