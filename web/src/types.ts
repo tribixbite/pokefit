@@ -262,6 +262,8 @@ export interface LimbRegion {
   face: number;
   angle: number;
   faces: number[];
+  /** The preview mesh's triangles showing `faces` (split paint is drawn as sub-triangles: its own numbering). */
+  view_faces: number[];
   share: number;
   length_mm: number;
   joined: boolean;

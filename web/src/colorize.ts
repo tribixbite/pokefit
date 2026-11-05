@@ -59,7 +59,7 @@ const MAX_COLOURS = 16;
 /** "Split by piece": a patch smaller than this (print mm², or the speck size if larger) keeps its colour. */
 const SPLIT_MIN_MM2 = 0.5;
 /** Grow / Shrink step, print mm along the surface. */
-const GROW_STEP = 0.2;
+const GROW_STEP = 0.1;
 /** The engine's limit on an operation's grow, file mm (colorize.MAX_GROW). */
 const MAX_GROW = 20;
 /** Wand: the furthest step from its first answer (colorize.MAX_LEVEL). */

@@ -92,7 +92,7 @@ def main() -> None:
     for p in world_parts(obj):
         if p.subtype != "normal_part":
             continue
-        pv, pf, ext = painted_mesh(p, p.extruder or obj.extruder or 1)
+        pv, pf, ext, _ = painted_mesh(p, p.extruder or obj.extruder or 1)
         rgb = np.array([[int(cols[(e - 1) % len(cols)].lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)] for e in ext],
                        float)
         vs.append(pv)

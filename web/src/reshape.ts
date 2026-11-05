@@ -123,7 +123,7 @@ export class Reshape {
 
   private open(region: LimbRegion, index: number): void {
     this.current = { region, index };
-    this.host.highlight(region.part, region.faces);
+    this.host.highlight(region.part, region.view_faces);
     const op = this.op();
     $<HTMLInputElement>("limbScale").value = String(Math.round(op.scale * 100));
     $<HTMLInputElement>("limbBend").value = String(op.bend);

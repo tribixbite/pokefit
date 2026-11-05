@@ -167,9 +167,28 @@ exist only on the original Windows machine (ask the user for the files).
      takes only the panel inside its incised line (deeper than 60 deg); tap the rim.
    - Thicken thin parts wrinkled curves (worst on dense or simplified meshes). Cause: pushes 2-3 edges long along
      normals differing by a few degrees between neighbours. Triangles turned over at 2 mm, 300k / 60k / 20k:
-     1015 / 472 / 972 -> 90 / 35 / 82. Open: an incised line narrower than a voxel (round the ear's inner panel)
-     still closes with a ragged seam; a slope cap and implicit smoothing of the push sizes were tried and dropped
-     (they thinned the test neck to 1.1 mm and broke the cone's taper).
+     1015 / 472 / 972 -> 90 / 35 / 82.
+   - **OPEN, user-reported (2026-11-05): 2 mm still roughens the Jolteon's smooth ears** (user's export
+     `~/Downloads/Eevee_Evolutions_pokefit_60_import__2_pokefit_60_import.3mf`, object "2", already at print size:
+     scale 1.01; ear ~0.7 mm thick). Scratchpad `ear_rough.py OUT variant,...` renders the ear per variant (tokens
+     `s<x>` final size smoothing, `g<x>` gate smoothing, `d<x>` denoise, `w<x>` direction smoothing, `nounfold`,
+     `noclear`); the tried code is `strengthen_experiment.diff` there. Findings: the push SIZE and DIRECTION fields are
+     both smooth on a heat map; the fold guard and the gap cap are not the cause. The scales come from offsetting
+     fine relief by more than its own size: the rim's inner slope moves into the recessed panel while the panel moves
+     forward, and they cross at the incised line. Smoothing the size over ~1 target (2 mm) hides most of it (mean
+     dihedral 8.44 -> 7.24 deg) but thins the test neck (1.35 < 1.45 mm) and lets cone points rise; any mm-based
+     smoothing of the across gate breaks `test_a_pointed_end_keeps_its_shape[4.0]` (the 90-degree-corner TODO).
+     Nothing shipped. Next: thicken volumetrically (voxel SDF of the pushed region -> marching cubes -> manifold
+     union with the original, paint carried by `remesh_part`) instead of moving vertices; or steer users to Reshape
+     a part's Base width for ears. Meanwhile the printed ear's black showing through is paint depth, not strengthen:
+     the project's `mmu_segmented_region_max_width` 0 = unlimited, so the inner panel's black fills the 0.7 mm ear;
+     the new "0.4 mm (one wall)" Paint depth should stop it (not yet sliced or printed to confirm).
+   - Paint (2026-11-05): "Drop specks under" cleared an Umbreon's wand-painted eye ovals (0.3-0.6 mm², under the
+     0.5 default at print size): a patch that is at least half of the paint step that last covered it is now kept
+     (`PaintState.owner`/`step_area`/`deliberate`); only leftovers of a step and the file's own specks go. Grow /
+     Shrink step 0.1 mm. Reshape's highlight showed specks on the head: it indexed the preview mesh, whose split
+     paint is drawn as sub-triangles, by the part's triangle numbers; `limb_region` now answers `view_faces`
+     (`PreviewMeshes.sources`), checked in the local UI on the Jolteon's ear.
 19. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

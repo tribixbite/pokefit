@@ -433,9 +433,12 @@ export class Viewer {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", mesh.geometry.getAttribute("position"));
     geo.setIndex(new THREE.BufferAttribute(index.subarray(0, k), 1));
+    // Same vertex buffer and transform as the figure, so its depth is exactly the figure's: drawn where it is
+    // less-or-equal deep. A polygon offset instead (factor -2) pulled triangles seen edge-on far enough forward that
+    // the hidden base of an ear showed through the head as blue specks.
     const overlay = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
       color: 0x37c2ff, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide,
-      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      depthFunc: THREE.LessEqualDepth,
     }));
     overlay.raycast = () => undefined;      // taps go through to the figure
     overlay.renderOrder = 2;

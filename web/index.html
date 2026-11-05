@@ -342,8 +342,8 @@
             <button id="paintLarger" class="btn" title="The wand's next larger region for the last step (.)">Larger ▶</button>
           </span>
           <span class="grow-group" role="group" aria-label="Grow or shrink the last paint step">
-            <button id="paintShrink" class="btn" title="Narrow the last paint step by 0.2 mm along the surface (−)">− Shrink</button>
-            <button id="paintGrow" class="btn" title="Widen the last paint step by 0.2 mm along the surface: an eye that stops short of its socket's rim (+)">+ Grow</button>
+            <button id="paintShrink" class="btn" title="Narrow the last paint step by 0.1 mm along the surface (−)">− Shrink</button>
+            <button id="paintGrow" class="btn" title="Widen the last paint step by 0.1 mm along the surface: an eye that stops short of its socket's rim (+)">+ Grow</button>
           </span>
           <span id="paintInfo" class="muted" aria-live="polite"></span>
         </div>
@@ -352,13 +352,14 @@
           <select id="paintDepth">
             <option value="">Project's setting</option>
             <option value="0">All the way in</option>
+            <option value="0.4">0.4 mm (one wall: thin ears)</option>
             <option value="0.8">0.8 mm (two walls)</option>
             <option value="1.2">1.2 mm</option>
             <option value="2">2 mm</option>
             <option value="3">3 mm</option>
           </select>
         </label>
-        <label class="row seat-row" title="A painted patch smaller than this at the print size takes the colour around it: a stray dab on a claw would otherwise cost a filament change on every layer it spans. 0.5 mm² is a dot about 0.8 mm across, two nozzle lines."><span class="muted">Drop specks under</span>
+        <label class="row seat-row" title="A painted patch smaller than this at the print size takes the colour around it: a sliver left over from painting over a colour would otherwise cost a filament change on every layer it spans. 0.5 mm² is a dot about 0.8 mm across, two nozzle lines. A patch you painted in one step (an eye's small oval) is kept however small."><span class="muted">Drop specks under</span>
           <select id="despeckleSelect">
             <option value="0">Keep all</option>
             <option value="0.25">0.25 mm²</option>

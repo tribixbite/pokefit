@@ -107,9 +107,10 @@
   equal relief, drawn per vertex: the structure the wand follows. Grow / Shrink are exact to a few per cent.
   Mirror paints the same spot on the other side too (the figure's mirror plane, found from its shape; asymmetric
   spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
-  0.2 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
+  0.1 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
   specks under" (default 0.5 mm²) gives tiny painted patches the colour around them, since each would cost a
-  filament change on every layer it spans. "Split by piece" gives each separate patch of the selected colour its own
+  filament change on every layer it spans; a patch that is most of one paint step (an eye's small oval tapped on
+  purpose) is kept: only what a step leaves of another, and the file's own stray specks, go. "Split by piece" gives each separate patch of the selected colour its own
   filament (white eyes and a white tail: three colours); the largest keeps the colour, patches under 0.5 mm² (or the
   speck size) stay, new filaments take the colour most unlike the palette, and Undo takes it back in one step.
   "Remove colour" deletes the selected colour from the palette: the file's own colour and paint steps in it take the

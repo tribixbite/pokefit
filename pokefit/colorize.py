@@ -840,15 +840,18 @@ class Topology:
         lab = _labels(pairs, n, inside[pairs[:, 0]] & inside[pairs[:, 1]])
         return np.asarray(local[inside & (lab == lab[s])])
 
-    def specks(self, colour: np.ndarray, min_area: float) -> tuple[np.ndarray, np.ndarray]:
+    def specks(self, colour: np.ndarray, min_area: float,
+               keep: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """(faces, new colour) for every one-colour patch smaller than `min_area` (file mm²): each takes the
         colour it shares the most edges with. A patch with no other colour round it (a whole separate piece)
-        is kept."""
+        is kept, and so is one with any face in `keep` (`PaintState.deliberate`: painted on purpose)."""
         a, b = self.pairs[:, 0], self.pairs[:, 1]
         same = colour[a] == colour[b]
         lab = self._components(same)
         area = np.bincount(lab, weights=self.areas, minlength=int(lab.max()) + 1 if len(lab) else 0)
         small = area < min_area
+        if keep is not None and keep.any():
+            small[np.unique(lab[keep])] = False
         if not small[lab].any():
             return np.zeros(0, np.int64), np.zeros(0, np.int32)
         # Edges from a small patch into another colour: count them per (patch, colour); the most wins.
@@ -1020,6 +1023,11 @@ class PaintState:
         self.values: list[str | None] = [None]
         self._ids: dict[str | None, int] = {None: 0}
         self.state = np.zeros(len(part.faces), np.int32)
+        # Which paint step last covered each face (-1: none, e.g. the file's own paint) and each step's area (file
+        # mm²): "Drop specks under" spares a patch that is most of one step (`Topology.specks`), so an eye's small
+        # oval painted on purpose stays while a step's leftover slivers still go.
+        self.owner = np.full(len(part.faces), -1, np.int32)
+        self.step_area: list[float] = []
         if part.tri_extra:
             idx = np.fromiter(part.tri_extra.keys(), np.int64, len(part.tri_extra))
             vals = list(part.tri_extra.values())
@@ -1035,7 +1043,25 @@ class PaintState:
         out._ids = dict(self._ids)
         out.state = self.state.copy()
         out._colours = self._colours
+        out.owner = self.owner.copy()
+        out.step_area = list(self.step_area)
         return out
+
+    def claim(self, faces: np.ndarray, area: float) -> None:
+        """Record that one paint step covered `faces` (`area` file mm² in all)."""
+        self.owner[faces] = len(self.step_area)
+        self.step_area.append(float(area))
+
+    def deliberate(self, topo: "Topology") -> np.ndarray:
+        """Per face: True where its patch of one colour holds at least half of the paint step that last covered it
+        (that step survives mostly as this patch: painted on purpose, however small)."""
+        colour = self.colours()
+        a, b = topo.pairs[:, 0], topo.pairs[:, 1]
+        same = (colour[a] == colour[b]) & (self.owner[a] == self.owner[b])
+        lab = topo._components(same)
+        area = np.bincount(lab, weights=topo.areas, minlength=int(lab.max()) + 1 if len(lab) else 0)
+        steps = np.asarray(self.step_area + [np.inf])            # owner -1 -> inf: never deliberate
+        return np.asarray((self.owner >= 0) & (area[lab] >= 0.5 * steps[self.owner]))
 
     def _id(self, value: str | None) -> int:
         if value not in self._ids:
@@ -1295,6 +1321,11 @@ def _apply_op(parts: list[Part], op: PaintOp, topo: "TopologyCache", states: dic
             st.paint(cov.faces, code)
         else:
             st.paint_field(topo.part(cov.part), cov.field, op.filament, cov.over)
+        # The step's faces as `colours()` will show them: mostly inside a soft edge (not every one it reaches).
+        t = topo.part(cov.part)
+        inside = (cov.faces if cov.field is None else
+                  cov.field.faces[cov.field.corners(t).mean(axis=1) <= 0]).astype(np.int64)
+        st.claim(inside, float(t.areas[inside].sum()))
 
 
 class PaintReplay:
@@ -1338,7 +1369,8 @@ def _painted_parts(parts: list[Part], states: dict[int, PaintState], topo: "Topo
     """`parts` with the paint `states` (specks under `min_area` file mm² cleared; `states` may change)."""
     if min_area > 0:
         for pi, st in states.items():
-            faces, colours = topo.part(pi).specks(st.colours(), min_area)
+            t = topo.part(pi)
+            faces, colours = t.specks(st.colours(), min_area, st.deliberate(t))
             if len(faces):
                 st.recolour(faces, colours)
     return [Part(p.name, p.extruder, p.vertices, p.faces, states[i].extra() if i in states else dict(p.tri_extra),

@@ -1604,9 +1604,10 @@ def remap_filaments(parts: list[Part], colour_map: list[int], default_extruder: 
     return out
 
 
-def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(vertices, faces, extruder per face) with split paint drawn as its sub-triangles, so the
-    preview shows brush strokes and texture-derived colour edges as the slicer will print them."""
+def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(vertices, faces, extruder per face, source triangle per face) with split paint drawn as its sub-triangles,
+    so the preview shows brush strokes and texture-derived colour edges as the slicer will print them. The drawn
+    triangles are not the part's (unsplit ones first, then each split one's sub-triangles): `source` maps them back."""
     ext = face_colours(part, [], default_extruder)
     split: list[int] = []
     if part.tri_extra:
@@ -1614,7 +1615,7 @@ def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndar
         is_split = np.asarray([(fp := attr_paint(a)) is not None and fp.whole is None for a in uniq], bool)
         split = faces[is_split[ids]].tolist()
     if not split:
-        return part.vertices, part.faces, ext
+        return part.vertices, part.faces, ext, np.arange(len(part.faces), dtype=np.int64)
     base = part.extruder or default_extruder
     keep = np.ones(len(part.faces), bool)
     keep[split] = False
@@ -1636,8 +1637,9 @@ def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndar
     n = len(part.vertices)
     sub_faces = np.arange(n, n + len(sub), dtype=part.faces.dtype).reshape(-1, 3)
     sub_ext = np.concatenate(states)
+    source = np.concatenate([np.flatnonzero(keep), np.repeat(np.asarray(split, np.int64), [len(s) for s in states])])
     return (np.vstack([part.vertices, sub]), np.vstack([part.faces[keep], sub_faces]),
-            np.concatenate([ext[keep], np.where(sub_ext == 0, base, sub_ext)]))
+            np.concatenate([ext[keep], np.where(sub_ext == 0, base, sub_ext)]), source)
 
 
 # Sub-triangles of split paint (`painted_mesh`) by (paint code, the triangle's corners): each paint step redraws the
@@ -1702,6 +1704,9 @@ class PreviewMeshes:
     meshes: list[tuple[np.ndarray, np.ndarray]]
     keys: list[np.ndarray]           # per face: 1-based filament, or (regions) region id, -1 = REGION_OTHER
     signature: str
+    # Per drawn face, the part's own triangle it shows (split paint is drawn as sub-triangles, overlapping parts are
+    # clipped): what a highlight of the part's triangles (`view_faces`) draws.
+    sources: list[np.ndarray]
 
 
 def _preview_meshes(session: Session, params: Params, regions: tuple[str, float] | None) -> PreviewMeshes:
@@ -1718,27 +1723,53 @@ def _preview_meshes(session: Session, params: Params, regions: tuple[str, float]
     unit = session.unit_parts(params) if regions else session.figure_parts(params)
     meshes: list[tuple[np.ndarray, np.ndarray]] = []
     keys: list[np.ndarray] = []
+    sources: list[np.ndarray] = []
     if regions:
         # Overlap clipping re-meshes parts and loses the face order the region labels need: skip it here.
         topo = session.topology(params)
         mode = "part" if regions[0] in ("brush", "stamp") else regions[0]   # no fixed regions: show parts
         for pi, part in enumerate(unit):
             meshes.append((part.vertices, part.faces))
+            sources.append(np.arange(len(part.faces), dtype=np.int64))
             if mode == "shape":                 # the shape map is drawn per vertex (`preview_faces`)
                 keys.append(np.where(np.arange(len(part.faces)) >= 0, 0 if pi < len(topo) else -1, 0))
             else:
                 keys.append(topo.labels(pi, mode, regions[1]) if pi < len(topo)
                             else np.full(len(part.faces), -1, np.int64))
     else:
-        for part in clip_overlaps(unit):
-            pv, pf, ext = painted_mesh(part, session.extruder(params))
+        for part, clipped in zip(unit, clip_overlaps(unit)):
+            pv, pf, ext, src = painted_mesh(clipped, session.extruder(params))
+            if clipped is not part:
+                src = _nearest_faces(part, clipped)[src]          # re-meshed by the clip: by position
             meshes.append((pv, pf))
             keys.append(ext)
+            sources.append(src)
     sig = hashlib.blake2b(b"".join(digest(v, f) for v, f in meshes), digest_size=12).hexdigest()
-    out = PreviewMeshes(meshes, keys, sig)
+    out = PreviewMeshes(meshes, keys, sig, sources)
     session._preview.clear()
     session._preview[key] = out
     return out
+
+
+def _nearest_faces(part: Part, other: Part) -> np.ndarray:
+    """Per triangle of `other` (a re-meshed copy of `part`), the triangle of `part` whose centre is nearest its own."""
+    from scipy.spatial import cKDTree
+
+    if not len(part.faces):
+        return np.full(len(other.faces), -1, np.int64)
+    _, idx = cKDTree(part.vertices[part.faces].mean(axis=1)).query(other.vertices[other.faces].mean(axis=1))
+    return np.asarray(idx, np.int64)
+
+
+def view_faces(session: Session, params: Params, part: int, faces: np.ndarray) -> list[int]:
+    """The preview's triangles (`preview_glb` without regions, mesh `p<part>`) that show `faces` of that part."""
+    pm = _preview_meshes(session, params, None)
+    if not 0 <= part < len(pm.sources):
+        return []
+    src = pm.sources[part]
+    mask = np.zeros(int(max(src.max(initial=-1), faces.max(initial=-1))) + 1, bool)
+    mask[faces] = True
+    return np.flatnonzero((src >= 0) & mask[np.maximum(src, 0)]).tolist()
 
 
 def preview_glb(session: Session, params: Params, regions: tuple[str, float] | None = None) -> bytes:
@@ -1873,6 +1904,7 @@ def limb_region(session: Session, params: Params, point: list[float] | None, nor
     limb, angle = find_limb_at(topo, pi, fi, angle) if at is None else (find_limb(topo, pi, fi, angle), angle)
     s = session.paint_scale(params) or 1.0
     return {"part": pi, "face": fi, "angle": angle, "faces": limb.faces.tolist(),
+            "view_faces": view_faces(session, params, pi, limb.faces),
             "share": round(float(topo.part(pi).areas[limb.faces].sum() / max(topo.part(pi).areas.sum(), 1e-12)), 4),
             "length_mm": round(limb.length * s, 2), "joined": bool(len(limb.joint))}
 

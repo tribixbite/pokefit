@@ -339,15 +339,36 @@ def test_specks_take_the_colour_round_them() -> None:
     topo = TopologyCache([part])
     top = _face_at(part, [0, 0, 10], [0, 0, 1])
     side = _face_at(part, [10, 0, 0], [1, 0, 0])
-    ops = [PaintOp(0, top, 2, "brush", radius=0.4), PaintOp(0, side, 3, "brush", radius=3.0)]
-    (kept,) = apply_paint([part], ops, topo)
+    # What a step leaves of an earlier one: a 1 mm dab painted over by a 0.8 mm one leaves a thin ring (~1.1 mm²).
+    ring = [PaintOp(0, top, 2, "brush", radius=1.0), PaintOp(0, top, 3, "brush", radius=0.8),
+            PaintOp(0, side, 3, "brush", radius=3.0)]
+    (kept,) = apply_paint([part], ring, topo)
     assert {2, 3} <= set(_states(kept).values()) <= {0, 2, 3}           # 0: edge triangles mostly unpainted
-    (clean,) = apply_paint([part], ops, topo, min_area=2.0)                  # the 0.4 mm dab is ~0.5 mm²
+    (clean,) = apply_paint([part], ring, topo, min_area=2.0)
     assert 2 not in set(_states(clean).values()) and 3 in set(_states(clean).values())
-    # A speck of the part's own colour inside paint is filled in too.
-    hole = [PaintOp(0, side, 3, "brush", radius=3.0), PaintOp(0, side, 0, "face")]
-    (filled,) = apply_paint([part], hole, topo, min_area=2.0)
+    # A speck of the part's own colour inside paint is filled in too (here the file's own paint, not a step).
+    painted = apply_paint([part], [PaintOp(0, side, 3, "brush", radius=3.0)], topo)[0]
+    holed = dict(painted.tri_extra)
+    holed.pop(side)
+    hole = Part(part.name, part.extruder, part.vertices, part.faces, holed, part.subtype)
+    (filled,) = apply_paint([hole], [PaintOp(0, top, 2, "brush", radius=3.0)], TopologyCache([hole]), min_area=2.0)
     assert side in _states(filled)
+
+
+def test_a_small_patch_painted_on_purpose_is_not_a_speck() -> None:
+    """An eye's small oval (here a 0.4 mm dab, ~0.5 mm², or a single tapped triangle) painted in one step stays
+    when specks under 2 mm² are dropped: only what a step leaves of another goes (the Umbreon's eye ovals, wand-picked
+    at 0.3-0.6 mm², vanished under the 0.5 mm² default)."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    side = _face_at(part, [10, 0, 0], [1, 0, 0])
+    ops = [PaintOp(0, top, 2, "brush", radius=0.4), PaintOp(0, side, 3, "brush", radius=3.0),
+           PaintOp(0, side, 0, "face")]
+    (out,) = apply_paint([part], ops, topo, min_area=2.0)
+    assert 2 in set(_states(out).values())
+    assert side not in _states(out)                                   # the erased triangle stays unpainted
 
 
 def test_pick_reports_the_colour_under_the_tap_and_the_mirror(critter: Path, tmp_path: Path) -> None:
@@ -725,7 +746,12 @@ def test_the_preview_draws_split_paint_the_same_from_its_cache() -> None:
     second = painted_mesh(out, 1)
     for a, b in zip(first, second):
         assert np.array_equal(a, b)
-    v, f, ext = first
+    v, f, ext, src = first
     assert len(f) > len(ball.faces) and set(ext.tolist()) == {1, 2}
+    # Each drawn triangle lies in the part's triangle it names (`source`: what a highlight of triangles draws).
+    corners = v[f].reshape(-1, 3)
+    owner = np.repeat(src, 3)
+    normal = ball.face_normals[owner]
+    assert np.abs(((corners - ball.vertices[ball.faces[owner, 0]]) * normal).sum(axis=1)).max() < 1e-9
     area = float(np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1).sum()) / 2
     assert area == pytest.approx(ball.area, rel=1e-9)

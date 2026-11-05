@@ -49,6 +49,11 @@ Limits: the thickness is measured at one print size (the height asked for, else 
 fits); a smaller print has thinner features. A groove narrower than a voxel (an incised line, like the one round
 an ear's inner panel) is not seen as a gap: its sides still close it and cross (the slicer unions them; the view
 shows a ragged seam there). Nothing moves below the bed.
+
+TODO: moving vertices cannot thicken a sheet with relief finer than the push (an ear's raised rim round a recessed
+panel, 2 mm on a 0.7 mm Jolteon ear): the rim's inner slope and the panel cross and the surface comes out scaly
+(NOTES.md item 18). Thicken volumetrically instead: an SDF of the pushed region, marching cubes, a union with the
+original (manifold), paint carried by `remesh_part`.
 """
 from __future__ import annotations
 
