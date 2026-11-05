@@ -53,7 +53,7 @@ def used_filaments(parts: list[Part], object_extruder: int) -> list[int]:
     used: set[int] = set()
     for p in parts:
         used.add(p.extruder or object_extruder)
-        for attrs in p.tri_extra.values():
+        for attrs in set(p.tri_extra.values()):        # a few distinct strings on many triangles
             fp = attr_paint(attrs)
             if fp is not None:
                 used.update(fp.states)

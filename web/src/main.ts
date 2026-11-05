@@ -1046,6 +1046,9 @@ async function doExport(): Promise<void> {
   const btn = $<HTMLButtonElement>("exportBtn");
   btn.disabled = true;
   busy(true, "Exporting…");
+  // The last export's links go at once: until the new files are made, none is offered (an old one is easy to
+  // take for the new one).
+  $("exportOut").replaceChildren(h("div", { cls: "muted", textContent: "Making the files…" }));
   try {
     const res = await api.exportFiles(state.session, state.params);
     $("exportOut").replaceChildren(
@@ -1344,6 +1347,8 @@ function bind(): void {
     state.params.figure_scale = null;
     state.params.pockets = null;
     state.params.filament_map = null;
+    $("exportOut").replaceChildren();        // those files are the other figure
+    $("sliceOut").replaceChildren();
     await refreshFigure();
     void runAnalyse();
   });

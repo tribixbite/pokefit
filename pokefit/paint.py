@@ -75,6 +75,19 @@ class FacePaint:
     states: tuple[int, ...]           # painted states (> 0) it holds, ascending
 
 
+def distinct_attrs(tri_extra: dict[int, str]) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """`tri_extra` as (face indices, per face an index into the distinct values, the distinct values). A file can
+    give every triangle the same few attribute strings (a 300k-triangle Jolteon: 4 distinct `paint_supports` /
+    `paint_color` strings on all of them): work per distinct value, then one array step, instead of a Python loop
+    over every triangle on every paint step."""
+    vals = list(tri_extra.values())
+    uniq = list(dict.fromkeys(vals))
+    pos = {v: k for k, v in enumerate(uniq)}
+    ids = np.fromiter(map(pos.__getitem__, vals), np.int64, len(vals))
+    faces = np.fromiter(tri_extra.keys(), np.int64, len(vals))
+    return faces, ids, uniq
+
+
 @lru_cache(maxsize=1 << 16)
 def attr_paint(attrs: str) -> FacePaint | None:
     """The `paint_color` in a triangle's extra attributes (None when it has none).
@@ -307,6 +320,8 @@ def overlay(tree: Tree, phi: tuple[float, float, float], state: int, depth: int,
 
     negs = [complex(i, j) for i, row in enumerate(table) for j, v in enumerate(row) if v <= 0] \
         if inner and table is not None else []
+    neg_x = np.asarray([p.real for p in negs])
+    neg_y = np.asarray([p.imag for p in negs])
 
     def holds(bc: list[complex]) -> bool:
         """A negative table point lies in the triangle `bc` (edges included)."""
@@ -314,12 +329,10 @@ def overlay(tree: Tree, phi: tuple[float, float, float], state: int, depth: int,
         den = (b - a).real * (c - a).imag - (b - a).imag * (c - a).real
         if abs(den) < 1e-12:
             return False
-        for p in negs:
-            u = ((p - a).real * (c - a).imag - (p - a).imag * (c - a).real) / den
-            v = ((b - a).real * (p - a).imag - (b - a).imag * (p - a).real) / den
-            if u >= -1e-9 and v >= -1e-9 and u + v <= 1 + 1e-9:
-                return True
-        return False
+        px, py = neg_x - a.real, neg_y - a.imag          # every point at once (thousands on a fine stamp)
+        u = (px * (c - a).imag - py * (c - a).real) / den
+        v = ((b - a).real * py - (b - a).imag * px) / den
+        return bool(np.any((u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9)))
 
     def rec(t: Tree, bc: list[complex], d: int) -> Tree:
         ph = [value(b) for b in bc]

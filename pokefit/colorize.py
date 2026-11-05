@@ -54,10 +54,11 @@ per-triangle attributes over, split paint remapped).
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import numpy as np
 import trimesh
@@ -108,6 +109,7 @@ MIRROR_UPRIGHT = 1.5        # ... and wins over a better plane that is not, if n
 MIRROR_MISS = 0.04          # ... and a mirrored spot within this share of the size of the surface
 SLIVER_RINGS = 8            # a bucket fill follows a soft edge's split triangles this many rings out of its region
 _FILL_CACHE = 64            # colour-bounded fills kept per object (keyed by the paint state they saw)
+PAINT_CHECKPOINTS = 12      # paint states kept after recent paint lists (`PaintReplay`: a new step replays only itself)
 _PAINT_RE = re.compile(r'\s*paint_color="[^"]*"')
 BIG = 1e9                   # `Field.phi` far from the edge (inside: -BIG)
 SOFT_DEPTH = 4              # split levels below a triangle a soft edge is drawn to (1/16 of its sides)
@@ -117,6 +119,8 @@ STAMP_STEPS = 24            # a stamp's edge is drawn in sub-triangles at most 1
 WAND_SMOOTH = 4             # wand: averaging passes rounding its triangle-stepped outline (`Topology.outline`)
 SHAPE_SCALE = 0.05          # "Shape map": relief is height over the surface smoothed over this share of the size
 SHAPE_PASSES = 400          # ... in at most this many averaging passes (a dense mesh is smoothed less far)
+MIN_REGION = 1e-4           # "part"/"region": a region smaller than this share of its piece's surface is crease noise
+                            # (a dense sculpt's slivers along a valley) and joins the regions round it (`_absorb`)
 
 
 @dataclass(frozen=True)
@@ -258,6 +262,7 @@ class Topology:
     _tree: Any = None          # KD-tree of `centroids`, built on first use (`tree`)
     _wall: Any = None          # `wall`, built on first use
     _vgraph: Any = None        # `_vertex_graph`, built on first use
+    _edge: float | None = None  # `edge_length`, computed on first use
 
     @property
     def tree(self) -> Any:
@@ -276,9 +281,47 @@ class Topology:
             keep = np.ones(len(self.pairs), bool)
         elif mode == "part":
             keep = self.convex | (self.angles < angle)
+            return self._absorb(self._components(keep), np.where(self.convex, 0.0, self.angles))
         else:
             keep = self.angles < angle
+            return self._absorb(self._components(keep), self.angles)
         return self._components(keep)
+
+    def _absorb(self, lab: np.ndarray, cost: np.ndarray) -> np.ndarray:
+        """`lab` with its crease noise gone: a region under MIN_REGION of its piece's surface (and not the largest in
+        it) is given, triangle by triangle, to the region next to it across the gentlest edge (`cost`: the edge's
+        bend as the mode sees it), growing in from its rim. A dense sculpt's valleys are lined with slivers bent more
+        than the angle on every side: thousands of specks in "Show regions" (7,700 on a 300k Jolteon at 11°, 1.7 %
+        of the surface), each left unpainted by a fill on either side (a pale line round a painted ear)."""
+        area = np.bincount(lab, self.areas)
+        piece = self._components(np.ones(len(self.pairs), bool))
+        piece_of = np.zeros(len(area), np.int64)
+        piece_of[lab] = piece
+        piece_area = np.bincount(piece, self.areas)
+        small = area < MIN_REGION * piece_area[piece_of]
+        # The largest region of each piece stays (a loose eye made only of small regions keeps them).
+        order = np.lexsort((-area, piece_of))
+        first = np.r_[True, piece_of[order][1:] != piece_of[order][:-1]]
+        small[order[first]] = False
+        out = np.where(small[lab], -1, lab)
+        if (out >= 0).all():
+            return np.unique(lab, return_inverse=True)[1].reshape(-1)
+        a, b = self.pairs[:, 0], self.pairs[:, 1]
+        while True:
+            # Edges from a decided triangle to an undecided one, gentlest first: each undecided triangle takes the
+            # label across its gentlest such edge.
+            fwd = (out[a] >= 0) & (out[b] < 0)
+            bwd = (out[b] >= 0) & (out[a] < 0)
+            to = np.r_[b[fwd], a[bwd]]
+            if not len(to):
+                break
+            src = np.r_[out[a[fwd]], out[b[bwd]]]
+            c = np.r_[cost[fwd], cost[bwd]]
+            o = np.lexsort((c, to))
+            first = np.r_[True, to[o][1:] != to[o][:-1]]
+            out[to[o][first]] = src[o][first]
+        out = np.where(out < 0, lab + len(area), out)   # not reachable (cannot happen: each piece keeps one region)
+        return np.unique(out, return_inverse=True)[1].reshape(-1)
 
     def brush(self, seeds: list[int], radius: float, points: np.ndarray | None = None) -> np.ndarray:
         """Faces the brush touches (any part of the triangle within `radius` of the stroke, not only its centre: a
@@ -364,10 +407,12 @@ class Topology:
 
     def edge_length(self) -> float:
         """Median distance between neighbouring triangle centres (the mesh's resolution), file mm."""
-        if not len(self.pairs):
-            return 1.0
-        d = np.linalg.norm(self.centroids[self.pairs[:, 0]] - self.centroids[self.pairs[:, 1]], axis=1)
-        return float(np.median(d)) or 1.0
+        if self._edge is None:
+            if not len(self.pairs):
+                return 1.0
+            d = np.linalg.norm(self.centroids[self.pairs[:, 0]] - self.centroids[self.pairs[:, 1]], axis=1)
+            self._edge = float(np.median(d)) or 1.0
+        return self._edge
 
     def vertex_graph(self) -> Any:
         """Merged-vertex adjacency weighted by edge length (CSR), for walks along the surface."""
@@ -977,8 +1022,20 @@ class PaintState:
         self.state = np.zeros(len(part.faces), np.int32)
         if part.tri_extra:
             idx = np.fromiter(part.tri_extra.keys(), np.int64, len(part.tri_extra))
-            self.state[idx] = [self._id(v) for v in part.tri_extra.values()]
+            vals = list(part.tri_extra.values())
+            for v in dict.fromkeys(vals):            # distinct values in order; a file may give every triangle one
+                self._id(v)
+            self.state[idx] = np.fromiter(map(self._ids.__getitem__, vals), np.int32, len(vals))
         self._colours: np.ndarray | None = None
+
+    def copy(self) -> "PaintState":
+        out = PaintState.__new__(PaintState)
+        out.extruder = self.extruder
+        out.values = list(self.values)
+        out._ids = dict(self._ids)
+        out.state = self.state.copy()
+        out._colours = self._colours
+        return out
 
     def _id(self, value: str | None) -> int:
         if value not in self._ids:
@@ -1089,8 +1146,8 @@ class PaintState:
     def extra(self) -> dict[int, str]:
         """Back to `Part.tri_extra` form."""
         idx = np.nonzero(self.state)[0]
-        vals = self.values
-        return {f: v for f, s in zip(idx.tolist(), self.state[idx].tolist()) if (v := vals[s]) is not None}
+        # Value 0 is the only None (`_id(None)` is 0), so every nonzero state names a string.
+        return dict(zip(idx.tolist(), map(cast("list[str]", self.values).__getitem__, self.state[idx].tolist())))
 
 
     def recolour(self, faces: np.ndarray, colours: np.ndarray) -> None:
@@ -1212,20 +1269,73 @@ def apply_paint(parts: list[Part], ops: list[PaintOp], topo: "TopologyCache", mi
     mm²) painted patches smaller than that given the colour around them (`Topology.specks`)."""
     states: dict[int, PaintState] = {}
     for op in ops:
-        if not (0 <= op.part < min(len(parts), len(topo))) or not (0 <= op.face < len(parts[op.part].faces)):
-            continue                       # from another object or orientation of the file: ignore
-        code = paint_code(op.filament) if op.filament else None
-        # Every side's region is found against the paint before this operation, then all are painted.
-        for cov in op_cover(topo, op, lambda i: states.setdefault(i, PaintState(parts[i]))):
-            st = states.setdefault(cov.part, PaintState(parts[cov.part]))
-            if cov.field is None and cov.over is not None:
-                # Every corner inside: the whole triangle, but split ones only where they show the tapped colour.
-                t = topo.part(cov.part)
-                st.paint_field(t, Field(cov.faces, np.full(len(t.verts), -1.0)), op.filament, cov.over)
-            elif cov.field is None:
-                st.paint(cov.faces, code)
-            else:
-                st.paint_field(topo.part(cov.part), cov.field, op.filament, cov.over)
+        _apply_op(parts, op, topo, states)
+    return _painted_parts(parts, states, topo, min_area)
+
+
+def _apply_op(parts: list[Part], op: PaintOp, topo: "TopologyCache", states: dict[int, PaintState]) -> None:
+    """One paint operation, applied to `states` (per part, made from `parts` when first painted)."""
+    if not (0 <= op.part < min(len(parts), len(topo))) or not (0 <= op.face < len(parts[op.part].faces)):
+        return                             # from another object or orientation of the file: ignore
+
+    def state(i: int) -> PaintState:
+        if i not in states:
+            states[i] = PaintState(parts[i])
+        return states[i]
+
+    code = paint_code(op.filament) if op.filament else None
+    # Every side's region is found against the paint before this operation, then all are painted.
+    for cov in op_cover(topo, op, state):
+        st = state(cov.part)
+        if cov.field is None and cov.over is not None:
+            # Every corner inside: the whole triangle, but split ones only where they show the tapped colour.
+            t = topo.part(cov.part)
+            st.paint_field(t, Field(cov.faces, np.full(len(t.verts), -1.0)), op.filament, cov.over)
+        elif cov.field is None:
+            st.paint(cov.faces, code)
+        else:
+            st.paint_field(topo.part(cov.part), cov.field, op.filament, cov.over)
+
+
+class PaintReplay:
+    """`apply_paint` that remembers the paint after recent paint lists: a list extending one it has seen (the next
+    tap or stroke, or Redo) replays only the new steps, and Undo finds the shorter list's paint kept. Replaying every
+    step for each new one made painting slower the longer it went (a 300k-triangle figure: +0.2 s per earlier step
+    in CPython, several times that in the browser)."""
+
+    def __init__(self, keep: int = PAINT_CHECKPOINTS):
+        self.keep = keep
+        self._saved: dict[str, dict[int, PaintState]] = {}
+
+    def clear(self) -> None:
+        self._saved.clear()
+
+    def apply(self, base: Any, parts: list[Part], ops: list[PaintOp], topo: "TopologyCache",
+              min_area: float = 0.0) -> list[Part]:
+        """`apply_paint(parts, ops, topo, min_area)`; `base` names `parts` (the same base means the same parts)."""
+        import hashlib
+
+        h = hashlib.blake2b(repr(base).encode(), digest_size=16)
+        keys = [h.hexdigest()]
+        for op in ops:
+            h.update(json.dumps(op.to_dict(), sort_keys=True).encode())
+            keys.append(h.hexdigest())
+        start = next((n for n in range(len(ops), -1, -1) if keys[n] in self._saved), 0)
+        states = {i: st.copy() for i, st in self._saved.get(keys[start], {}).items()}
+        for op in ops[start:]:
+            _apply_op(parts, op, topo, states)
+        if keys[-1] in self._saved:
+            self._saved[keys[-1]] = self._saved.pop(keys[-1])         # most recently used last
+        else:
+            while len(self._saved) >= self.keep:
+                self._saved.pop(next(iter(self._saved)))
+            self._saved[keys[-1]] = {i: st.copy() for i, st in states.items()}
+        return _painted_parts(parts, states, topo, min_area)
+
+
+def _painted_parts(parts: list[Part], states: dict[int, PaintState], topo: "TopologyCache",
+                   min_area: float) -> list[Part]:
+    """`parts` with the paint `states` (specks under `min_area` file mm² cleared; `states` may change)."""
     if min_area > 0:
         for pi, st in states.items():
             faces, colours = topo.part(pi).specks(st.colours(), min_area)

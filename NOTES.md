@@ -137,38 +137,34 @@ exist only on the original Windows machine (ask the user for the files).
    open dock is ~205-246 px of a 460 px view. Load hotspots (CPython, Little+Pikachu 8.7 MB, before this round's fit
    speed-up): conform 5.5 s, height fields 3.3 s, 3MF parse 3 s, mesh checks 1.7 s, pocket cut 1.5 s, pads 1.2 s;
    engine import ~4 s in the browser (networkx cannot be dropped: trimesh path traversal). Scratchpad `prof_load.py`.
-16. **Steel discs, flat floor, reshape a part, fine brush** (2026-11-04). The user now glues thin steel discs, 0.8" x
-   0.01" (20.32 x 0.254 mm, default `D20`) and 0.59" x 0.02" (14.99 x 0.508, `D15`); washers stay as options.
-   - `pokefit/steel.py` (was washer.py; `Steel.id` 0 = solid disc: `annulus` from 0, magnets anywhere on it). Params
-     `steel` (old `washer` key mapped), pocket_seat / fill_area value `steel` (old `washer` accepted); prefs migrate.
-   - **Flat floor** (`Params.floor_diameter`, None = auto `Session.floor` -> `fit.best_floor` on the reshaped,
-     unconformed figure; smallest within 0.3 % of the best). Why: a thin disc's floor sits low where the sphere is
-     narrow; on its own seat wide figures fit much smaller. Max fit height, no conform/magnets (scratchpad
-     `floor_scan.py`): dragon M6 34.1 -> D20 seat 30.2 / D15 seat 24.5; D20 on a 26 mm floor 35.5; Charmander mini
-     27.1 (M6) -> 25.9 (D20 seat) -> 29.7-30.0 (30-32 mm floor). The UI's Charmander mini: 29.9 mm on a 34.7 mm floor.
-     The shell export is cut to the floor (`shell_floor<D>mm_<pct>.stl`). Conform designs against the actual floor
-     (`_floor_key` in the cache key); `conform.lift_start` = floor reach - 2.1 mm (equals the old start on a seat;
-     moving it 0.2 mm cut a test figure's bend gain from 8 % to 0.4 %). Steel table rows share the figure's floor.
-   - **Reshape a part** (`pokefit/reshape.py`, UI `web/src/reshape.ts`): tap -> paint's part region, steps down to
-     smaller angles (`FALLBACK_ANGLES`) when it takes > 40 % of the surface; Size / Bend / Swing eased over 35 % of
-     the limb. Low-poly Charmander mini: the tail flame at 4 deg (5 %); 15 deg takes the body; at 6 deg a patchy 58 %
-     (why MAX_SHARE is 0.4).
-   - **Brush < 0.5 mm**: strokes kept triangle centroids (zigzag) and painted only triangles whose centre was inside;
-     now `PaintOp.points` (drag points, file frame) and exact triangle-touch test, split finer (`BRUSH_STEPS`).
-     Real mesh (Charmander mini, 1.14 mm triangles, 0.3 mm brush): area 0.85x the ideal stroke, nothing beyond the
-     radius (scratchpad `real_brush.py`). A drag in the browser was not tested (automation drags do not stroke).
-   - Fit speed: active-set Nelder-Mead (`fit.ACTIVE`), identical results on 5 figures, Pikachu 309 -> 116 ms per fit,
-     dragon 253 -> 75 ms (scratchpad `fitbench.py`, `fit_before.json` / `fit_after.json`).
-   - Ball toggle in the view toolbar (remembered); painting zooms to the figure and restores the camera on Done;
-     auto Simplify to 200k on opening a > 300k-triangle figure (`simplify_auto`, not remembered as a Simplify pref).
-   - Bambu's "invalid config, load geometry data only": 2.8.2.61 `check_project_config` returns false when the
-     config has no `nozzle_diameter`, and a geometry-only import never reads the file's config (bbs_3mf.cpp
-     `dont_load_config`): no file content avoids it. Fixed in 2.9.1 (released 2026-11-03). The user's install is
-     2.8.2.61; the slicer CLI path was not retested on 2.9.1.
-   - Open: (a) a reshaped limb is not checked for running into the body; (b) the auto floor changes the shell per
-     figure: a user reusing one printed shell must type its floor; (c) thin-steel hold strength not measured;
-     (d) `Steel` labels show 20.32 x 0.254 (inch conversions).
-17. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+16. **Steel discs, flat floor, reshape a part, fine brush** (2026-11-04, b64a5a1; details in its commit). Thin discs
+   D20 (0.8" x 0.01", default) / D15; washers kept. Auto flat floor per figure (`Session.floor`, `fit.best_floor`);
+   `conform.lift_start` = floor reach - 2.1 mm (0.2 mm off cut a bend gain from 8 % to 0.4 %). Open: (a) a reshaped
+   limb is not checked for running into the body; (b) the auto floor changes the shell per figure (a user reusing a
+   printed shell must type its floor); (c) thin-steel hold strength not measured; (d) `Steel` labels show 20.32 x
+   0.254; (e) Bambu 2.8.2.61 "invalid config, load geometry data only" on every geometry-only import cannot be
+   avoided from the file (fixed in 2.9.1); the slicer CLI was not retested on 2.9.1.
+17. **Crease noise, paint lag, export links/names** (2026-11-04). The user's Jolteon (object `jolteon.stl` in
+   `~/Downloads/Eevee+Evolutions.3mf`, 573k triangles, used at 300k):
+   - "Part"/"Crease" gave thousands of regions: Part 11 deg 7,759 (only ~20 over 0.01 % of the surface; the rest
+     1.7 % of it, slivers along valleys bent sharply on every side), Crease 30 deg 3,102. A fill on either side
+     left them unpainted: the pale line round a painted ear. `Topology._absorb`: regions under `MIN_REGION` (1e-4)
+     of their piece go, triangle by triangle across the gentlest edge, to the regions round them -> 23 / 1 regions.
+     Scratchpad `jolt_regions.py`, `jolt_areas.py`.
+   - Paint lag, three causes. (1) Every step replayed every earlier one: `colorize.PaintReplay` (Session `_replay`)
+     keeps the paint after recent lists. (2) The Jolteon gives all 300k triangles a `paint_supports` string: four
+     Python loops over every triangle per step (`face_colours`, `used_filaments`, `painted_mesh`, `PaintState`
+     init/`extra`) now work per distinct value (`paint.distinct_attrs`). (3) `painted_mesh` decoded every split
+     triangle of every earlier stroke: cached by (code, corners) (`pipeline._LEAVES`). 20 x 1.5 mm brush strokes,
+     CPython (scratchpad `jolt_many.py`): before 0.8 -> 12.7 s per step (+0.6 s each); after 0.55-1.1 s, flat.
+     Browser engine (Pyodide, static copy of dist): 1.15-1.45 s per stroke over 12 strokes (pick ~160 ms, colours
+     1.0-1.3 s). Brush samples ray-cast all 300k triangles on the main thread: now a BVH (`three-mesh-bvh` 0.8.3)
+     on hidden pick copies (`scene.pickTargets`), 0.1-0.4 ms per sample. Left: a stroke with soft edges changes the
+     preview geometry, so the whole mesh is re-sent and the BVH rebuilt in the background (not timed on the main
+     thread); the remaining step time is mostly `paint.overlay` (Python recursion per split triangle).
+   - Export: the old links go when Export is clicked (and on a figure change); a figure from a file of several
+     names the files (`pipeline.export_stem`: "jolteon_pokefit_60.3mf").
+18. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)

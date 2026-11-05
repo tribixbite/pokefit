@@ -31,14 +31,14 @@ from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FIL
                       base_fill, conform, disc_region)
 from .strengthen import StrengthenInfo, strengthen
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
-                       apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
+                       PaintReplay, apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
 from .fit import FLOOR_MAX, HullPoints, annulus_margin, best_floor, best_offset, check_fit, max_scale, prepare_points
 from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets, cut_pockets, find_feet,
                       height_field, pocket_map, required_steel, seat_pockets, validate_pockets)
 from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
                        remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
-from .paint import attr_paint, leaves, parse_tree, remap_states
+from .paint import attr_paint, distinct_attrs, leaves, parse_tree, remap_states
 from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
@@ -302,6 +302,7 @@ class Session:
     _auto: dict[tuple, Any] = field(default_factory=dict)
     _topo: dict[str, TopologyCache] = field(default_factory=dict)       # object id -> colorize topology
     _painted: dict[tuple, list[Part]] = field(default_factory=dict)     # (orientation, paint) -> parts
+    _replay: PaintReplay = field(default_factory=PaintReplay)          # paint after recent paint lists
     _mapped: dict[tuple, list[Part]] = field(default_factory=dict)      # (orientation, colour_map) -> parts
     _used: dict[str, list[int]] = field(default_factory=dict)   # object id -> filament numbers it uses
     _textured: dict[tuple, list[Part]] = field(default_factory=dict)    # (orientation, count) -> parts
@@ -644,7 +645,8 @@ class Session:
             if len(self._painted) > 8:          # one figure's recent edits; paint is cheap to redo
                 self._painted.clear()
             min_area = params.despeckle / (s * s) if s > 0 else 0.0
-            self._painted[key] = apply_paint(parts, params.paint_ops, self.topology(params), min_area)
+            self._painted[key] = self._replay.apply(key[:4], parts, params.paint_ops, self.topology(params),
+                                                    min_area)
         return self._with_pads(params, self._painted[key])
 
     def _with_pads(self, params: Params, parts: list[Part]) -> list[Part]:
@@ -1550,10 +1552,11 @@ def face_colours(part: Part, colours: list[str], default_extruder: int) -> np.nd
     """Extruder index (1-based) per face: paint wins, else the part's, else the object's."""
     base = part.extruder or default_extruder
     ext = np.full(len(part.faces), base, np.int64)
-    for i, attrs in part.tri_extra.items():
-        fp = attr_paint(attrs)
-        if fp is not None and fp.majority > 0:
-            ext[i] = fp.majority
+    if part.tri_extra:
+        faces, ids, uniq = distinct_attrs(part.tri_extra)
+        maj = np.asarray([fp.majority if (fp := attr_paint(a)) is not None else 0 for a in uniq], np.int64)
+        own = maj[ids] > 0
+        ext[faces[own]] = maj[ids][own]
     return ext
 
 
@@ -1585,23 +1588,42 @@ def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndar
     """(vertices, faces, extruder per face) with split paint drawn as its sub-triangles, so the
     preview shows brush strokes and texture-derived colour edges as the slicer will print them."""
     ext = face_colours(part, [], default_extruder)
-    split = [i for i, a in part.tri_extra.items() if (fp := attr_paint(a)) is not None and fp.whole is None]
+    split: list[int] = []
+    if part.tri_extra:
+        faces, ids, uniq = distinct_attrs(part.tri_extra)
+        is_split = np.asarray([(fp := attr_paint(a)) is not None and fp.whole is None for a in uniq], bool)
+        split = faces[is_split[ids]].tolist()
     if not split:
         return part.vertices, part.faces, ext
     base = part.extruder or default_extruder
     keep = np.ones(len(part.faces), bool)
     keep[split] = False
-    verts, faces, exts = [part.vertices], [part.faces[keep]], [ext[keep]]
-    n = len(part.vertices)
+    tris, states = [], []
+    if len(_LEAVES) > MAX_LEAVES:
+        _LEAVES.clear()
     for i in split:
         code = part.tri_extra[i].split('paint_color="', 1)[1].split('"', 1)[0]
-        corners = list(part.vertices[part.faces[i]])
-        for tri, st in leaves(parse_tree(code), corners):
-            verts.append(np.array(tri))
-            faces.append(np.array([[n, n + 1, n + 2]]))
-            exts.append(np.array([st or base]))
-            n += 3
-    return np.vstack(verts), np.vstack(faces), np.concatenate(exts)
+        corners = part.vertices[part.faces[i]]
+        key = (code, corners.tobytes())
+        if key not in _LEAVES:
+            lv = leaves(parse_tree(code), list(corners))
+            _LEAVES[key] = (np.asarray([t for t, _ in lv], np.float64).reshape(-1, 3, 3),
+                            np.asarray([st for _, st in lv], np.int64))
+        t, st = _LEAVES[key]
+        tris.append(t)
+        states.append(st)
+    sub = np.concatenate(tris).reshape(-1, 3)
+    n = len(part.vertices)
+    sub_faces = np.arange(n, n + len(sub), dtype=part.faces.dtype).reshape(-1, 3)
+    sub_ext = np.concatenate(states)
+    return (np.vstack([part.vertices, sub]), np.vstack([part.faces[keep], sub_faces]),
+            np.concatenate([ext[keep], np.where(sub_ext == 0, base, sub_ext)]))
+
+
+# Sub-triangles of split paint (`painted_mesh`) by (paint code, the triangle's corners): each paint step redraws the
+# preview, and decoding every split triangle of every earlier stroke again made each step slower than the last.
+_LEAVES: dict[tuple[str, bytes], tuple[np.ndarray, np.ndarray]] = {}
+MAX_LEAVES = 200_000
 
 
 # Overlap clipping by part geometry (`parts_digest`): a colour edit clips the same shapes again.
@@ -1896,7 +1918,9 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
     def state(i: int) -> PaintState | None:
         if mode not in BOUNDED or not params.paint:
             return None
-        return states.setdefault(i, PaintState(figure[i]))
+        if i not in states:
+            states[i] = PaintState(figure[i])
+        return states[i]
 
     stamp: tuple[float, ...] = ()
     if stamp_axes is not None:
@@ -1971,6 +1995,16 @@ def safe_stem(name: str) -> str:
     return keep.strip("_") or "figure"
 
 
+def export_stem(session: Session, params: Params) -> str:
+    """The start of exported file names: the figure's own name in a file of several ("jolteon" from the object
+    "jolteon.stl" in "Eevee+Evolutions.3mf"), else the file's name."""
+    if len(session.project.objects) > 1:
+        name = session.obj(params).name
+        if name and safe_stem(name) != "figure":
+            return safe_stem(name)
+    return safe_stem(session.project.path.name)
+
+
 def export(session: Session, params: Params, out_dir: str | Path, ball_model: Path | None = None) -> dict[str, Any]:
     """Write the figure 3MF, its import variant, a coloured STL (`stlcolour`), the steel seat shell STL and a
     JSON report.
@@ -1987,7 +2021,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     ball_s = session.ball_scale(params)
     # File tag: the ball's print percentage, or its inner diameter when that was given.
     pct = f"d{params.ball_diameter:.0f}mm" if params.ball_diameter else str(int(round(ball_s * 100)))
-    stem = safe_stem(session.project.path.name)
+    stem = export_stem(session, params)
     f3 = write_project(session.project, obj.name, session.extruder(params), final, out_dir / f"{stem}_pokefit_{pct}.3mf",
                        settings=export_settings(session, params))
     shell_path = out_dir / f"shell_floor{session.cavity(params).seat_diameter:.1f}mm_{pct}.stl"
@@ -2039,7 +2073,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     root = Path(work_root) if work_root else session.work_dir / f"slice_{int(time.time() * 1000)}"
     root.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {}
-    stem = safe_stem(session.project.path.name)
+    stem = export_stem(session, params)
     for name, sup in (("off", False), ("auto", True)):
         f = write_project(session.project, obj.name, session.extruder(params), final, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))

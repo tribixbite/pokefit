@@ -10,6 +10,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
 import { base64Bytes, groupFaces } from "./faces";
 import { allowedProfile, innerWallProfile, type RZ } from "./geometry";
 import type { Check, PreviewFaces, Report } from "./types";
@@ -64,6 +65,8 @@ export class Viewer {
   figureSignature = "";
   /** Each figure mesh's face order as loaded (colour edits regroup the index buffer from it). */
   private faceOrder = new Map<THREE.BufferGeometry, THREE.TypedArray>();
+  /** Hidden copies of the figure meshes with a BVH, for taps and brush samples (`pickTargets`; null = not built). */
+  private pickMeshes: THREE.Mesh[] | null = null;
   /** "Reshape a part": the limb being changed, drawn over the figure (kept across reloads of the figure). */
   private highlighted: { part: number; faces: number[] } | null = null;
   private highlightMesh: THREE.Mesh | null = null;
@@ -175,6 +178,7 @@ export class Viewer {
   /** Brush mode: a drag that starts on the figure is a stroke, reported on release (null = drags orbit). */
   setStrokeHandler(fn: ((hits: FigureHit[]) => void) | null): void {
     this.strokeHandler = fn;
+    if (fn) this.warmPicking();
     if (!fn && this.stroke) this.endStroke(false);
     // While strokes take one-finger / left drags on the figure, the right button turns the view too.
     this.controls.mouseButtons.RIGHT = fn ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
@@ -183,6 +187,7 @@ export class Viewer {
   /** Stamp mode: a drag on the figure draws a box; on release the ellipse in it is stamped (null = drags orbit). */
   setStampHandler(fn: ((hit: FigureHit, axes: number[]) => void) | null): void {
     this.stampHandler = fn;
+    if (fn) this.warmPicking();
     if (!fn && this.stampDrag) { this.stampDrag.box.remove(); this.stampDrag = null; }
     this.controls.mouseButtons.RIGHT = fn || this.strokeHandler ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
   }
@@ -271,6 +276,7 @@ export class Viewer {
   /** Turn tap-to-pick on (with a handler) or off. */
   setPickHandler(fn: ((hit: FigureHit) => void) | null): void {
     this.pickHandler = fn;
+    if (fn) this.warmPicking();
     this.renderer.domElement.classList.toggle("picking", fn !== null);
   }
 
@@ -280,7 +286,8 @@ export class Viewer {
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hits = this.raycaster.intersectObject(this.figure, true);
+    this.raycaster.firstHitOnly = true;          // the BVH stops at the nearest triangle
+    const hits = this.raycaster.intersectObjects(this.pickTargets(), false);
     // The cut view hides the front half of the ball only; the figure is whole, so the first hit is the one seen.
     const h0 = hits.find((h) => (h.object as THREE.Mesh).isMesh && h.face);
     if (!h0 || !h0.face) return null;
@@ -291,6 +298,45 @@ export class Viewer {
     if (n.dot(this.raycaster.ray.direction) > 0) n.negate();
     n.transformDirection(inv);
     return { point: [point.x, point.y, point.z], normal: [n.x, n.y, n.z] };
+  }
+
+  /**
+   * The meshes taps and brush samples are cast against: per figure mesh, a hidden child sharing its vertices, with
+   * the triangles in load order and a bounding-volume tree. A plain raycast tests every triangle: 10-30 ms on a
+   * 300k-triangle figure, on every brush sample, which stalled drawing while painting. Not the shown meshes
+   * themselves: a colour edit regroups their index buffer (`setFaceColours`), which a tree built on it would not
+   * follow. Built on first use, and when a tool that takes taps is switched on (`warmPicking`).
+   */
+  private pickTargets(): THREE.Mesh[] {
+    if (this.pickMeshes) return this.pickMeshes;
+    const pairs: [THREE.Mesh, THREE.Mesh][] = [];
+    this.figure?.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || m.userData.pick) return;
+      const order = this.faceOrder.get(m.geometry);
+      if (!order) { pairs.push([m, m]); return; }     // not indexed (never from the engine): cast against it as is
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", m.geometry.getAttribute("position"));
+      geo.setIndex(new THREE.BufferAttribute(order.slice(), 1));
+      geo.boundsTree = new MeshBVH(geo);             // reorders this copy's index only
+      const pm = new THREE.Mesh(geo);
+      pm.raycast = acceleratedRaycast;
+      pm.visible = false;
+      pm.userData.pick = true;
+      pairs.push([m, pm]);
+    });
+    for (const [m, pm] of pairs) {
+      if (pm === m) continue;
+      m.add(pm);
+      pm.updateMatrixWorld(true);
+    }
+    this.pickMeshes = pairs.map(([, pm]) => pm);
+    return this.pickMeshes;
+  }
+
+  /** Build `pickTargets` soon (after the button that switched a tool on has redrawn), not on the first tap. */
+  private warmPicking(): void {
+    if (!this.pickMeshes) setTimeout(() => this.pickTargets(), 0);
   }
 
   private resize(): void {
@@ -339,6 +385,7 @@ export class Viewer {
       disposeTree(this.figure);
     }
     this.faceOrder.clear();
+    this.pickMeshes = null;
     this.figure = gltf.scene;
     this.figure.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -354,6 +401,7 @@ export class Viewer {
     this.figureUrl = url;
     this.figureSignature = signature;
     this.buildHighlight();
+    if (this.pickHandler || this.strokeHandler || this.stampHandler) this.warmPicking();
     this.requestFrame();
   }
 

@@ -234,3 +234,27 @@ def test_a_dense_figure_opens_simplified_unless_asked_otherwise(tmp_path: Path) 
     small = tmp_path / "small.stl"
     trimesh.creation.icosphere(subdivisions=3).export(small)
     assert auto_simplify(open_session(small, BALL_3MF, None, tmp_path / "w2"), Params()).simplify is None
+
+
+def test_exports_from_a_file_of_several_figures_are_named_after_the_figure(tmp_path: Path) -> None:
+    """A 3MF holding several figures ("Eevee+Evolutions.3mf"): the files are named after the chosen one."""
+    def mesh_xml(m: trimesh.Trimesh) -> str:
+        v = "".join(f'<vertex x="{a}" y="{b}" z="{c}"/>' for a, b, c in m.vertices.tolist())
+        f = "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in m.faces.tolist())
+        return f"<mesh><vertices>{v}</vertices><triangles>{f}</triangles></mesh>"
+
+    a = trimesh.creation.box([10, 10, 20]).apply_translation([0, 0, 10])
+    b = trimesh.creation.icosphere(subdivisions=2, radius=8).apply_translation([30, 0, 8])
+    model = ('<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" '
+             'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources>'
+             f'<object id="1" type="model" name="Vaporeon.stl">{mesh_xml(a)}</object>'
+             f'<object id="2" type="model" name="jolteon.stl">{mesh_xml(b)}</object>'
+             '</resources><build><item objectid="1"/><item objectid="2"/></build></model>')
+    path = tmp_path / "Eevee+Evolutions.3mf"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("3D/3dmodel.model", model)
+    s = open_session(path, BALL_3MF, None, tmp_path / "w")
+    jolt = next(o.id for o in s.project.objects if o.name == "jolteon.stl")
+    out = export(s, Params(object_id=jolt, magnets=0), tmp_path / "out")
+    assert Path(out["figure_3mf"]).name.startswith("jolteon_pokefit_")
+    assert Path(out["report"]).name.startswith("jolteon_pokefit_")

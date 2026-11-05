@@ -652,3 +652,80 @@ def test_a_fine_mirrored_stroke_paints_the_same_line_on_both_sides() -> None:
     length = 10 * 0.6
     assert right == pytest.approx(length * 0.6 + np.pi * 0.09, rel=0.15)
     assert left == pytest.approx(right, rel=0.15)
+
+
+def test_crease_noise_joins_the_regions_round_it() -> None:
+    """A dense sculpt's valleys are lined with slivers bent sharply on every side: tiny regions of their own, left
+    unpainted by a fill on either side (a pale line round a painted ear). Here a sphere is split at its equator by a
+    band of such triangles, with a speck of them on the top: "region" and "part" give the two halves, the band shared
+    out between them and the speck taken by the half round it."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    t = topology(_part(ball))
+    c = t.centroids
+    band = np.abs(c[:, 2]) < 0.4
+    speck = np.linalg.norm(c - [0, 0, 10], axis=1) < 0.5
+    noisy = band | speck
+    a, b = t.pairs[:, 0], t.pairs[:, 1]
+    t.angles = np.where(noisy[a] | noisy[b], 60.0, 1.0)      # every edge touching the noise bends sharply
+    t.convex = np.zeros(len(t.pairs), bool)
+    assert 0 < speck.sum() < 20 and band.sum() > 100
+    for mode in ("region", "part"):
+        lab = t.labels(mode, 30)
+        assert lab.max() + 1 == 2
+        north, south = lab[c[:, 2] > 1], lab[c[:, 2] < -1]
+        assert len(set(north.tolist())) == 1 and len(set(south.tolist())) == 1 and north[0] != south[0]
+        # The band is shared out: its north half joins the north, its south half the south.
+        assert (lab[band & (c[:, 2] > 0.2)] == north[0]).all() and (lab[band & (c[:, 2] < -0.2)] == south[0]).all()
+    # A small feature with a crease all round it but more than MIN_REGION of the surface stays its own region.
+    eye = np.linalg.norm(c - [10, 0, 0], axis=1) < 1.5
+    t.angles = np.where(eye[a] != eye[b], 60.0, 1.0)
+    assert t.labels("region", 30).max() + 1 == 2
+
+
+def test_paint_replay_paints_like_a_full_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PaintReplay` (a new step replays only itself) gives exactly what replaying every step does: adding steps,
+    Undo back to a shorter list, then a different step after it; and it applies only the steps it has not seen."""
+    import pokefit.colorize as colorize
+
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    part = _part(ball, {0: 'paint_color="8"'})
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    stroke = _ring_stroke(part, 5, 24)
+    ops = [PaintOp(0, stroke[0], 2, "brush", radius=0.5, path=tuple(stroke[1:])), PaintOp(0, top, 3, "part"),
+           PaintOp(0, top, 1, "brush", radius=1.0), PaintOp(0, top, 0, "part")]
+    replay = colorize.PaintReplay(keep=3)
+    applied: list[PaintOp] = []
+    real = colorize._apply_op
+    monkeypatch.setattr(colorize, "_apply_op", lambda parts, op, t, st: (applied.append(op), real(parts, op, t, st)))
+    # (paint list, steps it should replay)
+    for seq, new in ((ops[:1], 1), (ops[:2], 1), (ops[:3], 1), (ops[:2], 0), (ops[:2] + ops[3:], 1), (ops[:4], 1)):
+        applied.clear()
+        (got,) = replay.apply("base", [part], seq, topo)
+        assert len(applied) == new, seq
+        (want,) = apply_paint([part], seq, topo)
+        assert got.tri_extra == want.tri_extra
+    # Another base (another orientation's parts) never reuses this one's paint.
+    applied.clear()
+    (other,) = replay.apply("other", [part], ops[:1], topo)
+    assert len(applied) == 1 and other.tri_extra == apply_paint([part], ops[:1], topo)[0].tri_extra
+
+
+def test_the_preview_draws_split_paint_the_same_from_its_cache() -> None:
+    """`painted_mesh` keeps each split triangle's sub-triangles (a paint step redraws only what changed): the second
+    drawing is the first, and the sub-triangles cover exactly the triangles they replace."""
+    from pokefit.pipeline import painted_mesh
+
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    stroke = _ring_stroke(part, 5, 24)
+    (out,) = apply_paint([part], [PaintOp(0, stroke[0], 2, "brush", radius=0.5, path=tuple(stroke[1:]))], topo)
+    first = painted_mesh(out, 1)
+    second = painted_mesh(out, 1)
+    for a, b in zip(first, second):
+        assert np.array_equal(a, b)
+    v, f, ext = first
+    assert len(f) > len(ball.faces) and set(ext.tolist()) == {1, 2}
+    area = float(np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1).sum()) / 2
+    assert area == pytest.approx(ball.area, rel=1e-9)
