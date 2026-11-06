@@ -29,7 +29,7 @@ from .checks import (bed_contact_check, merged, islands_check, mesh_checks, over
                      self_intersections, supports_verdict, thickness_check)
 from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FILL_OVERLAP, ConformInfo, ConformSpec,
                       Shaped, base_fill, conform_fill, conform_shape, disc_region)
-from .strengthen import StrengthenInfo, strengthen
+from .strengthen import StrengthenInfo, Thickening, thicken, with_shells
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
                        PaintReplay, apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
 from .fit import FLOOR_MAX, HullPoints, annulus_margin, best_floor, best_offset, check_fit, max_scale, prepare_points
@@ -295,6 +295,10 @@ class Session:
     _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
     _conform: dict[tuple, ConformInfo] = field(default_factory=dict)
     _strength: dict[tuple, StrengthenInfo] = field(default_factory=dict)       # same key -> strengthen.py result
+    # Same key -> the conform step's parts before strengthen (the triangles paint steps name) and what strengthen adds
+    # to them (`unit_parts` = the two united; paint is applied to the first, then united: `figure_parts`).
+    _base: dict[tuple, list[Part]] = field(default_factory=dict)
+    _thick: dict[tuple, Thickening] = field(default_factory=dict)
     _fills: dict[tuple, float] = field(default_factory=dict)                 # `_auto_fill` decisions
     _points: dict[tuple[str, float, float, float], HullPoints] = field(default_factory=dict)
     _fields: dict[tuple[str, float, float, float], HeightField] = field(default_factory=dict)  # unit-scale undersides
@@ -457,8 +461,15 @@ class Session:
         return params.ball_scale
 
     def unit_parts(self, params: Params) -> list[Part]:
-        """Figure-frame parts at scale 1 (rotated, XY-centred, on z = 0)."""
+        """Figure-frame parts at scale 1 (rotated, XY-centred, on z = 0), thin parts strengthened: the shape that is
+        fitted, cut and printed. Strengthen re-meshes what it thickens, so paint steps name `base_parts`' triangles."""
         return self._conformed(params, self.conform_spec(params))
+
+    def base_parts(self, params: Params) -> list[Part]:
+        """`unit_parts` before strengthen (the same parts when it is off): the triangles paint steps, taps, the
+        topology and a glTF's colour name."""
+        self.unit_parts(params)
+        return self._base[self._key(params)]
 
     def _conformed(self, params: Params, spec: ConformSpec | None) -> list[Part]:
         """`unit_parts` with the conform step's settings given (cached under the same key)."""
@@ -477,6 +488,7 @@ class Session:
                         self._shapes.clear()
                     self._shapes[skey] = conform_shape(parts, cavity, spec)
                 parts, self._conform[key] = conform_fill(self._shapes[skey], spec)
+            self._base[key] = parts
             if params.strengthen > 0:
                 parts = self._strengthened(params, parts, key)
             self._frames[key] = parts
@@ -515,7 +527,8 @@ class Session:
 
     def _strengthened(self, params: Params, parts: list[Part], key: tuple) -> list[Part]:
         """`parts` with thin features thickened (strengthen.py), measured at the height asked for or else the
-        largest that fits (no magnets); the conform step's flat base is solid already and is left alone."""
+        largest that fits (no magnets); the conform step's flat base is solid already and is left alone. What is
+        added is kept (`_thick`) for the painted parts (`figure_parts`)."""
         cavity = self.cavity(params)
         v = np.vstack([p.vertices for p in parts])
         free = max_scale(prepare_points(v), cavity)
@@ -523,9 +536,18 @@ class Session:
         height = float(np.ptp(v[:, 2]))
         if params.figure_height and height > 0:
             s = min(s, params.figure_height / height) if s > 0 else params.figure_height / height
-        figure = [p for p in parts if p.name != FILL_NAME]
-        done, self._strength[key] = strengthen(figure, s, params.strengthen)
-        return [*done, *[p for p in parts if p.name == FILL_NAME]]
+        # The flat base gains nothing (no shell), so the shells line up with `parts` (and the painted ones) by index.
+        th = thicken([p if p.name != FILL_NAME else replace(p, faces=p.faces[:0]) for p in parts], s,
+                     params.strengthen)
+        self._thick[key], self._strength[key] = th, th.info
+        return with_shells(parts, th)
+
+    def thickened(self, params: Params, parts: list[Part]) -> list[Part]:
+        """`parts` (`base_parts` order and shapes, e.g. painted) with strengthen's additions (`unit_parts`' shape),
+        paint carried to the new triangles; `parts` themselves when strengthen is off."""
+        self.unit_parts(params)
+        th = self._thick.get(self._key(params)) if params.strengthen > 0 else None
+        return with_shells(parts, th) if th is not None else parts
 
     def strengthen_info(self, params: Params) -> StrengthenInfo | None:
         self.unit_parts(params)
@@ -577,7 +599,7 @@ class Session:
     def textured_parts(self, params: Params) -> list[Part]:
         """`unit_parts` with a glTF's colour reduced to `texture_count` filaments (the file loads with
         its own automatic palette; geometry and face order are identical)."""
-        parts = self.unit_parts(params)
+        parts = self.base_parts(params)
         n = self.texture_count(params)
         if self.project.texture is None or n is None:
             return parts
@@ -643,10 +665,14 @@ class Session:
 
     def figure_parts(self, params: Params) -> list[Part]:
         """`unit_parts` with the file's colour (glTF: at the chosen count, renumbered by `colour_map`) and the
-        colorize paint applied (geometry identical), specks under `despeckle` mm² at the print size cleared."""
+        colorize paint applied, specks under `despeckle` mm² at the print size cleared, and the pads."""
+        return self._with_pads(params, self.thickened(params, self.painted_parts(params)))
+
+    def painted_parts(self, params: Params) -> list[Part]:
+        """`base_parts` (the triangles paint names) with the file's colour and the colorize paint applied."""
         parts = self.mapped_parts(params)
         if not params.paint:
-            return self._with_pads(params, parts)
+            return parts
         s = self.paint_scale(params) if params.despeckle > 0 else 0.0
         key = (self._key(params), self.texture_count(params), params.texture_details, json.dumps(params.colour_map),
                json.dumps(params.paint, sort_keys=True), params.despeckle, round(s, 4))
@@ -656,7 +682,7 @@ class Session:
             min_area = params.despeckle / (s * s) if s > 0 else 0.0
             self._painted[key] = self._replay.apply(key[:4], parts, params.paint_ops, self.topology(params),
                                                     min_area)
-        return self._with_pads(params, self._painted[key])
+        return self._painted[key]
 
     def _with_pads(self, params: Params, parts: list[Part]) -> list[Part]:
         """`parts` plus the pads under the magnet pockets (`pocket_pads`), in the flat base's filament."""
@@ -1359,7 +1385,7 @@ def colour_rows(session: Session, params: Params, scale: float) -> list[dict[str
            session.presets.version if session.presets else 0, params.texture_details)
     if key not in session._tc_table:
         rows = []
-        unit = session.unit_parts(params)
+        unit = session.base_parts(params)
         p0 = unit[0]
         corner_z = p0.vertices[p0.faces][:, :, 2] * scale
         lh = float(ref.get("layer_height", 0.2) or 0.2)
@@ -1720,7 +1746,8 @@ def _preview_meshes(session: Session, params: Params, regions: tuple[str, float]
     if hit is not None:
         return hit
     obj = session.obj(params)
-    unit = session.unit_parts(params) if regions else session.figure_parts(params)
+    unit = session.base_parts(params) if regions else session.figure_parts(params)
+    named = session.painted_parts(params)             # the triangles a highlight names (`sources`)
     meshes: list[tuple[np.ndarray, np.ndarray]] = []
     keys: list[np.ndarray] = []
     sources: list[np.ndarray] = []
@@ -1737,10 +1764,11 @@ def _preview_meshes(session: Session, params: Params, regions: tuple[str, float]
                 keys.append(topo.labels(pi, mode, regions[1]) if pi < len(topo)
                             else np.full(len(part.faces), -1, np.int64))
     else:
-        for part, clipped in zip(unit, clip_overlaps(unit)):
+        for pi, clipped in enumerate(clip_overlaps(unit)):
             pv, pf, ext, src = painted_mesh(clipped, session.extruder(params))
-            if clipped is not part:
-                src = _nearest_faces(part, clipped)[src]          # re-meshed by the clip: by position
+            own = named[pi] if pi < len(named) else unit[pi]
+            if clipped is not own:
+                src = _nearest_faces(own, clipped)[src]           # re-meshed (clip, strengthen): by position
             meshes.append((pv, pf))
             keys.append(ext)
             sources.append(src)
@@ -1836,7 +1864,7 @@ def _pick_trees_for(session: Session, params: Params) -> list[Any]:
     key = session._key(params)
     if key not in session._pick_trees:
         session._pick_trees.clear()                 # one orientation at a time: trees are large
-        session._pick_trees[key] = centroid_trees(session.unit_parts(params))
+        session._pick_trees[key] = centroid_trees(session.base_parts(params))
     return session._pick_trees[key]
 
 
@@ -1873,7 +1901,7 @@ def pieces_of_colour(session: Session, params: Params, filament: int) -> dict[st
     if not 1 <= filament <= 64:
         raise ValueError(f"filament must be 1-64, not {filament}")
     s = session.paint_scale(params) or 1.0
-    found = colour_pieces(session.topology(params), session.figure_parts(params), filament,
+    found = colour_pieces(session.topology(params), session.painted_parts(params), filament,
                           session.extruder(params))
     return {"filament": filament, "pieces": [{"part": p.part, "face": p.face, "area_mm2": round(p.area * s * s, 3),
                                               "faces": p.faces} for p in found]}
@@ -1889,7 +1917,7 @@ def limb_region(session: Session, params: Params, point: list[float] | None, nor
     if at is not None:
         pi, fi = int(at[0]), int(at[1])
     elif point is not None:
-        parts = session.unit_parts(params)
+        parts = session.base_parts(params)
         pi, fi, _ = pick_face(parts, np.asarray(point, float)[:3],
                               None if normal is None else np.asarray(normal, float)[:3],
                               trees=_pick_trees_for(session, params))
@@ -1939,7 +1967,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
         raise ValueError("only the brush paints strokes")
     if (mode == "stamp") != (stamp_axes is not None):
         raise ValueError("a stamp needs its two semi-axes, and only a stamp has them")
-    parts = session.unit_parts(params)
+    parts = session.base_parts(params)
     trees = _pick_trees_for(session, params)
 
     def at(pt: list[float], nrm: list[float] | None) -> tuple[int, int, float]:
@@ -1964,7 +1992,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
         points.extend(_file_point(session, params, sp, sf, np.asarray(sample["point"], float)[:3]))
         if sf != fi and (not path or path[-1] != sf):
             path.append(sf)
-    figure = session.figure_parts(params)
+    figure = session.painted_parts(params)
     states: dict[int, PaintState] = {}
 
     def state(i: int) -> PaintState | None:
@@ -1997,7 +2025,7 @@ def pick(session: Session, params: Params, point: list[float], normal: list[floa
 def _file_point(session: Session, params: Params, pi: int, fi: int, point: np.ndarray) -> tuple[float, float, float]:
     """A point on triangle `fi` of part `pi` in the figure frame (scale 1), at the same spot of the same triangle in
     the frame paint operations live in (the file's, before rotation and the conform step)."""
-    fig_tri = session.unit_parts(params)[pi]
+    fig_tri = session.base_parts(params)[pi]
     src = session.topology(params)._parts[pi]
     a, b, c = fig_tri.vertices[fig_tri.faces[fi]]
     # Barycentric coordinates of the point in the figure-frame triangle, applied to the same triangle in the file.

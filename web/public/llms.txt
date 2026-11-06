@@ -52,10 +52,11 @@
   and a distance transform); only across a feature (where the inward ray leaves the solid within ~1.5-3 x its
   thickness), so points and rims (ear tips, a lightning-bolt tail's point) keep their shape instead of swelling into
   knobs; a thin feature (ear, tail tip, flame) gets the minimum where it joins the figure,
-  tapering to 40 % of it at its tip, and a thin neck between two thick parts gets it all along. Vertices move
-  out along smoothed directions (not across creases), blended into the surface around, never into a gap more than
-  about half way, and no triangle is turned over, so dense sculpts and simplified meshes do not wrinkle; colours
-  are kept.
+  tapering to 40 % of it at its tip, and a thin neck between two thick parts gets it all along. The thickening is
+  built as a solid (an offset of the surface on a 0.1 mm grid, smoothed, united with the figure), blended into the
+  surface around and never more than about half way into a gap: fine relief under it (an ear's incised line and
+  panel) fills smoothly instead of crumpling. Colours carry onto it from the nearest painted triangle; taps and
+  paint still name the figure's own triangles. It can take tens of seconds on a spiky 300k-triangle figure.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
   largest that fits is used, with a note. Settings that are changed (ball, steel, floor, magnets, pockets, height, shape,
   strengthen, simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the

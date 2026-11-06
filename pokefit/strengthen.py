@@ -6,8 +6,7 @@ Why: a figure scaled down to fit a ~27 mm ball has features a few tenths of a mi
 print size. Such a join holds only a few extrusion lines and snaps off (a Charmander's tail flame,
 an Eevee's ears, a Pikachu's tail).
 
-How (vertices only move, faces and their order are kept, so paint and texture colour carry over,
-like conform.py):
+How:
 
 1. **Local thickness.** The solid parts are voxelised at VOXEL mm (print size) by ray parity along z
    (`magnets._crossings`: every triangle crossing a column, as an entry or an exit), and a Euclidean
@@ -15,45 +14,33 @@ like conform.py):
    is the largest distance found along its inward normal within the target thickness: about half the
    thickness of a sheet, the radius of a rod, and "thick enough" for a body.
 2. **Taper.** Each thin feature (connected vertices thinner than the target) gets the full target
-   where it meets thick material (its root: the join that breaks) and TIP × target at its far end,
+   where it meets thick material (its root: the join that breaks) and TIP x target at its far end,
    in proportion to the distance over its surface from the root. A fine tip stays fine; its base
-   gets stronger. A neck (thin between two thick parts) has no far end and gets the full target.
-3. **Push.** A thin vertex moves out along its (smoothed) normal by half its shortfall from that
-   (both sides of a sheet move, so the sheet ends at the target).
-4. **Blend.** The push spreads over BLEND × target mm of surface around it, fading (each pass a vertex
-   keeps the larger of its own push and SPREAD × its neighbours' mean), then a few smoothing passes:
-   the thickened part meets its body with a taper, which is where a join is weakest.
+   gets stronger. A neck (thin between two thick parts) has no free end and gets the full target.
+3. **Push size.** A thin vertex's surface is to move out by half its shortfall from that (both sides of a sheet
+   move, so the sheet ends at the target), spread over BLEND x target mm of surface around it, fading (each pass
+   a vertex keeps the larger of its own push and SPREAD x its neighbours' mean), then smoothed: the thickened
+   part meets its body with a taper, which is where a join is weakest.
+4. **Offset as a solid** (`_shell`, `with_shells`). The surface is not moved vertex by vertex: the part gains the
+   solid inside its offset surface, {x : sdf(x) < push at the nearest surface point, push >= FADE},
+   built on a SHELL_VOXEL grid (distance to dense samples of the surface, inside by ray parity) as a closed mesh
+   (`_marching_tets`) and united with the part (manifold3d). Paint and texture colour carry over to the new
+   triangles from the nearest old one (`model3mf.remesh_part`). An offset of a distance field is smooth however
+   fine the relief under it: moving vertices instead pushed an ear's raised rim and the recessed panel inside it
+   (0.7 mm Jolteon ear, 2 mm target) into each other and left the surface scaly; a groove narrower than the push
+   (an incised line) now fills instead of closing with a ragged seam.
 
 Only across: a vertex is pushed only where its inward ray leaves the solid again within about its own thickness
 (ACROSS), so the push widens the feature across its thin direction. On a rim, an edge or a point (an ear's tip,
 the point of a lightning-bolt tail, the edge of a flat fin) "outward" runs along the feature: the ray runs down
 it and leaves far away. Pushing those grew the point outward and rounded it into a knob (worst at 2.5-4 mm);
-they now keep their place, and the sheet behind them still thickens.
+they now keep their place, and the sheet behind them still thickens. Not into a gap (`clear`): the surface moves
+under half the open space in front of it (a claw against the body).
 
-Even where the surface curves: a push 2-3 edges long along normals that differ by a few degrees between
-neighbours (fur spikes, the hollow of an ear, every curve of a dense sculpt) moved neighbours apart sideways, so
-the triangles tilted into wrinkles, and turned 500-1,000 triangles over on a Jolteon at any simplify level: what
-looked like the model's flaws magnified (most on a simplified mesh, whose long uneven triangles the smoothing
-passes, counted in edges, reach unevenly). So the moves end up smooth by construction:
-- **Sizes**: after the passes, one implicit smoothing over an eighth of a target in mm evens the gates' steps;
-- **Directions** (`_Graph.smooth`, `crease_lap`): the move vectors are diffused over a quarter target of surface
-  (one implicit heat step with edge weights in mm, so the radius is the same on a dense sculpt and on a simplified
-  mesh of long, uneven triangles; edges count by how much their normals agree, so the two sides of a crease or of a
-  thin sheet's rim do not mix), and each keeps its own length;
-- **Gaps** (`clear`): a vertex moves under half the open space in front of it (a claw against the body);
-- **No folds** (`_unfold`): a well-shaped triangle the moves turn over has its corners' moves halved until none is.
-
-Measured on a 300k / 60k / 20k-triangle Jolteon at 2 mm: triangles turned over 1015 / 472 / 972 -> 90 / 35 / 82.
-
-Limits: the thickness is measured at one print size (the height asked for, else the largest that
-fits); a smaller print has thinner features. A groove narrower than a voxel (an incised line, like the one round
-an ear's inner panel) is not seen as a gap: its sides still close it and cross (the slicer unions them; the view
-shows a ragged seam there). Nothing moves below the bed.
-
-TODO: moving vertices cannot thicken a sheet with relief finer than the push (an ear's raised rim round a recessed
-panel, 2 mm on a 0.7 mm Jolteon ear): the rim's inner slope and the panel cross and the surface comes out scaly
-(NOTES.md item 18). Thicken volumetrically instead: an SDF of the pushed region, marching cubes, a union with the
-original (manifold), paint carried by `remesh_part`.
+Limits: the thickness is measured at one print size (the height asked for, else the largest that fits); a smaller
+print has thinner features. The shell is a SHELL_VOXEL mesh (0.1 mm facets at print size) and it fades in from
+FADE mm, a step under a layer. Relief finer than the push under it is filled, not kept (that is what makes it
+thicker). Nothing grows below the bed.
 """
 from __future__ import annotations
 
@@ -65,11 +52,17 @@ from scipy import ndimage
 from scipy.sparse import coo_matrix, diags
 
 from .magnets import _crossings
-from .model3mf import Part, row_ids
+import trimesh
+import trimesh.smoothing
+
+from .model3mf import Part, digest, remesh_part, row_ids
 
 VOXEL = 0.15         # mm at print size
 SAMPLES = 12         # steps along the inward normal when measuring a vertex's local radius
 ACROSS = (1.5, 3.0)  # full push where the inward ray leaves the solid within 1.5 x the thickness, none past 3 x
+EXIT_SLACK = 2       # ... plus this many voxels (`_across`)
+GROOVE_ROUNDS = 1    # passes filling the gate's narrow valleys (`_fill_grooves`)
+GROOVE_DEG = 25.0    # ... between neighbours whose smoothed normals are this close
 REACH = 1.5          # ...up to this many targets deep (a 90-degree corner's distance grows only as depth / sqrt 3)
 BLEND = 1.0          # the push blends out over this many target thicknesses of surface
 SPREAD = 0.9         # per pass, a vertex takes this share of its neighbours' mean push (if larger than its own)
@@ -78,10 +71,19 @@ TIP = 0.4            # a thin feature's far end is thickened to this share of th
 ROOT_MIN = 6         # vertices a join needs to count (fewer: measuring noise)
 NORMAL_ROUNDS = 80   # most smoothing passes over the push direction and the push
 MAX_VOXELS = 30_000_000  # coarser voxels beyond this (a very large figure or a fine target)
-GAP_SHARE = 0.45     # a vertex moves at most this share of the open space in front of it (`clear`)
-FOLD_DEG = 90.0      # a triangle whose normal turns more than this has turned over (`_unfold`)
-UNFOLD_ROUNDS = 12   # halvings at most
-SLIVER = 0.05        # ... of triangles at least this well shaped
+GAP_SHARE = 0.45     # the surface moves at most this share of the open space in front of it (`clear`)
+SHELL_VOXEL = 0.1    # mm at print size: the grid the gained solid is built on (`_shell`)
+FADE = 0.05          # mm: the shell starts where the push reaches this (under a layer: no visible step)
+TIDY_ROUNDS = 6      # Taubin smoothing passes over the shell's grid noise (`_tidy`)
+TIDY_ERROR = 0.01    # mm the shell may move when its triangles are thinned
+MAX_SHELL_NODES = 16_000_000   # a coarser shell grid beyond this (memory: the browser engine is 32-bit)
+DEPTH = 2            # the shell reaches its push plus this many grid steps under the surface (`_shell`)
+NEAREST = 4          # the samples whose triangles give a grid point's exact distance (`_shell`)
+BALL = 0.1           # mm: samples pushed this far or more also grow in front of them (`_shell`: concave joins)
+BALLS = 8            # ... the candidates tried per grid point
+GROW_DEG = 45.0      # ... by their full push within this angle of their normal
+FACE_DEG = 80.0      # ... fading to nothing at this angle
+COARSE = 2           # the shell's first pass fills every COARSE-th grid point (`_shell`)
 
 
 @dataclass
@@ -175,7 +177,6 @@ class _Graph:
         # of (x_j - x_i) / h^2 is the Laplacian), so a radius is the same mm on any triangles.
         self.w = 1.0 / np.maximum(self.elen, 1e-6 * max(self.edge, 1e-12)) ** 2
         self.share = np.maximum(np.asarray(a.sum(axis=1)).ravel(), 1) / 4.0
-        self._crease: Any = None
         self._plain: Any = None
 
     def _laplacian(self, w: np.ndarray) -> Any:
@@ -189,15 +190,6 @@ class _Graph:
         if self._plain is None:
             self._plain = self._laplacian(self.w)
         return self._plain
-
-    def crease_lap(self) -> Any:
-        """The Laplacian with each edge weighted by how much its ends' normals agree (0 from a right angle on):
-        smoothing with it does not mix the two sides of a crease or of a thin sheet's rim."""
-        if self._crease is None:
-            e = self.edges
-            agree = np.clip((self.normals[e[:, 0]] * self.normals[e[:, 1]]).sum(axis=1), 0.0, 1.0) ** 2
-            self._crease = self._laplacian(self.w * agree)
-        return self._crease
 
     def smooth(self, x: np.ndarray, radius: float, lap: Any) -> np.ndarray:
         """`x` (per vertex, one or more columns) diffused over about `radius` of surface: one implicit heat step,
@@ -247,39 +239,360 @@ class _Graph:
         return d
 
 
-def _unfold(pos: np.ndarray, faces: np.ndarray, disp: np.ndarray) -> np.ndarray:
-    """`disp` (per vertex moves) with the corners of every triangle it would turn over (normal turning more than
-    FOLD_DEG) halved, repeated until none does (at most UNFOLD_ROUNDS times; then those corners do not move).
-    Merged-vertex frame."""
-    def normals(v: np.ndarray) -> np.ndarray:
-        n = np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
-        return np.asarray(n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-30))
+_TETS = np.array([[0, 1, 3, 7], [0, 1, 5, 7], [0, 2, 3, 7], [0, 2, 6, 7], [0, 4, 5, 7], [0, 4, 6, 7]])
+"""A cube's corners (bit 0 = +x, 1 = +y, 2 = +z) in six tetrahedra round its main diagonal (Freudenthal): every
+cube splits its faces along the same diagonals, so neighbouring cubes' tetrahedra meet face to face."""
 
-    before = normals(pos)
-    # Slivers (a long edge over a tiny height) turn over at the least move and show nothing: only well-shaped ones
-    # count (twice the area over the longest edge squared: 0.87 for an equilateral triangle).
-    e0, e1, e2 = (pos[faces[:, k]] - pos[faces[:, (k + 1) % 3]] for k in range(3))
-    area2 = np.linalg.norm(np.cross(e0, e1), axis=1)
-    longest = np.maximum.reduce([np.einsum("ij,ij->i", e, e) for e in (e0, e1, e2)])
-    ok = area2 > SLIVER * longest
-    limit = np.cos(np.radians(FOLD_DEG))
-    out = disp.copy()
-    for k in range(UNFOLD_ROUNDS + 1):
-        bad = ok & ((before * normals(pos + out)).sum(axis=1) < limit)
-        if not bad.any():
-            break
-        corners = np.unique(faces[bad])
-        out[corners] = 0.0 if k == UNFOLD_ROUNDS else out[corners] / 2
+
+def _across(thick: np.ndarray, exits: np.ndarray, vox: float) -> np.ndarray:
+    """Per vertex, how much of its push it gets (module doc, "only across"): 1 where its inward ray leaves the solid
+    within ACROSS[0] x its thickness, 0 past ACROSS[1] x. Both thresholds allow EXIT_SLACK voxels more: the exit is
+    found to a voxel or two, which on a very thin spot (the 0.2 mm floor of an incised line in an ear) is several
+    times its thickness, and the line came out unpushed between pushed sides (a ridge along it)."""
+    slack = EXIT_SLACK * vox
+    return np.asarray(np.clip((ACROSS[1] * thick + slack - exits) / ((ACROSS[1] - ACROSS[0]) * thick + 1e-12),
+                              0.0, 1.0))
+
+
+def _fill_grooves(g: _Graph, across: np.ndarray, nrm: np.ndarray) -> np.ndarray:
+    """`across` with its narrow valleys closed (a grey closing: GROOVE_ROUNDS of neighbour max, then as many of
+    neighbour min) over edges whose ends face the same way (smoothed normals `nrm` within GROOVE_DEG). The floor of
+    an incised line inside a sheet measures as if its ray ran along the sheet and was gated out between pushed sides,
+    leaving a ridge along the line: closed. A point's gate only rises away from it (no valley: kept), and the strip
+    round a sheet's edge, whose smoothed normals turn away from both faces, is not joined to them."""
+    e = g.edges
+    e = e[(nrm[e[:, 0]] * nrm[e[:, 1]]).sum(axis=1) >= np.cos(np.radians(GROOVE_DEG))]
+    a, b = np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]]
+    out = np.asarray(across, np.float64).copy()
+    for pick in (np.maximum, np.minimum):
+        for _ in range(GROOVE_ROUNDS):
+            nxt = out.copy()
+            pick.at(nxt, a, out[b])
+            out = nxt
     return out
 
 
-def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Part], StrengthenInfo]:
-    """Figure-frame parts (scale 1) with thin features thickened to `target` mm at print scale `scale` where they
-    join the figure, tapering to TIP x target at their far ends (module doc). Only solid parts move."""
+def _push_sizes(g: _Graph, thick: np.ndarray, across: np.ndarray, clear: np.ndarray, t_unit: float,
+                vox: float) -> np.ndarray:
+    """How far (scale-1 units) the surface at each merged vertex of a part is offset outward: half its shortfall
+    from the tapered target (module doc, 2-4), gated to across a feature, blended into its surroundings and capped
+    under half the open space in front of it. All zeros when nothing is thin."""
+    thin = thick < t_unit
+    if not thin.any():
+        return np.zeros(g.n)
+    from scipy.sparse.csgraph import connected_components
+
+    # Taper: the full target where a thin feature joins the figure, TIP x target at its far end.
+    d = g.root_distance(thin)
+    e = g.edges[thin[g.edges[:, 0]] & thin[g.edges[:, 1]]]
+    _, comp = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(g.n, g.n)),
+                                   directed=False)
+    reach = np.zeros(comp.max() + 1)
+    np.maximum.at(reach, comp[thin], d[thin])
+    frac = np.where(thin, d / np.maximum(reach[comp], 1e-12), 0.0)
+    # A neck (a thin stretch joined to thick material at two or more places, like a small tail tip under a big
+    # flame) has no free end: its middle is its weakest point, so it gets the full target throughout. The
+    # band within half a target of a join falls into one piece per join.
+    band = thin & (d <= t_unit / 2)
+    eb = g.edges[band[g.edges[:, 0]] & band[g.edges[:, 1]]]
+    _, joins = connected_components(coo_matrix((np.ones(len(eb)), (eb[:, 0], eb[:, 1])), shape=(g.n, g.n)),
+                                    directed=False)
+    sizes = np.bincount(joins[band], minlength=joins.max() + 1)
+    big = band & (sizes[joins] >= ROOT_MIN)
+    pairs = np.unique(np.c_[comp[big], joins[big]], axis=0)
+    necks = np.bincount(pairs[:, 0], minlength=comp.max() + 1) >= 2 if len(pairs) else np.zeros(comp.max() + 1, bool)
+    frac[necks[comp]] = 0.0
+    want = t_unit * (1 - (1 - TIP) * np.clip(frac, 0, 1))
+    # The across share varies from vertex to vertex near a rim: averaged over about a quarter target of surface
+    # first, or neighbours pushed and not pushed would leave spikes.
+    raw = across
+    for _ in range(int(np.clip((t_unit / 4 / max(g.edge, 1e-9)) ** 2, 2, NORMAL_ROUNDS))):
+        across = 0.5 * across + 0.5 * (g.mean @ across)
+    across = np.minimum(across, raw + 0.25)          # ... but a fine point keeps (nearly) its own: no push
+    gate = np.where(thin, across, 1.0)
+    push = np.where(thin, np.clip((want - thick) / 2, 0.0, t_unit / 2) * across, 0.0)
+    # Denoise over about half a target of surface (a noisy sculpt measures unevenly; passes grow with the
+    # mesh's density), then spread it over ~BLEND targets, fading: a spread keeps its peaks, so a join gets
+    # its full push and a fillet round it. A few last passes round off the spread's steps.
+    # Averaged among thin vertices only: with the thick body's zeros it fell short of the target right where a
+    # feature joins the body (a neck's ends), which is where it breaks.
+    w = thin.astype(np.float64)
+    for _ in range(int(np.clip((t_unit / 2 / max(g.edge, 1e-9)) ** 2, SMOOTH, NORMAL_ROUNDS))):
+        push = np.where(thin, 0.5 * push + 0.5 * (g.mean @ (push * w)) / np.maximum(g.mean @ w, 1e-12), 0.0)
+    push *= gate                                       # denoising carried it onto rims and points too
+    for _ in range(int(np.clip(round(BLEND * t_unit / max(g.edge, 1e-9)), 1, 60))):
+        push = np.maximum(push, SPREAD * (g.mean @ push) * gate)   # not out onto rims and points
+    for _ in range(SMOOTH):
+        push = 0.5 * push + 0.5 * (g.mean @ push)
+    push *= gate                                       # ... and so did the last rounding passes
+    # The passes above count in edges (capped): on a dense sculpt they reach a fraction of a mm. One last smoothing
+    # over an eighth of a target in mm (`_Graph.smooth`) evens the gates' steps on any mesh.
+    push = np.maximum(g.smooth(push, t_unit / 8, g.plain_lap()), 0.0)
+    # Not into a narrow gap (a claw against the body): under half the open space in front.
+    return np.asarray(np.minimum(push, np.maximum(clear - vox, 0.0) * GAP_SHARE))
+
+
+def _inside_grid(tri: np.ndarray, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> np.ndarray:
+    """Whether each grid point (y, x, z order) is inside the triangles' solid, by ray parity along z."""
+    cell, z, sign = _crossings(tri, xs, ys)
+    acc = np.zeros((len(ys) * len(xs), len(zs) + 1), np.int16)
+    np.add.at(acc, (cell, np.searchsorted(zs, z)), sign.astype(np.int16))
+    return np.asarray((np.cumsum(acc, axis=1)[:, :-1] > 0).reshape(len(ys), len(xs), len(zs)))
+
+
+def _samples(v: np.ndarray, f: np.ndarray, spacing: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Points over triangles `f` about `spacing` apart at most: (points, triangle row of `f` per point, barycentric
+    weights per point). Each triangle is split n x n, n from its longest edge."""
+    tri = v[f]
+    longest = np.max(np.linalg.norm(tri - tri[:, [1, 2, 0]], axis=2), axis=1)
+    n_of = np.clip(np.ceil(longest / spacing), 1, 64).astype(np.intp)
+    pts, owner, bary = [], [], []
+    for n in np.unique(n_of).tolist():
+        sel = np.flatnonzero(n_of == n)
+        a, b = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij")
+        keep = a + b <= n
+        w = np.stack([a[keep], b[keep], n - a[keep] - b[keep]], axis=1) / n          # (k, 3) lattice weights
+        pts.append(np.einsum("kj,fjc->fkc", w, tri[sel]).reshape(-1, 3))
+        owner.append(np.repeat(sel, len(w)))
+        bary.append(np.tile(w, (len(sel), 1)))
+    return np.vstack(pts), np.concatenate(owner), np.vstack(bary)
+
+
+def _marching_tets(phi: np.ndarray, cubes: np.ndarray, origin: np.ndarray, h: float) -> tuple[np.ndarray, np.ndarray]:
+    """The surface phi = 0 through the given cubes of a grid of values (x, y, z order, spacing h from `origin`;
+    negative inside) as (vertices, faces), wound outward. `cubes`: flat ids of the cubes' lowest corners; the
+    surface is closed when every cube it passes through is listed. Each cube is cut into six tetrahedra (`_TETS`),
+    each tetrahedron linearly: unlike marching cubes there are no ambiguous cases, so every edge of the result
+    joins exactly two triangles (a manifold mesh, which the union needs)."""
+    nx, ny, nz = phi.shape
+    flat = phi.ravel()
+    bits = [(c & 1, (c >> 1) & 1, (c >> 2) & 1) for c in range(8)]
+    off = np.array([(dx * ny + dy) * nz + dz for dx, dy, dz in bits], np.int64)
+    corner_ids = cubes.astype(np.int64)[:, None] + off[None, :]
+    neg = np.asarray(flat[corner_ids] < 0)
+    cut = neg.any(axis=1) & ~neg.all(axis=1)
+    if not cut.any():
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+    tv = corner_ids[cut][:, _TETS].reshape(-1, 4)                                 # node ids per tetrahedron
+    # Each template tetrahedron's handedness (the sign of its corners' determinant).
+    cpos = np.array(bits, float)[_TETS]
+    hand = np.tile(np.sign(np.linalg.det(cpos[:, 1:] - cpos[:, :1])), int(cut.sum()))
+    ins = flat[tv] < 0
+    cnt = ins.sum(axis=1)
+    use = (cnt > 0) & (cnt < 4)
+    tv, ins, cnt, hand = tv[use], ins[use], cnt[use], hand[use]
+    # Inside corners first; that reordering's parity and the handedness say which way the triangles face (for a
+    # right-handed a, b, c, d with a inside, the cut near a in the order b, c, d faces away from a).
+    order = np.argsort(~ins, axis=1, kind="stable")
+    tv = np.take_along_axis(tv, order, axis=1)
+    inv = sum((order[:, i] > order[:, j]).astype(np.intp) for i in range(4) for j in range(i + 1, 4))
+    flip = (hand < 0) ^ (inv % 2 == 1)
+    a, b, c, d = tv.T
+    one, three, two = cnt == 1, cnt == 3, cnt == 2
+    # (corner, corner) pairs per triangle corner: the triangle's corners are the cut points of those grid edges.
+    tris = [(np.c_[a, a, a][one], np.c_[b, c, d][one], flip[one]),            # a lone inside corner a
+            (np.c_[a, b, c][three], np.c_[d, d, d][three], flip[three]),      # a lone outside corner d
+            # two inside (a, b), two outside (c, d): the quad ac, ad, bd, bc as two triangles
+            (np.c_[a, a, b][two], np.c_[c, d, d][two], flip[two]),
+            (np.c_[a, b, b][two], np.c_[c, d, c][two], flip[two])]
+    lo = np.vstack([t[0] for t in tris])
+    hi = np.vstack([t[1] for t in tris])
+    fl = np.concatenate([t[2] for t in tris])
+    # One vertex per cut grid edge, shared by every triangle round it.
+    n_nodes = np.int64(nx * ny * nz)
+    key = np.minimum(lo, hi) * n_nodes + np.maximum(lo, hi)
+    uniq, inverse = np.unique(key.ravel(), return_inverse=True)
+    faces = inverse.reshape(-1, 3).astype(np.int64)
+    faces[fl] = faces[fl][:, ::-1]
+    e0, e1 = uniq // n_nodes, uniq % n_nodes
+
+    def xyz(ids: np.ndarray) -> np.ndarray:
+        return np.asarray(origin + h * np.stack([ids // (ny * nz), (ids // nz) % ny, ids % nz], axis=1))
+
+    p0, p1 = flat[e0].astype(np.float64), flat[e1].astype(np.float64)
+    t = (p0 / (p0 - p1))[:, None]
+    return xyz(e0) + t * (xyz(e1) - xyz(e0)), faces
+
+
+def _shell(v: np.ndarray, f: np.ndarray, push: np.ndarray, unit: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """What a part gains (module doc): the solid within `push` (per vertex) of its surface where the push is FADE or
+    more, outside and in (inside down to DEPTH grid steps below that: the union hides it), as a closed mesh; None
+    when nothing is pushed that far.
+    The distance to the surface is measured to dense samples of it, the side by ray parity; `unit` = scale-1 units
+    per print mm. The grid is filled in two passes: every COARSE-th point near the pushed surface first, then every
+    point only in the coarse cells the surface can pass through."""
+    from scipy.spatial import cKDTree
+
+    fade, h = FADE * unit, SHELL_VOXEL * unit
+    pmax = float(push.max(initial=0.0))
+    if pmax < fade:
+        return None
+    moved = push >= fade
+    span_lo, span_hi = v[moved].min(axis=0), v[moved].max(axis=0)
+    while True:
+        reach = pmax + 3 * h                    # the farthest a grid point in the shell can be from a pushed sample
+        lo = np.maximum(span_lo - reach, v.min(axis=0)) - 3 * h
+        hi = np.minimum(span_hi + reach, v.max(axis=0) + pmax) + 3 * h
+        if np.prod((hi - lo) / h + 1) <= MAX_SHELL_NODES:
+            break
+        h *= 1.2
+    # Irrational offsets keep grid points off mesh edges (as in `local_radius`); a whole number of coarse cells.
+    n = (np.ceil((hi - lo) / (COARSE * h)).astype(np.intp) + 1) * COARSE + 1
+    xs, ys, zs = (lo[k] + h * (np.arange(n[k]) + o) for k, o in ((0, 0.1234567), (1, 0.3183099), (2, 0.2718281)))
+    org = np.array([xs[0], ys[0], zs[0]])
+    tv = v[f]
+    near = np.flatnonzero((tv.max(axis=1) >= lo - reach).all(axis=1) & (tv.min(axis=1) <= hi + reach).all(axis=1))
+    pts, owner, bary = _samples(v, f[near], h)
+    tri_of = tv[near][owner]                                         # each sample's triangle
+    d_at = (bary * push[f[near][owner]]).sum(axis=1)                 # the push at each sample, from its corners
+    inside = _inside_grid(tv, xs, ys, zs).transpose(1, 0, 2)        # -> x, y, z order
+    tree = cKDTree(pts)
+    big_d = d_at >= BALL * unit
+    dd = d_at[big_d]
+    balls = cKDTree(np.c_[pts[big_d], np.sqrt(np.maximum(pmax * pmax - dd * dd, 0.0))]) if big_d.any() else None
+    bpts = pts[big_d]
+    fn = np.cross(tri_of[:, 1] - tri_of[:, 0], tri_of[:, 2] - tri_of[:, 0])[big_d]
+    bnrm = fn / np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-30)     # each sample's outward normal
+    z_bed = float(v[:, 2].min())
+    slope = max(1.0, 3 * COARSE * h / fade)
+
+    def field(i: np.ndarray, j: np.ndarray, k: np.ndarray) -> np.ndarray:
+        """The shell's value at grid points (negative inside the shell)."""
+        q = np.stack([xs[i], ys[j], zs[k]], axis=1)
+        dist_k, idx_k = tree.query(q, k=NEAREST, distance_upper_bound=reach, workers=-1)
+        dist, idx = dist_k[:, 0], idx_k[:, 0]
+        far = ~np.isfinite(dist)
+        dist = np.where(far, reach, dist)
+        # Exactly to the nearest samples' triangles (the samples are a grid step apart: their own distance is up to
+        # half a step long beside the surface, and the nearest one's triangle is not always the nearest triangle;
+        # an error of a few hundredths there let the original surface show through the shell's thin edge).
+        got = np.flatnonzero(~far)
+        if len(got):
+            ks = np.isfinite(dist_k[got])
+            rows, cols = np.nonzero(ks)
+            foot = trimesh.triangles.closest_point(tri_of[idx_k[got][rows, cols]], q[got][rows])
+            exact = np.full(ks.shape, np.inf)
+            exact[rows, cols] = np.linalg.norm(foot - q[got][rows], axis=1)
+            dist[got] = np.minimum(dist[got], exact.min(axis=1))
+        sdf = np.where(inside[i, j, k], -dist, dist)
+        d = np.where(far, 0.0, d_at[np.minimum(idx, len(d_at) - 1)])
+        # Under the offset of the nearest surface point, where it moves FADE or more. That second bound is steep
+        # (`slope`): left at its own size it is a plateau a few hundredths of a mm above zero all round the pushed
+        # area, which the fine pass would take for the surface's neighbourhood and fill.
+        off = np.maximum(sdf - d, (fade - d) * slope)
+        # ... or in front of any sample pushed BALL or more, within its push: at a concave join (a neck under a flame)
+        # the nearest surface is often the unpushed body, which would hide the neck's own push where the neck meets
+        # it. In front only: a ball all round a sample just under a point grows the point (a knob), so the radius
+        # fades from the push within GROW_DEG of the sample's normal to 0 at FACE_DEG. The candidates are the BALLS
+        # nearest by power distance |x - p|^2 - d(p)^2: a nearest-neighbour query on points lifted to 4D,
+        # (p, sqrt(D^2 - d(p)^2)) against (x, 0), whose squared distance is that plus D^2.
+        ask = np.flatnonzero(off > -2 * h) if balls is not None else np.zeros(0, np.intp)   # (deep inside: no matter)
+        if balls is not None and len(ask):
+            d4, jb = balls.query(np.c_[q[ask], np.zeros(len(ask))], k=BALLS,
+                                 distance_upper_bound=float(np.hypot(pmax, reach)), workers=-1)
+            hit = np.isfinite(d4)
+            jb = np.minimum(jb, len(dd) - 1)
+            u = q[ask][:, None, :] - bpts[jb]
+            r = np.linalg.norm(u, axis=2)
+            cos = (u * bnrm[jb]).sum(axis=2) / np.maximum(r, 1e-12)
+            lo_c, hi_c = np.cos(np.radians(FACE_DEG)), np.cos(np.radians(GROW_DEG))
+            reach_k = dd[jb] * np.clip((cos - lo_c) / (hi_c - lo_c), 0.0, 1.0)
+            # |x - p| - (its reach that way): negative in front of a sample within its push.
+            ball = np.where(hit, r - reach_k, np.inf).min(axis=1)
+            off[ask] = np.minimum(off[ask], ball)
+        # In the shell: in the offset, no deeper under the surface than its push and DEPTH grid steps (a thin feature
+        # pushed from both sides is solid through; in a thick body the field jumps where the nearest surface turns
+        # from pushed to unpushed, which the coarse pass could miss) and above the bed.
+        return np.asarray(np.maximum.reduce([off, -(d + DEPTH * h) - sdf, z_bed - zs[k]]))
+
+    # Coarse pass: grid points every COARSE steps within `reach` of a pushed sample (the rest are outside).
+    nc = (n - 1) // COARSE + 1
+    pc = np.clip(np.round((pts[d_at >= fade] - org) / (COARSE * h)).astype(np.intp), 0, nc - 1)
+    mark = np.zeros(tuple(nc), bool)
+    mark[pc[:, 0], pc[:, 1], pc[:, 2]] = True
+    mark = ndimage.binary_dilation(mark, np.ones((3, 3, 3), bool), iterations=int(np.ceil(reach / (COARSE * h))) + 1)
+    mark[[0, -1]] = False
+    mark[:, [0, -1]] = False
+    mark[:, :, [0, -1]] = False
+    coarse = np.full(tuple(nc), 4 * reach, np.float32)        # far outside: never refined
+    ci, cj, ck = np.nonzero(mark)
+    coarse[ci, cj, ck] = field(ci * COARSE, cj * COARSE, ck * COARSE)
+    # Fine pass: the coarse cells the surface may cross (a sign change, or a corner within a cell's diagonal of it).
+    cells = [coarse[dx:nc[0] - 1 + dx, dy:nc[1] - 1 + dy, dz:nc[2] - 1 + dz]
+             for dx in (0, 1) for dy in (0, 1) for dz in (0, 1)]
+    lo_c, hi_c = np.minimum.reduce(cells), np.maximum.reduce(cells)
+    near_c = (lo_c < 0) & (hi_c > 0) | (np.minimum(np.abs(lo_c), np.abs(hi_c)) < 1.2 * np.sqrt(3) * COARSE * h)
+    ri, rj, rk = np.nonzero(near_c)
+    if not len(ri):
+        return None
+    # Every fine point of those cells (shared corners once); the rest take their coarse cell's side.
+    side = (np.sign(coarse) * h).astype(np.float32)
+    phi = np.ascontiguousarray(side[np.ix_(*(np.minimum(np.arange(n[k]) // COARSE, nc[k] - 1) for k in range(3)))])
+    step = np.arange(COARSE + 1)
+    fi = (ri[:, None] * COARSE + step[None, :])
+    fj = (rj[:, None] * COARSE + step[None, :])
+    fk = (rk[:, None] * COARSE + step[None, :])
+    ids = ((fi[:, :, None, None] * n[1] + fj[:, None, :, None]) * n[2] + fk[:, None, None, :]).reshape(-1)
+    seen = np.zeros(int(np.prod(n)), bool)                            # shared corners once (np.unique: 10x slower)
+    seen[ids] = True
+    ids = np.flatnonzero(seen)
+    del seen
+    gi, gj, gk = ids // (n[1] * n[2]), (ids // n[2]) % n[1], ids % n[2]
+    val = field(gi, gj, gk)
+    val = np.where(np.abs(val) < 1e-6 * h, 1e-6 * h, val)              # no value exactly on the level
+    # Closed: the grid's border is outside (where the box cuts through the part, that cap is inside it: hidden).
+    edge = (gi == 0) | (gj == 0) | (gk == 0) | (gi == n[0] - 1) | (gj == n[1] - 1) | (gk == n[2] - 1)
+    val[edge] = h
+    phi.ravel()[ids] = val
+    # The fine cubes of those cells (their lowest corners).
+    cube = np.arange(COARSE)
+    cid = ((((ri[:, None] * COARSE + cube)[:, :, None, None]) * n[1] + (rj[:, None] * COARSE + cube)[:, None, :, None])
+           * n[2] + (rk[:, None] * COARSE + cube)[:, None, None, :]).reshape(-1)
+    sv, sf = _marching_tets(phi, cid, org, h)
+    return _tidy(sv, sf, unit) if len(sf) else None
+
+
+def _tidy(v: np.ndarray, f: np.ndarray, unit: float) -> tuple[np.ndarray, np.ndarray]:
+    """A marching-tetrahedra mesh with its grid noise smoothed out (Taubin: no shrinking) and its triangles thinned
+    where the surface is flat (meshoptimizer, moving it under TIDY_ERROR mm). Either step is skipped when it leaves
+    something that is not a closed solid."""
+    from .shell import to_manifold
+    from .simplify import clean, compact, simplify_indices
+
+    m = trimesh.Trimesh(v, f, process=False)
+    trimesh.smoothing.filter_taubin(m, lamb=0.5, nu=0.53, iterations=TIDY_ROUNDS)
+    best = (np.asarray(m.vertices), f)
+    try:
+        to_manifold(m)
+    except RuntimeError:
+        best = (v, f)
+    extent = float(np.ptp(best[0], axis=0).max())
+    if extent <= 0:
+        return best
+    thin, _ = simplify_indices(best[0], best[1], len(best[1]) // 4, TIDY_ERROR * unit / extent)
+    sv, sf = compact(best[0], clean(thin))
+    try:
+        to_manifold(trimesh.Trimesh(sv, sf, process=False))
+    except RuntimeError:
+        return best
+    return sv, sf
+
+
+@dataclass
+class Thickening:
+    """What `thicken` found: per part (in the order given), the solid it gains, or None."""
+    shells: list[tuple[np.ndarray, np.ndarray] | None]
+    info: StrengthenInfo
+
+
+def thicken(parts: list[Part], scale: float, target: float) -> Thickening:
+    """The solids that thicken figure-frame parts (scale 1) to `target` mm at print scale `scale` where thin
+    features join the figure, tapering to TIP x target at their far ends (module doc). Only solid parts gain."""
     info = StrengthenInfo(target_mm=target, scale=scale)
+    shells: list[tuple[np.ndarray, np.ndarray] | None] = [None] * len(parts)
     solid = [i for i, p in enumerate(parts) if p.subtype == "normal_part" and len(p.faces)]
     if target <= 0 or scale <= 0 or not solid:
-        return parts, info
+        return Thickening(shells, info)
     t_unit, vox = target / scale, VOXEL / scale
     info.voxel_mm = VOXEL
     graphs = {i: _Graph(parts[i].vertices, parts[i].faces) for i in solid}
@@ -289,83 +602,70 @@ def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Par
     # TODO: a sharp 90-degree join (a flat fin on a box) then reads thick for its first ~half target (smoothed
     # normals tilt into the box there); sculpted figures join smoothly, so this is left as is.
     radius, exits, clears = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
-                                 np.vstack([graphs[i].pos for i in solid]), np.vstack([normals[i] for i in solid]),
-                                 REACH * t_unit, vox)
-    out = list(parts)
+                                         np.vstack([graphs[i].pos for i in solid]),
+                                         np.vstack([normals[i] for i in solid]), REACH * t_unit, vox)
     start, thin_n, total, push_max = 0, 0, 0, 0.0
     for i in solid:
-        g, nrm = graphs[i], normals[i]
-        thick = 2 * radius[start:start + g.n]
+        g = graphs[i]
+        sl = slice(start, start + g.n)
+        start += g.n
+        thick = 2 * radius[sl]
         # Pushed only across the feature (module doc): 1 where the solid ends within ACROSS[0] x its thickness
         # along the inward ray, 0 past ACROSS[1] x (a rim, an edge or a point: the ray runs along the feature).
-        clear = clears[start:start + g.n]
-        across = np.clip((ACROSS[1] * thick - exits[start:start + g.n]) / ((ACROSS[1] - ACROSS[0]) * thick + 1e-12),
-                         0.0, 1.0)
-        start += g.n
-        thin = thick < t_unit
-        thin_n += int(thin.sum())
+        across = _fill_grooves(g, _across(thick, exits[sl], vox), normals[i])
+        thin_n += int((thick < t_unit).sum())
         total += g.n
-        if not thin.any():
+        push = _push_sizes(g, thick, across, clears[sl], t_unit, vox)
+        if push.max(initial=0.0) <= 0:
             continue
-        # Taper: the full target where a thin feature joins the figure, TIP x target at its far end.
-        d = g.root_distance(thin)
-        from scipy.sparse.csgraph import connected_components
-
-        e = g.edges[thin[g.edges[:, 0]] & thin[g.edges[:, 1]]]
-        _, comp = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(g.n, g.n)),
-                                       directed=False)
-        reach = np.zeros(comp.max() + 1)
-        np.maximum.at(reach, comp[thin], d[thin])
-        frac = np.where(thin, d / np.maximum(reach[comp], 1e-12), 0.0)
-        # A neck (a thin stretch joined to thick material at two or more places, like a small tail tip under a big
-        # flame) has no free end: its middle is its weakest point, so it gets the full target throughout. The
-        # band within half a target of a join falls into one piece per join.
-        band = thin & (d <= t_unit / 2)
-        eb = g.edges[band[g.edges[:, 0]] & band[g.edges[:, 1]]]
-        _, joins = connected_components(coo_matrix((np.ones(len(eb)), (eb[:, 0], eb[:, 1])), shape=(g.n, g.n)),
-                                        directed=False)
-        sizes = np.bincount(joins[band], minlength=joins.max() + 1)
-        big = band & (sizes[joins] >= ROOT_MIN)
-        pairs = np.unique(np.c_[comp[big], joins[big]], axis=0)
-        necks = np.bincount(pairs[:, 0], minlength=comp.max() + 1) >= 2 if len(pairs) else np.zeros(comp.max() + 1, bool)
-        frac[necks[comp]] = 0.0
-        want = t_unit * (1 - (1 - TIP) * np.clip(frac, 0, 1))
-        # The across share varies from vertex to vertex near a rim: averaged over about a quarter target of surface
-        # first, or neighbours pushed and not pushed would leave spikes.
-        raw = across
-        for _ in range(int(np.clip((t_unit / 4 / max(g.edge, 1e-9)) ** 2, 2, NORMAL_ROUNDS))):
-            across = 0.5 * across + 0.5 * (g.mean @ across)
-        across = np.minimum(across, raw + 0.25)          # ... but a fine point keeps (nearly) its own: no push
-        gate = np.where(thin, across, 1.0)
-        push = np.where(thin, np.clip((want - thick) / 2, 0.0, t_unit / 2) * across, 0.0)
-        # Denoise over about half a target of surface (a noisy sculpt measures unevenly; passes grow with the
-        # mesh's density), then spread it over ~BLEND targets, fading: a spread keeps its peaks, so a join gets
-        # its full push and a fillet round it. A few last passes round off the spread's steps.
-        for _ in range(int(np.clip((t_unit / 2 / max(g.edge, 1e-9)) ** 2, SMOOTH, NORMAL_ROUNDS))):
-            push = 0.5 * push + 0.5 * (g.mean @ push)
-        push *= gate                                       # denoising carried it onto rims and points too
-        for _ in range(int(np.clip(round(BLEND * t_unit / max(g.edge, 1e-9)), 1, 60))):
-            push = np.maximum(push, SPREAD * (g.mean @ push) * gate)   # not out onto rims and points
-        for _ in range(SMOOTH):
-            push = 0.5 * push + 0.5 * (g.mean @ push)
-        push *= gate                                       # ... and so did the last rounding passes
-        # The passes above count in edges (capped): on a dense sculpt they reach a fraction of a mm and leave the
-        # gates' per-vertex steps, which the push raised as wrinkles. One last smoothing over an eighth of a target
-        # in mm (`_Graph.smooth`) evens them on any mesh.
-        push = np.maximum(g.smooth(push, t_unit / 8, g.plain_lap()), 0.0)
-        # Even where the surface curves (module doc): not into a narrow gap, smoothed directions
-        # (each move keeps its length: round a rod thinner than the radius, opposite sides' moves partly cancel;
-        # where they cancel outright, the vertex's own normal), then no triangle turned over.
-        push = np.minimum(push, np.maximum(clear - vox, 0.0) * GAP_SHARE)
-        way = g.smooth(nrm * push[:, None], t_unit / 4, g.crease_lap())
-        size = np.linalg.norm(way, axis=1, keepdims=True)
-        way = np.where(size > 1e-3 * push[:, None], way / np.maximum(size, 1e-30), nrm)
-        disp = _unfold(g.pos, g.ids[parts[i].faces], way * push[:, None])
-        v = parts[i].vertices + disp[g.ids]
-        v[:, 2] = np.maximum(v[:, 2], parts[i].vertices[:, 2].min())     # nothing below the bed
-        push_max = max(push_max, float(np.linalg.norm(disp, axis=1).max()))
-        q = parts[i]
-        out[i] = Part(q.name, q.extruder, v, q.faces, q.tri_extra, q.subtype)
+        shells[i] = _shell(parts[i].vertices, parts[i].faces, push[g.ids], 1.0 / scale)
+        if shells[i] is not None:
+            push_max = max(push_max, float(push.max()))
     info.thin_share = thin_n / max(total, 1)
     info.max_push_mm = push_max * scale
-    return out, info
+    return Thickening(shells, info)
+
+
+# Unions by geometry (part, shell): a paint edit re-applies the same shells to the same shapes, and only the paint
+# is carried over again (`remesh_part`, whose triangle map is cached by geometry too).
+_UNIONS: dict[bytes, tuple[np.ndarray, np.ndarray] | None] = {}
+UNION_CACHE = 16
+
+
+def _union(part: Part, shell: tuple[np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.ndarray] | None:
+    """The part's solid and its shell as one closed mesh (manifold3d), or None when either is not a valid solid."""
+    from .shell import from_manifold, to_manifold
+
+    key = digest(part.vertices, part.faces, *shell)
+    if key not in _UNIONS:
+        try:
+            m = from_manifold(to_manifold(part.mesh()) + to_manifold(trimesh.Trimesh(shell[0], shell[1],
+                                                                                     process=False)))
+            got: tuple[np.ndarray, np.ndarray] | None = (np.asarray(m.vertices), np.asarray(m.faces))
+        except RuntimeError:
+            got = None
+        while len(_UNIONS) >= UNION_CACHE:
+            _UNIONS.pop(next(iter(_UNIONS)))
+        _UNIONS[key] = got
+    return _UNIONS[key]
+
+
+def with_shells(parts: list[Part], thickening: Thickening) -> list[Part]:
+    """`parts` (the ones `thicken` measured, or the same shapes painted: same order) united with their shells,
+    paint carried to the new triangles from the nearest old one (`remesh_part`). A part that is not a valid solid
+    (the union refuses it) is left as it is."""
+    out = list(parts)
+    for i, shell in enumerate(thickening.shells):
+        if shell is None or i >= len(parts):
+            continue
+        got = _union(parts[i], shell)
+        if got is not None:
+            out[i] = remesh_part(parts[i], trimesh.Trimesh(got[0], got[1], process=False))
+    return out
+
+
+def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Part], StrengthenInfo]:
+    """Figure-frame parts (scale 1) with thin features thickened to `target` mm at print scale `scale` (`thicken`
+    then `with_shells`)."""
+    th = thicken(parts, scale, target)
+    return with_shells(parts, th), th.info
