@@ -187,36 +187,37 @@ exist only on the original Windows machine (ask the user for the files).
      Shrink step 0.1 mm. Reshape's highlight showed specks on the head: it indexed the preview mesh, whose split
      paint is drawn as sub-triangles, by the part's triangle numbers; `limb_region` now answers `view_faces`
      (`PreviewMeshes.sources`), checked in the local UI on the Jolteon's ear.
-19. **Eevee evolutions batch** (2026-11-06, third pass; user's request: official colours, 300k, 1-2 pockets as large
-   as fit, like `printed/umbreon3.3mf`; then "flat feet", "don't use the gap fill", eyes/tail/socks not matching the
-   model's lines). Source `~/Downloads/Eevee+Evolutions.3mf`; results `~/Downloads/eevee_evolutions_pokefit_300k/`
-   (`<name>_pokefit_60.3mf`, `_import.3mf`, `review_<name>.png` = render of the exported file; `no_pads/` = the same
-   with `flat_fill` 0). Colours from official Pokedex art pixels (assets.pokemon.com .../full/<n>.png). Scripts in the
-   session scratchpad (`fig2.py NAME [export]`, `FIG_NOPAD=1`; `insp.py NAME [lines]` close-ups; `gx.py` region ids).
-   - Flat feet / protrusions were the conform press + gap fill: now `flat_base=0`. Pads under the pockets still come
-     from `flat_fill` (default set: ~6 mm discs up to 2.9 mm tall). Without them (`no_pads/`) Espeon, Jolteon and
-     Sylveon get 1 pocket instead of 2, and most pockets are walled only 0.5-1.2 mm of the 2 mm magnet.
-   - Paint now follows the model's engraved lines: `gregions(th, seal)` = patches between faces whose wand `wall`
-     exceeds th degrees (2.5 coarse, 0.8-1.2 fine), picked by id; `inner_oval` (Glaceon pupil), `into_line` (paint
-     into the outline groove), `by_region` (majority colour per small region: Flareon's ruff), `soft_cut` (split-paint
-     edge where the model has no line: Sylveon's cap, Leafeon's front socks, Glaceon's hind toes, Umbreon's tail
-     band, Sylveon's ribbon band). Gotcha: `Topology.verts` are in the FILE frame, the part's are shifted: a
-     field on topology vertices must subtract the offset (`Fig.topo_verts`); first try gave 0 split triangles.
-   - Bambu CLI failed (-100) on Flareon when the black inner-ear paint (grown over the rim) reached both faces of the
-     thin ear; front-facing panel only slices. Root cause inside the slicer not confirmed (log is encrypted).
-   | figure | mm | pockets (pads / no pads) | h / g / colour changes |
-   |---|---|---|---|
-   | Espeon | 32.6 | 2 / 1 | 1.46 / 20.5 / 13 |
-   | Flareon | 31.6 | 2 / 2 | 2.58 / 38.2 / 33 |
-   | Glaceon | 34.5 | 2 / 2 | 5.04 / 74.1 / 109 |
-   | Jolteon | 31.6 | 2 / 1 | 2.00 / 27.2 / 15 |
-   | Leafeon | 34.3 | 1 / 1 | 3.17 / 45.0 / 55 |
-   | Sylveon | 38.5 | 1 / 1 | 4.61 / 66.9 / 102 |
-   | Umbreon | 38.5 | 2 / 2 | 1.90 / 24.8 / 12 |
-   | Vaporeon | 28.8 | 1 / 1 | 3.24 / 47.8 / 63 |
-   Open: Glaceon/Sylveon purge 3.8-4.2 h (100+ changes); Umbreon slit pupils and Jolteon's black pupils not modelled;
-   Vaporeon thickness (fins); the engine has no "paint per triangle from a script" entry point (the batch patches
-   `Session.mapped_parts`); `gregions`/`soft_cut` could become a "fill to the engraved line" paint mode.
+19. **Eevee evolutions batch** (2026-11-06, fourth pass; user's request: official colours, 300k, 1-2 pockets as large
+   as fit, like `printed/umbreon3.3mf`; no flat feet, no gap fill / filler; paint on the model's lines; inspect each
+   in pokefit.party). Source `~/Downloads/Eevee+Evolutions.3mf`; results `~/Downloads/eevee_evolutions_pokefit_300k/`
+   (`<name>_pokefit_60.3mf`, `_import.3mf`, `review_<name>.png`; older versions with pads in
+   `superseded_2026-11-06_with_pads/`). Colours from official Pokedex art (assets.pokemon.com .../full/<n>.png).
+   Scripts in the session scratchpad: `fig2.py NAME [export]` (`FIG_NOPAD=1` = `flat_base` 0 and `flat_fill` 0, to
+   `batch/export3_nopad/`), `insp.py NAME` close-ups, `gx.py` region ids, `live_shots.py OUT FILES` (Playwright +
+   real Chrome on pokefit.party: 8 orbit shots per figure; `sheet.py` contact sheet).
+   - The filler the user saw in pokefit was the APP: reopening an export re-applied the default press + gap fill.
+     Fixed in 6ba9b4b (exports record `Metadata/pokefit.json`, report `object.made_with`, UI applies it, not
+     remembered). Live-checked: all 8 open with flat base 0 / fill 0.
+   - pokefit.party auto-simplifies a 300k file to 200k on open (paint resampled: edges look ragged that are clean in
+     the file). Inspect with Simplify off (prefs `{simplify: 0}`).
+   - Paint helpers added this pass: `band` (mask + smooth offset band via a smoothed per-vertex distance field: eyes,
+     inner ears, gem, head leaf), straight soft cuts across ribbon ends (Sylveon stripe/fork/pink band), Glaceon tail
+     crystal facets at 1.2 degrees (front diamond + back facets). Nearest-face and ray "through the blade" guesses
+     failed (5 of 99 mm2): the tip is a 4-sided crystal, not a blade.
+   | figure | mm | pockets (no pads) |
+   |---|---|---|
+   | Espeon | 32.6 | 1 |
+   | Flareon | 31.6 | 2 |
+   | Glaceon | 34.5 | 2 |
+   | Jolteon | 31.6 | 1 |
+   | Leafeon | 34.3 | 1 |
+   | Sylveon | 38.5 | 1 |
+   | Umbreon | 38.5 | 2 |
+   | Vaporeon | 27.9 | 1 |
+   Open: not re-sliced this pass (user: don't worry about slicing; third pass sliced fine with pads, ~1.5-5 h);
+   pockets without pads are walled only 0.5-1.2 mm of the 2 mm magnet on most figures; pupils/highlights not
+   modelled on Leafeon/Flareon/Jolteon/Umbreon/Vaporeon (one colour per eye); Vaporeon fins under 0.4 mm in places;
+   the app could offer `band`/straight cuts as paint modes ("fill to the engraved line").
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
