@@ -187,7 +187,29 @@ exist only on the original Windows machine (ask the user for the files).
      Shrink step 0.1 mm. Reshape's highlight showed specks on the head: it indexed the preview mesh, whose split
      paint is drawn as sub-triangles, by the part's triangle numbers; `limb_region` now answers `view_faces`
      (`PreviewMeshes.sources`), checked in the local UI on the Jolteon's ear.
-19. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
+19. **Eevee evolutions batch** (2026-11-05, user's request: official colours, 300k, 1-2 pockets, like
+   `printed/umbreon3.3mf`). Source `~/Downloads/Eevee+Evolutions.3mf` (8 single-colour objects); results in
+   `~/Downloads/eevee_evolutions_pokefit_300k/` (`<name>_pokefit_60.3mf` + `_import.3mf`, `sheet.png`). Colours were
+   measured, not guessed: pixel clusters of the official Pokédex art (assets.pokemon.com/.../pokedex/full/<n>.png,
+   read in Chrome on its own origin). Painting was scripted per triangle (session scratchpad `fig2.py NAME
+   [export]`: crease regions, wand taps by pixel on close-ups, mirroring, thickness, fur roughness), whole-triangle
+   paint (no soft edges); Umbreon is the user's own `umbreon3` paint with its filaments recoloured.
+   | figure | colours (official art) | mm | pockets | Bambu slice h / g / changes |
+   |---|---|---|---|---|
+   | Vaporeon | #7ecee1 #e4ebf5 #efeac4 #356176 #020202 | 29.2 | 1 (2 overhung the steel 2.1 mm) | 1.80 / 23.7 / 12 |
+   | Jolteon | #f9d573 #e0e6e9 #371851 | 30.6 | 2 | 1.96 / 26.7 / 15 |
+   | Flareon | #eb804d #e7d499 #020202 #052b3b #a9574c | 31.0 | 2 | 2.14 / 31.6 / 18 |
+   | Espeon | #d9bdce #c85757 #5d7a98 #474d5c | 32.0 | 2 | 1.44 / 20.1 / 13 |
+   | Umbreon | #43494c #e9cc85 #d26a49 #f7ebe5 | 38.0 | 2 | 2.03 / 26.5 / 17 |
+   | Leafeon | #fae6ae #77c79c #b47a38 #5d4726 | 33.7 | 1 (room for 1) | 3.18 / 45.8 / 58 |
+   | Glaceon | #b8e2de #59b4c7 #458d96 #32666c | 32.2 | 2 | 3.56 / 51.2 / 67 |
+   | Sylveon | #fafcfd #f19cae #647bb2 #b7e1f4 | 37.7 | 2 | 3.68 / 51.7 / 77 |
+   Open: Espeon (228k) and Umbreon (214k) were under 300k already (kept); Vaporeon's back spikes near the neck stay
+   body blue (only tail spikes dark); Flareon has an orange patch on the chest ruff, Leafeon a cream patch at the
+   tail base; small eye highlights/pupils were not painted except Umbreon's (the user's); Vaporeon's thickness check
+   fails (fins under 0.4 mm). The engine has no "paint per triangle from a script" entry point; the batch patched
+   `Session.mapped_parts` in the script.
+20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
 ## Mesh repair (SketchUp 2017 → STL exports; files on the original machine only)
