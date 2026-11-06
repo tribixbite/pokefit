@@ -42,7 +42,8 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   triangles are separated, holes closed, inside-out triangles turned and points where surfaces touch moved apart,
   so the exported file has no non-manifold edges;
 - **re-opens its own exports**: a figure exported before has its magnet pockets found, filled in and placed again
-  as movable pockets, and its old flat base taken off (the settings make it again), so an export can be edited;
+  as movable pockets, and its old flat base taken off (the settings make it again: the export records its base
+  settings, so a figure exported without a press or gap fill opens without them), so an export can be edited;
 - **remembers your settings** (ball, steel, floor, magnets, height, shape, simplify) in your browser, and lets you set them before
   opening a figure;
 - **checks printability**: closed mesh, wall thickness, overhangs, floating layers, bed contact;

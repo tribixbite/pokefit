@@ -158,6 +158,8 @@ class Project:
     colours: list[str]                  # filament colours, index 0 = extruder 1
     settings: dict | None               # Bambu project_settings.config (parsed JSON)
     texture: Any = None                 # gltf.TextureColours: palettes of other sizes for a glTF
+    # What a pokefit export recorded about how it was made (`POKEFIT_META`): None for any other file.
+    pokefit: dict | None = None
 
     def object(self, oid: str) -> FigureObject:
         for o in self.objects:
@@ -305,6 +307,14 @@ def read_project(path: str | Path, simplify: float | None = None, as_written: bo
                 settings = json.loads(z.read("Metadata/project_settings.config"))
             except json.JSONDecodeError:
                 settings = None
+        made: dict | None = None
+        if POKEFIT_META in names:
+            try:
+                made = json.loads(z.read(POKEFIT_META))
+            except json.JSONDecodeError:
+                made = None
+            if not isinstance(made, dict):
+                made = None
         root = etree.fromstring(root_data, parser=etree.XMLParser(huge_tree=True))
         files: dict[str, _ModelFile] = {"3D/3dmodel.model": _ModelFile(root_data)}
 
@@ -368,7 +378,7 @@ def read_project(path: str | Path, simplify: float | None = None, as_written: bo
         n = max([1] + [ext for _, _, ext, _, _, _ in found] +
                 [m.get("extruder", 0) for _, _, _, pm, _, _ in found for m in pm.values()])
         colours = (DEFAULT_COLOURS * 4)[:n]
-    return Project(path, "3mf", objects, colours, settings)
+    return Project(path, "3mf", objects, colours, settings, pokefit=made)
 
 
 def world_parts(obj: FigureObject) -> list[Part]:
@@ -525,6 +535,10 @@ def _mesh_xml(oid: int, part: Part) -> str:
 _SKIP_PREFIXES = ("3D/", "Metadata/plate_", "Metadata/top_", "Metadata/pick_")
 _SKIP_FILES = {"Metadata/model_settings.config", "Metadata/slice_info.config", "Metadata/cut_information.xml",
                "Metadata/filament_sequence.json", "[Content_Types].xml", "_rels/.rels"}
+# How a pokefit export was made (its base settings: `pipeline.made_with`), so opening the export again shapes it the
+# same way instead of with the app's defaults (a press and gap fill added to a figure exported without them).
+# Bambu Studio ignores the file.
+POKEFIT_META = "Metadata/pokefit.json"
 
 _CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -548,12 +562,12 @@ _MODEL_RELS = """<?xml version="1.0" encoding="UTF-8"?>
 
 def write_project(src: Project, name: str, extruder: int, parts: list[Part], out_path: str | Path,
                   positions: list[tuple[float, float]] | None = None,
-                  settings: dict | None = None) -> Path:
+                  settings: dict | None = None, made: dict | None = None) -> Path:
     """Write a single-object Bambu 3MF.
 
     `parts` are in final print coordinates (object origin = XY centre, z = 0 on
     the bed). `positions` are plate XY positions of each instance (default: one
-    copy at the plate centre). `settings` replaces the project settings.
+    copy at the plate centre). `settings` replaces the project settings. `made`: written as `POKEFIT_META`.
     """
     out_path = Path(out_path)
     settings = settings if settings is not None else src.settings
@@ -615,11 +629,14 @@ def write_project(src: Project, name: str, extruder: int, parts: list[Part], out
         zout.writestr("Metadata/model_settings.config", model_cfg)
         if settings is not None:
             zout.writestr("Metadata/project_settings.config", json.dumps(settings, indent=4))
+        if made is not None:
+            zout.writestr(POKEFIT_META, json.dumps(made, indent=1))
         if src.kind == "3mf":
             with zipfile.ZipFile(src.path) as zin:
                 for info in zin.infolist():
                     n = info.filename
-                    if n in _SKIP_FILES or n.startswith(_SKIP_PREFIXES) or n == "Metadata/project_settings.config":
+                    if (n in _SKIP_FILES or n.startswith(_SKIP_PREFIXES) or n == "Metadata/project_settings.config"
+                            or n == POKEFIT_META):
                         continue
                     zout.writestr(info, zin.read(n))
     out_path.parent.mkdir(parents=True, exist_ok=True)

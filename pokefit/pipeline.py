@@ -1550,6 +1550,20 @@ def _extents(parts: list[Part]) -> list[float]:
     return np.ptp(v, axis=0).round(3).tolist()
 
 
+def _made_with(session: Session) -> dict[str, Any] | None:
+    """The recorded base settings of a reopened export (only known keys, values checked by `Params.from_dict`)."""
+    made = session.project.pokefit
+    saved = made.get("params") if made else None
+    if not isinstance(saved, dict):
+        return None
+    keep = {k: saved[k] for k in MADE_WITH_KEYS if k in saved}
+    try:
+        Params.from_dict(keep)
+    except (TypeError, ValueError):
+        return None
+    return keep or None
+
+
 def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, Any]:
     return {"id": obj.id, "name": obj.name, "faces": obj.face_count,
             # Triangles in the file itself: the UI's Simplify levels are shares of this.
@@ -1561,6 +1575,8 @@ def _obj_info(session: Session, obj: FigureObject, params: Params) -> dict[str, 
             # Pockets of an earlier export, filled as it loaded: centres in the figure frame at scale 1 (x, y; the UI
             # places the magnets there, times the scale). Empty when the figure is turned off its base.
             "old_pockets": session.old_pockets(params),
+            # The base settings a pokefit export was made with (`made_with`): the UI opens it with them. None otherwise.
+            "made_with": _made_with(session),
             "parts": [{"name": p.name, "extruder": p.extruder or session.extruder(params), "faces": len(p.faces),
                        "painted": len(p.tri_extra)} for p in session.figure_parts(params)],
             "colours": session.colours(params), "file_colours": session.project.colours,
@@ -2085,6 +2101,16 @@ def export_stem(session: Session, params: Params) -> str:
     return safe_stem(session.project.path.name)
 
 
+# Params an export's shape was made with that opening it again must reuse: its base (press, gap fill, pads) is in the
+# mesh already, and the app's defaults would press and fill a figure that was exported without them.
+MADE_WITH_KEYS = ("flat_base", "flat_depth", "flat_fill", "fill_area")
+
+
+def made_with(params: Params) -> dict[str, Any]:
+    """What an export records about how it was made (model3mf.POKEFIT_META; report `object.made_with` on reopening)."""
+    return {"version": 1, "params": {k: getattr(params, k) for k in MADE_WITH_KEYS}}
+
+
 def export(session: Session, params: Params, out_dir: str | Path, ball_model: Path | None = None) -> dict[str, Any]:
     """Write the figure 3MF, its import variant, a coloured STL (`stlcolour`), the steel seat shell STL and a
     JSON report.
@@ -2103,7 +2129,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     pct = f"d{params.ball_diameter:.0f}mm" if params.ball_diameter else str(int(round(ball_s * 100)))
     stem = export_stem(session, params)
     f3 = write_project(session.project, obj.name, session.extruder(params), final, out_dir / f"{stem}_pokefit_{pct}.3mf",
-                       settings=export_settings(session, params))
+                       settings=export_settings(session, params), made=made_with(params))
     shell_path = out_dir / f"shell_floor{session.cavity(params).seat_diameter:.1f}mm_{pct}.stl"
     shell_note = ""
     try:
@@ -2118,7 +2144,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     if matches and session.reference:
         parts, ext = remap_parts(final, session.extruder(params), matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
-                            settings=session.reference)
+                            settings=session.reference, made=made_with(params))
     # The same figure as one STL with a colour per triangle, for tools that take STL (Bambu Studio ignores it).
     cstl, cnote = write_coloured_stl(out_dir / f"{stem}_pokefit_{pct}_colour.stl", final, session.extruder(params),
                                      session.colours(params))

@@ -325,7 +325,8 @@ function engineStatus(text: string): void {
  */
 async function load(fn: (params: Params) => Promise<import("./types").LoadResponse>, name: string): Promise<void> {
   busy(true, `Loading ${name}…`);
-  const fresh: Params = { ...state.params, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
+  // A reopened export's own base settings were the last figure's, not the user's: start from the user's again.
+  const fresh: Params = { ...state.params, ...madeBefore, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
     limbs: null,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
@@ -356,10 +357,12 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
       toast(`This figure has ${r.object.file_faces.toLocaleString()} triangles: opened simplified to ` +
         `${Number(r.params.simplify).toLocaleString()}. Simplify → Off keeps every triangle.`);
     } else autoSimplified = null;
+    madeBefore = {};
+    const made = applyMadeWith(r.object.made_with);
     const differs = REMEMBERED_KEYS.some((k) => r.params[k] !== state.params[k]);
     shownGeometry = geometryKey();
     await showFigure(res.session, null, false);
-    if (differs) await runAnalyse();
+    if (differs) await runAnalyse(!made);
     else {
       const seq = ++state.seq;
       show(r);
@@ -432,8 +435,36 @@ let shownGeometry = "";
 /** Remember the settings the user changed (the next figure, or the next visit, starts from them). */
 function remember(): void {
   // A Simplify the engine chose for a dense file is that file's, not a preference.
-  const p = autoSimplified !== null && state.params.simplify === autoSimplified ? { ...state.params, simplify: null } : state.params;
+  let p = autoSimplified !== null && state.params.simplify === autoSimplified ? { ...state.params, simplify: null } : state.params;
+  // Nor are a reopened export's base settings (`applyMadeWith`), unless changed since.
+  const kept = Object.fromEntries(Object.entries(madeBefore).filter(([k]) => state.params[k as keyof Params] === madeValues[k]));
+  if (Object.keys(kept).length) p = { ...p, ...kept };
   writePrefs(prefStore, p, defaults);
+}
+/** The user's own values of the settings a reopened export replaced (`applyMadeWith`), and the export's values. */
+let madeBefore: Partial<Params> = {};
+let madeValues: Record<string, unknown> = {};
+
+/**
+ * A pokefit export records the base settings it was made with (press, gap fill, pads: pokefit/pipeline.py `made_with`);
+ * its mesh already has that base, so it opens with them rather than the app's defaults, which would press and fill a
+ * figure exported without them. Not remembered for the next figure. True when any setting changed.
+ */
+function applyMadeWith(made: Partial<Params> | null | undefined): boolean {
+  madeValues = {};
+  if (!made) return false;
+  const p = state.params as unknown as Record<string, unknown>;
+  const before: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(made)) {
+    if (!(k in p) || p[k] === v) continue;
+    before[k] = p[k];
+    p[k] = v;
+    madeValues[k] = v;
+  }
+  madeBefore = before as Partial<Params>;
+  if (!Object.keys(before).length) return false;
+  syncControls();
+  return true;
 }
 /** The Simplify budget the engine chose when the current figure opened (null: none). */
 let autoSimplified: number | null = null;

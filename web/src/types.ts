@@ -147,6 +147,8 @@ export interface ObjectInfo {
   /** Magnet pockets of an earlier pokefit export, filled as it loaded (pokefit/oldpockets.py): centres in the figure
    * frame at scale 1 (times `fit.scale` = print mm), their diameter. Empty when there were none. */
   old_pockets?: { x: number; y: number; diameter: number }[];
+  /** A pokefit export's recorded base settings (flat_base, flat_depth, flat_fill, fill_area); null for other files. */
+  made_with?: Partial<Params> | null;
   parts: { name: string; extruder: number; faces: number; painted: number }[];
   colours: string[];
   /** The file's own colours (before colorize changes). */

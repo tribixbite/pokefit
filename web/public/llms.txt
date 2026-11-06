@@ -119,7 +119,9 @@
   filaments before paint steps); Undo restores it.
 - Re-opening an export: pokefit's own pockets are found from their shape (a flat round ceiling over vertical walls
   facing its axis all round, joined across parts), filled in, and the magnets placed there again as pockets placed by
-  hand; the export's "flat base" parts are dropped (made again from the settings). Checked on 7 round trips (found
+  hand; the export's "flat base" parts are dropped (made again from the settings: an export records the base settings
+  it was made with in Metadata/pokefit.json, flat base / depth / gap fill / fill area, and opens with them, so a figure
+  exported without a press or gap fill does not gain one; not remembered for the next figure). Checked on 7 round trips (found
   within 0.001 mm) and 5 original figures (none found). Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour

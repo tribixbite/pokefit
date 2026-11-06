@@ -69,3 +69,23 @@ def test_an_export_reopens_with_its_pockets_and_reads_as_written_for_tools(tmp_p
     gap = float(np.hypot(placed[0]["x"] - placed[1]["x"], placed[0]["y"] - placed[1]["y"]))
     a, b = again.old_pockets
     assert abs(float(np.hypot(a.x - b.x, a.y - b.y)) - gap) < 0.01
+
+
+def test_an_export_records_its_base_settings_and_reopens_with_them(tmp_path: Path) -> None:
+    """A figure exported without a press or gap fill must not gain them when opened again (the app's defaults press
+    and fill): the export records its base settings (Metadata/pokefit.json), the report hands them to the UI."""
+    legs = [trimesh.creation.box((14, 9, 10)).apply_translation([0, 0, 7.0])]
+    legs += [trimesh.creation.box((2.4, 2.4, 2.5)).apply_translation([x, y, 1.25]) for x in (-5.5, 5.5) for y in (-3, 3)]
+    stl = tmp_path / "legs.stl"
+    trimesh.util.concatenate(legs).export(stl)
+    s = open_session(stl, work_dir=tmp_path / "w")
+    out = export(s, Params(magnets=1, flat_base=0, flat_fill=0), tmp_path / "out")
+    want = {"flat_base": 0, "flat_depth": 1.2, "flat_fill": 0, "fill_area": "steel"}
+    assert read_project(out["figure_3mf"]).pokefit == {"version": 1, "params": want}
+    again = open_session(Path(out["figure_3mf"]), work_dir=tmp_path / "w2")
+    rep, _ = analyse(again, Params(magnets=1), printing=False)
+    assert rep.to_dict()["object"]["made_with"] == want
+    # Exported again from the reopened file, the record is the new export's, not a copy of the old one.
+    out2 = export(again, Params(magnets=1, flat_fill=3.0), tmp_path / "out2")
+    assert read_project(out2["figure_3mf"]).pokefit["params"]["flat_fill"] == 3.0
+    assert read_project(stl).pokefit is None
