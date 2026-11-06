@@ -234,7 +234,8 @@ exist only on the original Windows machine (ask the user for the files).
    Open: (a) match also recolours filaments unused on the figure (no usage per filament in the report);
    (b) a file chosen within ~1 s of page load, before `/api/config` answers, loads in the browser engine while later
    calls go to the local server ("Unknown session"; api.ts `mode` set after config) — seen only from automation;
-   (c) not deployed/live-checked yet; (d) painting tools unchanged this round (`band`-style "cover the engraved
+   (c) live since f3cf1ec, checked on pokefit.party with `nt_ui.py live https://pokefit.party/` (same palette as
+   locally; console: only the usual local-engine probes); (d) painting tools unchanged this round (`band`-style "cover the engraved
    line" from item 19 still open).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
