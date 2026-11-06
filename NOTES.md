@@ -218,6 +218,24 @@ exist only on the original Windows machine (ask the user for the files).
    pockets without pads are walled only 0.5-1.2 mm of the 2 mm magnet on most figures; pupils/highlights not
    modelled on Leafeon/Flareon/Jolteon/Umbreon/Vaporeon (one colour per eye); Vaporeon fins under 0.4 mm in places;
    the app could offer `band`/straight cuts as paint modes ("fill to the engraved line").
+21. **Colours from a picture** (2026-11-06; user: make colouring like the Eevee batch easy in the app; test with
+   Ninetales). `web/src/reference.ts` (+ `reference.test.ts`), Colours card fold "Colours from a picture": official art
+   by name/number via PokeAPI (species list `pokeapi.co/api/v2/pokemon-species?limit=2000`, art
+   `raw.githubusercontent.com/PokeAPI/sprites/.../official-artwork/<id>.png`, both CORS *), name suggested from the
+   file/figure name (`guessName`, typos: "Ninetails" -> ninetales); or open / drop on the view / paste a picture. Tap
+   picture or chip = selected filament's colour; "Match the palette" = per filament the mode of the picture's pixels
+   within 15 ΔE of its closest one (none within 45: kept). Engine: a pokefit export never auto-simplifies (`auto_simplify`).
+   Test file: user's `ninetales-50mbpart2.3mf` (231,650 triangles, painted by its designer in 5 filaments; copy in the
+   session scratchpad `nt/`, scripts `nt_ui.py` (local UI, Playwright + Chrome), `nt_drop.py` (drop at 390 px),
+   `nt_export.py OUT [base]`). Match gave black #010101, tips #E3A94D, body #F1E5A2, eyes #C26955; the 5th filament
+   (#898989, the designer's plate, unused on the figure) also moved to #A2927B. Exports in `~/Downloads/ninetales_pokefit/`:
+   no base/fill = 21.1 mm, **0 pockets** (paws and tail curls too thin, raised seat too); with the default base
+   (`with_base_2_pockets/`) = 19.9 mm, 2 pockets, a 199 mm² filled block under the tails. User to choose.
+   Open: (a) match also recolours filaments unused on the figure (no usage per filament in the report);
+   (b) a file chosen within ~1 s of page load, before `/api/config` answers, loads in the browser engine while later
+   calls go to the local server ("Unknown session"; api.ts `mode` set after config) — seen only from automation;
+   (c) not deployed/live-checked yet; (d) painting tools unchanged this round (`band`-style "cover the engraved
+   line" from item 19 still open).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

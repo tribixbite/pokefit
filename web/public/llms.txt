@@ -65,7 +65,8 @@
   loads, like Bambu Studio's Simplify: levels Low / Medium / High keep 7 / 20 / 50 % of the file's triangles (the
   setting is a share, so a level means the same on every file), a log-scale slider picks any share from 1 % up,
   and any triangle count can be typed (from 1,000). A figure of more than 300,000 triangles opens simplified to
-  200,000 unless Simplify was set (or that option is unticked); Off keeps every triangle. Quadric edge collapse with even
+  200,000 unless Simplify was set (or that option is unticked), or it is a pokefit export (opened as made: its
+  paint is not resampled); Off keeps every triangle. Quadric edge collapse with even
   triangle sizes (meshoptimizer's own WebAssembly build, the same in the browser and the local version), never
   moving the surface by more than 0.1 % of the figure's size. A glTF's colours are sampled on the new triangles;
   a painted 3MF keeps one colour per triangle. Measured on a 1.45M-triangle Eevee at 100k: open 39.5 -> 11.5 s,
@@ -114,6 +115,11 @@
   purpose) is kept: only what a step leaves of another, and the file's own stray specks, go. "Split by piece" gives each separate patch of the selected colour its own
   filament (white eyes and a white tail: three colours); the largest keeps the colour, patches under 0.5 mm² (or the
   speck size) stay, new filaments take the colour most unlike the palette, and Undo takes it back in one step.
+  "Colours from a picture" (Colours card): official art by Pokémon name or national number (the name is suggested
+  from the file and figure names, typos allowed; artwork from PokeAPI's sprites repository) or any picture opened,
+  dropped on the page or pasted; tap the picture or one of its main colours (k-means in CIELAB, each named by its
+  most common exact colour) to set the selected filament, or "Match the palette": each filament takes the most
+  common exact colour among the picture's pixels within 15 ΔE of its closest one (none within 45: kept); Undo match.
   "Remove colour" deletes the selected colour from the palette: the file's own colour and paint steps in it take the
   closest remaining colour (CIE76) and later filaments move down one (Params.colour_map renumbers the file's
   filaments before paint steps); Undo restores it.

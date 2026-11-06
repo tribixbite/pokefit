@@ -14,8 +14,13 @@ export function textOn(hex: string): string {
 /** sRGB hex (#RRGGBB[AA]) -> CIELAB (D65); the same formula as pokefit/remap.py `_lab`. */
 function lab(hex: string): [number, number, number] {
   const c = hex.replace(/^#/, "").slice(0, 6).padEnd(6, "0");
-  const lin = [0, 2, 4].map((i) => {
-    const v = parseInt(c.slice(i, i + 2), 16) / 255;
+  return labOf(parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16));
+}
+
+/** sRGB channels 0-255 -> CIELAB (D65), as `deltaE` measures. */
+export function labOf(r: number, g: number, b: number): [number, number, number] {
+  const lin = [r, g, b].map((x) => {
+    const v = x / 255;
     return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
   });
   const xyz = [
@@ -25,6 +30,12 @@ function lab(hex: string): [number, number, number] {
   ];
   const f = xyz.map((t) => (t > (6 / 29) ** 3 ? Math.cbrt(t) : t / (3 * (6 / 29) ** 2) + 4 / 29));
   return [116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])];
+}
+
+/** #RRGGBB of sRGB channels (rounded, clamped to 0-255). */
+export function toHex(r: number, g: number, b: number): string {
+  return "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0"))
+    .join("").toUpperCase();
 }
 
 /** CIE76 colour difference, as the engine reports it (`SlotMatch.delta_e`). */

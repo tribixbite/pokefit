@@ -841,8 +841,10 @@ def open_session(path: str | Path, ball_path: str | Path = DEFAULT_BALL,
 def auto_simplify(session: Session, params: Params) -> Params:
     """`params` for a file just opened: with `simplify_auto` and no Simplify setting, a figure denser than
     DENSE_FACES triangles is simplified to AUTO_SIMPLIFY (MINI EEVEE, 1.45M: open and analyse 39.5 -> 11.5 s, the
-    surface moving 0.02 mm at 25 mm tall). A 3MF reads its meshes on demand, so counting them first costs little."""
-    if not params.simplify_auto or params.simplify is not None:
+    surface moving 0.02 mm at 25 mm tall). A 3MF reads its meshes on demand, so counting them first costs little.
+    A pokefit export (`Project.pokefit` set) opens as it is: it was made at the density its maker chose, and
+    simplifying would resample its paint (clean soft edges came out ragged at 200k of a 300k export)."""
+    if not params.simplify_auto or params.simplify is not None or session.project.pokefit is not None:
         return params
     if session.obj(params).face_count <= DENSE_FACES:
         return params

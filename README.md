@@ -34,7 +34,11 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
   are dropped. "Split by piece" gives every separate patch of a colour its own filament (white eyes and a white
   tail become three colours, each changeable on its own); "Remove colour" deletes a colour from the palette
-  (what printed in it takes the closest colour left). Exported as Bambu paint;
+  (what printed in it takes the closest colour left). "Colours from a picture" takes colours from official art
+  (by Pokémon name or number, suggested from the file name; PokeAPI's copy of the artwork) or any picture you
+  open, drop or paste: tap the picture to give the selected filament the colour there, or "Match the palette" to
+  give every filament the art's own colour of its family (the most common exact colour of that tone, not an
+  average of its shading). Exported as Bambu paint;
 - **simplifies dense meshes** (optional, like Bambu Studio's Simplify) when they load: Low / Medium / High keep
   7 / 20 / 50 % of the file's triangles, or drag the slider or type any count; a 1.45M-triangle sculpt at Low
   (~100k) opens 3x faster, paints and exports 10-25x faster, with the surface moved by under 0.02 mm;

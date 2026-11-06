@@ -104,6 +104,9 @@ export class ColorizePanel {
     ["palette", "paintModeRow", "brushRow", "paintAngleRow", "paintTools", "paintSteps"],
     $<HTMLButtonElement>("dockFold"), (px) => this.host.setViewInset(px));
 
+  /** Called after every render (the reference picture's panel follows the palette). */
+  onRender: (() => void) | null = null;
+
   constructor(private host: ColorizeHost) {
     $("paintToggle").addEventListener("click", () => this.setPainting(!this.painting));
     $("paintViewBtn").addEventListener("click", () => this.setPainting(!this.painting));
@@ -212,6 +215,19 @@ export class ColorizePanel {
   private colours(): string[] {
     const p = this.host.params();
     return [...(p.colours ?? this.host.report()?.object.colours ?? ["#E05028"])];
+  }
+
+  /** The palette in use (a copy) and the selected filament (0 = the eraser): for the reference picture. */
+  palette(): string[] { return this.colours(); }
+  selected(): number { return this.filament; }
+
+  /** Use `cols` as the palette (a reference picture's colours): like editing each swatch's colour box. */
+  setColours(cols: string[]): void {
+    this.host.params().colours = [...cols];
+    this.host.changed();
+    void this.reload();
+    this.host.coloursChanged();
+    this.render();
   }
 
   /** Forget paint and colours (a new file or another figure of the file: face numbers differ). */
@@ -330,6 +346,7 @@ export class ColorizePanel {
                   ? "Drag a box over the spot (an eye): the ellipse in it is painted, seen as you look at it. Turn the view by dragging beside the figure."
                   : "Tap the figure to paint.";
     }
+    this.onRender?.();
   }
 
   private swatch(filament: number, colour: string): HTMLElement {

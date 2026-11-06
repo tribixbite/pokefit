@@ -300,6 +300,28 @@
           <button id="paintRemove" class="btn" title="Delete this colour from the palette: what prints in it (the file's own colour and paint steps) takes the closest remaining colour, and the filaments after it move down one. Undo brings it back.">Remove colour</button>
           <button id="paintSplit" class="btn" title="Give each separate patch of this colour its own filament (white eyes and a white tail become three colours, each changeable on its own). The largest patch keeps this colour; patches under the speck size stay as they are. Undo takes it back in one step.">Split by piece</button>
         </div>
+        <details class="adv ref-box" id="picBox"><summary>Colours from a picture</summary>
+          <p class="hint">Use the art's own colours instead of guessing: get the official art (or open, drop or paste any picture), then tap it to give the selected filament the colour there, or match the whole palette at once.</p>
+          <div class="row ref-get">
+            <input id="picName" type="text" placeholder="Pokémon name or number" autocomplete="off" spellcheck="false" aria-label="Pokémon name or national number" />
+            <button id="picFetch" class="btn" type="button" title="The official artwork, from PokeAPI's copy (needs the internet)">Get official art</button>
+            <button id="picOpen" class="btn" type="button" title="Any picture from your device (or drop / paste one here)">Open a picture…</button>
+            <input id="picFile" type="file" accept="image/*" hidden />
+          </div>
+          <div id="picPicture" class="ref-picture" hidden>
+            <div class="ref-canvas-wrap">
+              <canvas id="picCanvas" title="Tap: the selected filament takes the colour here"></canvas>
+              <span id="picHover" class="ref-hover" hidden></span>
+            </div>
+            <p id="picSource" class="hint"></p>
+            <div id="picChips" class="ref-chips" aria-label="The picture's main colours (tap: the selected filament takes it)"></div>
+            <div class="row">
+              <button id="picMatch" class="btn" type="button" title="Each filament takes the picture's own colour closest to it (the most common exact colour of that tone, not an average of its shading). A filament with nothing like it in the picture keeps its colour.">Match the palette</button>
+              <button id="picUndo" class="btn" type="button" hidden>Undo match</button>
+            </div>
+          </div>
+          <p id="picInfo" class="hint" hidden aria-live="polite"></p>
+        </details>
         <div id="slotMapBox" class="slot-map-box" hidden>
           <div class="h-row sub">
             <h3><button id="slotMapToggle" class="card-toggle" type="button" aria-controls="slotMapBody" aria-expanded="false" title="Which filament slot each colour prints from"><span class="chev" aria-hidden="true"></span>Prints from</button></h3>
@@ -558,7 +580,8 @@
           Choose <i>Raised into the figure</i> to hide it in the part instead (it then holds less). Nothing goes below the plane the figure stands on.</li>
         <li><b>Colour it</b> — for single-colour models: pick a colour, press <i>Paint</i> and tap the figure. Each tap fills a part found
           from the shape (up to the valley where an ear, tail, leg or eye meets the body), a separate piece, or a brush patch.
-          <i>Show regions</i> previews the parts. Exported as Bambu paint.</li>
+          <i>Show regions</i> previews the parts. <i>Colours from a picture</i> takes the colours from the official art
+          (type the Pokémon's name) or any picture: tap it, or match the whole palette. Exported as Bambu paint.</li>
         <li><b>Shape it for the ball</b> (Figure card) — legs or a tail lying straight out past the steel disc are bent up along the
           sphere so the figure fits larger, and the base over the steel disc is made flat (low bumps pressed, gaps under the
           body filled with a solid flat base) so the magnets have room. Set the bend to <i>Off</i> and the sizes to 0 to keep the

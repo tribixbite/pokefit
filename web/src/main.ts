@@ -7,6 +7,7 @@ import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
 import { handoffFile, trustedOrigin, urlFileName } from "./handoff";
 import { PrinterCard } from "./printer";
+import { ReferencePanel } from "./reference";
 import { Viewer } from "./scene";
 import {
   budgetCount, budgetShare, countBudget, LEVELS, levelName, shareToSlider, SLIDER_MAX, sliderBudget,
@@ -116,6 +117,16 @@ const colorize = new ColorizePanel({
   toast: (msg) => toast(msg),
   slotOf: (n) => slotOf(n),
 });
+
+/** "Colours from a picture" (Colours card): official art or any picture; tap it to set a filament's colour. */
+const reference = new ReferencePanel({
+  palette: () => colorize.palette(),
+  selected: () => colorize.selected(),
+  setColours: (cols) => colorize.setColours(cols),
+  names: () => [$("fileName").textContent ?? "", state.report?.object.name ?? ""],
+  toast: (msg) => toast(msg),
+});
+colorize.onRender = () => reference.render();
 
 /** Where the camera was when painting started (put back when it stops). */
 let savedView: ReturnType<typeof viewer.focusFigure> | null = null;
@@ -339,6 +350,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     reshape.reset();
     state.params = fresh;
     $("fileName").textContent = res.file;
+    reference.figureOpened();
     $("drop").classList.add("hidden");
     $("paintViewBtn").hidden = false;
     $("sliceOut").replaceChildren();
@@ -1147,7 +1159,9 @@ function bind(): void {
     e.preventDefault();
     drop.classList.remove("over");
     const f = e.dataTransfer?.files?.[0];
-    if (f) void load((p) => api.loadFile(f, p), f.name);
+    // A picture (official art, a photo of a print) is a colour reference, not a figure.
+    if (f && f.type.startsWith("image/")) { void reference.useFile(f); if (state.session) drop.classList.add("hidden"); }
+    else if (f) void load((p) => api.loadFile(f, p), f.name);
     else if (state.session) drop.classList.add("hidden");
   });
 

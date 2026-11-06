@@ -234,6 +234,9 @@ def test_a_dense_figure_opens_simplified_unless_asked_otherwise(tmp_path: Path) 
     small = tmp_path / "small.stl"
     trimesh.creation.icosphere(subdivisions=3).export(small)
     assert auto_simplify(open_session(small, BALL_3MF, None, tmp_path / "w2"), Params()).simplify is None
+    # A pokefit export of the same dense figure opens with every triangle (its paint is not resampled).
+    s.project.pokefit = {"version": 1, "params": {"flat_base": 0.0}}
+    assert auto_simplify(s, Params()).simplify is None
 
 
 def test_exports_from_a_file_of_several_figures_are_named_after_the_figure(tmp_path: Path) -> None:
