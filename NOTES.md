@@ -187,31 +187,36 @@ exist only on the original Windows machine (ask the user for the files).
      Shrink step 0.1 mm. Reshape's highlight showed specks on the head: it indexed the preview mesh, whose split
      paint is drawn as sub-triangles, by the part's triangle numbers; `limb_region` now answers `view_faces`
      (`PreviewMeshes.sources`), checked in the local UI on the Jolteon's ear.
-19. **Eevee evolutions batch** (2026-11-05, user's request: official colours, 300k, 1-2 pockets, like
-   `printed/umbreon3.3mf`). Source `~/Downloads/Eevee+Evolutions.3mf` (8 single-colour objects); results in
-   `~/Downloads/eevee_evolutions_pokefit_300k/` (`<name>_pokefit_60.3mf` + `_import.3mf`, `sheet.png`). Colours were
-   measured, not guessed: pixel clusters of the official Pokédex art (assets.pokemon.com/.../pokedex/full/<n>.png,
-   read in Chrome on its own origin). Painting was scripted per triangle (session scratchpad `fig2.py NAME
-   [export]`: crease regions, wand taps by pixel on close-ups, mirroring, thickness, fur roughness), whole-triangle
-   paint (no soft edges); Umbreon is the user's own `umbreon3` paint with its filaments recoloured.
-   | figure | colours (official art) | mm | pockets | Bambu slice h / g / changes |
-   |---|---|---|---|---|
-   | Vaporeon | #7ecee1 #e4ebf5 #efeac4 #356176 #020202 | 29.2 | 1 (2 overhung the steel 2.1 mm) | 3.38 / 50.0 / 67 |
-   | Jolteon | #f9d573 #e0e6e9 #371851 | 30.6 | 2 | 2.02 / 27.7 / 17 |
-   | Flareon | #eb804d #e7d499 #020202 #052b3b | 31.0 | 2 | 2.55 / 37.6 / 33 |
-   | Espeon | #d9bdce #c85757 #5d7a98 #474d5c | 32.0 | 2 | 1.44 / 20.1 / 13 |
-   | Umbreon | #43494c #e9cc85 #d26a49 #f7ebe5 | 38.0 | 2 | 1.88 / 24.5 / 12 |
-   | Leafeon | #fae6ae #77c79c #b47a38 #5d4726 | 33.7 | 1 (room for 1) | 3.62 / 51.9 / 69 |
-   | Glaceon | #b8e2de #59b4c7 #458d96 #32666c | 32.2 | 2 | 4.32 / 62.9 / 91 |
-   | Sylveon | #fafcfd #f19cae #647bb2 #b7e1f4 | 37.7 | 2 | 4.37 / 61.2 / 96 |
-   Second pass (user: "tons of errors" at close range): every figure reviewed in 6 close views against the art
-   (`review.py NAME` -> `batch/review_NAME.png`, also in the Downloads folder). Lesson: judge paint at close range,
-   never from a small contact sheet. Umbreon is now per-triangle paint built from the user's (soft edges lost),
-   plus the art's tail band and a red iris round the user's white ovals. Open: Vaporeon's thickness check fails
-   (fins under 0.4 mm); the art's slit pupils (Umbreon) and dark pupils (Jolteon: one purple) are simplified;
-   Glaceon/Sylveon/Leafeon/Vaporeon print 3.4-4.4 h, mostly purge (90+ colour changes); a few specks of dark beside
-   Vaporeon's back stripe. The engine has no "paint per triangle from a script" entry point; the batch patched
-   `Session.mapped_parts` in the script.
+19. **Eevee evolutions batch** (2026-11-06, third pass; user's request: official colours, 300k, 1-2 pockets as large
+   as fit, like `printed/umbreon3.3mf`; then "flat feet", "don't use the gap fill", eyes/tail/socks not matching the
+   model's lines). Source `~/Downloads/Eevee+Evolutions.3mf`; results `~/Downloads/eevee_evolutions_pokefit_300k/`
+   (`<name>_pokefit_60.3mf`, `_import.3mf`, `review_<name>.png` = render of the exported file; `no_pads/` = the same
+   with `flat_fill` 0). Colours from official Pokedex art pixels (assets.pokemon.com .../full/<n>.png). Scripts in the
+   session scratchpad (`fig2.py NAME [export]`, `FIG_NOPAD=1`; `insp.py NAME [lines]` close-ups; `gx.py` region ids).
+   - Flat feet / protrusions were the conform press + gap fill: now `flat_base=0`. Pads under the pockets still come
+     from `flat_fill` (default set: ~6 mm discs up to 2.9 mm tall). Without them (`no_pads/`) Espeon, Jolteon and
+     Sylveon get 1 pocket instead of 2, and most pockets are walled only 0.5-1.2 mm of the 2 mm magnet.
+   - Paint now follows the model's engraved lines: `gregions(th, seal)` = patches between faces whose wand `wall`
+     exceeds th degrees (2.5 coarse, 0.8-1.2 fine), picked by id; `inner_oval` (Glaceon pupil), `into_line` (paint
+     into the outline groove), `by_region` (majority colour per small region: Flareon's ruff), `soft_cut` (split-paint
+     edge where the model has no line: Sylveon's cap, Leafeon's front socks, Glaceon's hind toes, Umbreon's tail
+     band, Sylveon's ribbon band). Gotcha: `Topology.verts` are in the FILE frame, the part's are shifted: a
+     field on topology vertices must subtract the offset (`Fig.topo_verts`); first try gave 0 split triangles.
+   - Bambu CLI failed (-100) on Flareon when the black inner-ear paint (grown over the rim) reached both faces of the
+     thin ear; front-facing panel only slices. Root cause inside the slicer not confirmed (log is encrypted).
+   | figure | mm | pockets (pads / no pads) | h / g / colour changes |
+   |---|---|---|---|
+   | Espeon | 32.6 | 2 / 1 | 1.46 / 20.5 / 13 |
+   | Flareon | 31.6 | 2 / 2 | 2.58 / 38.2 / 33 |
+   | Glaceon | 34.5 | 2 / 2 | 5.04 / 74.1 / 109 |
+   | Jolteon | 31.6 | 2 / 1 | 2.00 / 27.2 / 15 |
+   | Leafeon | 34.3 | 1 / 1 | 3.17 / 45.0 / 55 |
+   | Sylveon | 38.5 | 1 / 1 | 4.61 / 66.9 / 102 |
+   | Umbreon | 38.5 | 2 / 2 | 1.90 / 24.8 / 12 |
+   | Vaporeon | 28.8 | 1 / 1 | 3.24 / 47.8 / 63 |
+   Open: Glaceon/Sylveon purge 3.8-4.2 h (100+ changes); Umbreon slit pupils and Jolteon's black pupils not modelled;
+   Vaporeon thickness (fins); the engine has no "paint per triangle from a script" entry point (the batch patches
+   `Session.mapped_parts`); `gregions`/`soft_cut` could become a "fill to the engraved line" paint mode.
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
