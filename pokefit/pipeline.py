@@ -633,6 +633,7 @@ class Session:
         turned like the figure and moved like `unit_parts`. None while the figure is turned about X or Y (its
         underside is somewhere else then)."""
         obj = self.obj(params)
+        obj.parts                    # read on first use, which is when its pockets are found (before: none yet)
         if not obj.old_pockets or params.rotate_x % 360 or params.rotate_y % 360:
             return []
         okey = self._orientation(params)
@@ -849,6 +850,33 @@ def auto_simplify(session: Session, params: Params) -> Params:
     if session.obj(params).face_count <= DENSE_FACES:
         return params
     return replace(params, simplify=float(AUTO_SIMPLIFY))
+
+
+OLD_POCKETS_MAX = 3            # magnets put back from an earlier export (the UI's limit)
+
+
+def reopened(session: Session, params: Params) -> Params:
+    """`params` for a pokefit export just opened, as the UI goes on to use them: the base settings it was made with
+    (`made_with`: its mesh has that base already) and its old pockets as pockets placed by hand (`old_pockets`, at
+    the size it fits at; the magnets' own diameter). Applied before the first analysis, so the UI's next one is that
+    same analysis, cached: a Vaporeon export opened in 40 s in the browser engine, re-analysed with each in turn.
+    The settings unchanged for any other file."""
+    made = _made_with(session)
+    if made:
+        params = replace(params, **made)
+    old = session.old_pockets(params)[:OLD_POCKETS_MAX]
+    if not old or params.pockets is not None:
+        return params
+    scale = params.figure_scale
+    if scale is None:
+        free = max_scale(session.points(params), session.cavity(params))
+        if free is None:
+            return params
+        scale = free.max_scale
+    d = old[0]["diameter"]
+    return replace(params, magnets=len(old),
+                   pockets=[{"x": round(q["x"] * scale, 3), "y": round(q["y"] * scale, 3)} for q in old],
+                   pocket_diameter=round(d, 2) if abs(d - params.pocket_diameter) > 0.05 else params.pocket_diameter)
 
 
 def app_config(slicer: str | None, reference: dict | None = None, reference_name: str = "",

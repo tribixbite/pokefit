@@ -84,6 +84,11 @@ BALLS = 8            # ... the candidates tried per grid point
 GROW_DEG = 45.0      # ... by their full push within this angle of their normal
 FACE_DEG = 80.0      # ... fading to nothing at this angle
 COARSE = 2           # the shell's first pass fills every COARSE-th grid point (`_shell`)
+# The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
+# (1 + KD_EPS) of the nearest (scipy `eps`). The Vaporeon at 2 mm: 47 -> 35 s single-threaded (as in the browser engine),
+# its surface within 0.08 mm of the exact build's (0.07 between two exact builds, by sampling); 1.0 moved 0.13. The same on
+# the 3D distance search (47 -> 27 s) left a thin fin unthickened (tests/test_strengthen): not there.
+KD_EPS = 0.5
 
 
 @dataclass
@@ -489,7 +494,7 @@ def _shell(v: np.ndarray, f: np.ndarray, push: np.ndarray, unit: float) -> tuple
         ask = np.flatnonzero(off > -2 * h) if balls is not None else np.zeros(0, np.intp)   # (deep inside: no matter)
         if balls is not None and len(ask):
             d4, jb = balls.query(np.c_[q[ask], np.zeros(len(ask))], k=BALLS,
-                                 distance_upper_bound=float(np.hypot(pmax, reach)), workers=-1)
+                                 eps=KD_EPS, distance_upper_bound=float(np.hypot(pmax, reach)), workers=-1)
             hit = np.isfinite(d4)
             jb = np.minimum(jb, len(dd) - 1)
             u = q[ask][:, None, :] - bpts[jb]

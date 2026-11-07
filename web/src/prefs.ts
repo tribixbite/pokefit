@@ -4,7 +4,8 @@
  * read at start-up as the defaults, so they can also be set before a file is opened.
  *
  * Per-file settings (size as a scale, rotation, pockets placed by hand, fill circle, paint,
- * colours, the figure picked in a multi-figure file) are never remembered.
+ * colours, the figure picked in a multi-figure file, Thicken thin parts: it rebuilds the figure, ~1 min in the
+ * browser engine on a 300k figure, and how thin a figure is differs from one to the next) are never remembered.
  */
 import type { Params } from "./types";
 
@@ -16,7 +17,7 @@ const REMEMBERED = {
   figure_height: "number|null", magnets: "number", pocket_diameter: "number", pocket_depth: "number",
   pocket_wall: "number", pocket_ceiling: "number", pocket_grip: "number", pocket_max_seat: "number",
   pocket_seat: "string", settings_source: "string", bend: "number|null", flat_base: "number|null",
-  flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null", strengthen: "number",
+  flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null",
   simplify: "number|null", simplify_auto: "boolean", despeckle: "number",
 } as const satisfies Partial<Record<keyof Params, string>>;
 

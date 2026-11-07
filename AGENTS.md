@@ -82,7 +82,7 @@ summary + Bambu slice: time, grams, colour changes, purge).
 
 | Python (`pokefit/`) | Role |
 |---|---|
-| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place; its triangles are not the part's, split paint being drawn as sub-triangles: `PreviewMeshes.sources` / `view_faces` map them for Reshape's highlight), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. `analyse(printing=False)` (the UI's first call: `quick` in webapi/server) leaves the printability checks for a second call (`Report.printing_pending`). Start here. |
+| `pipeline.py` | `Params` (every UI setting), `Session` (per-file caches: orientation frames, height fields, topology, paint), `analyse`, `export`, `preview_glb` (uncoloured mesh per part) + `preview_faces` (colour index per face: a paint edit recolours the shown glTF in place; its triangles are not the part's, split paint being drawn as sub-triangles: `PreviewMeshes.sources` / `view_faces` map them for Reshape's highlight), `pick`. Results that depend only on shape are cached per session (`shape_key`, `COLOUR_ONLY`), pocket cuts / overlap clips / face maps by geometry digest. `analyse(printing=False)` (the UI's first call: `quick` in webapi/server) leaves the printability checks for a second call (`Report.printing_pending`). `reopened` (in both loaders): an export's base settings and old pockets applied before that first analysis, so the UI's next call is a cache hit. Start here. |
 | `model3mf.py` | 3MF read (lazy per object, regex fast path) / write (Bambu flavour, settings carried); STL/OBJ; `remesh_part` (carries per-triangle attributes after a boolean, incl. split paint via `paint.remap_tree`). |
 | `conform.py` | Shape for the ball: bend limbs lying out past the floor up along the sphere (`lift_start`: 2.1 mm inside the floor's reach, the tuned start on a steel's own seat), press/fill a flat base over the steel disc, or over a region (`Params.fill_area`: steel / all / circle / drawn `fill_shape`; `base_fill(region)`: a cell is filled only when ALL its underside is within the fill height, so the base is never taller than the gap + `FILL_OVERLAP`). `conform_shape` (bend + press, cached per spec without its fill: `Session._shapes`) then `conform_fill`: a fill edit only re-fills. Vertex moves only (paint survives) + a separate "flat base" part. Magnet pads (`Session.pads`, `PocketSpec.pad`) are flat-base parts too. |
 | `presets.py` | Bambu preset exports (.bbscfg / .bbsflmt / preset zips): read, resolve `inherits` against installed system profiles, merge into the reference settings; plate-compatibility check. |
@@ -159,6 +159,9 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
   and painted the surface beyond it: `Topology.outline`).
 - Soft paint edges read the field at split-lattice points (`colorize._lattice`), not linearly from the corners:
   an ellipse interpolated across a big low-poly triangle came out as a spike.
+- `FigureObject.old_pockets` is filled when its parts are first read (`strip_pockets`): asked before that it is empty
+  (`Session.old_pockets` reads the parts first). Thicken thin parts runs inside the preview call, before the analysis:
+  the UI shows its busy pill as soon as the shape changes (`runAnalyse`).
 - Real figures are messy (non-manifold, floating parts). Checks report, they don't block; `planar._xor`
   repairs section loops GEOS rejects.
 

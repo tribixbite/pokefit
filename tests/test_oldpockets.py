@@ -89,3 +89,29 @@ def test_an_export_records_its_base_settings_and_reopens_with_them(tmp_path: Pat
     out2 = export(again, Params(magnets=1, flat_fill=3.0), tmp_path / "out2")
     assert read_project(out2["figure_3mf"]).pokefit["params"]["flat_fill"] == 3.0
     assert read_project(stl).pokefit is None
+
+
+def test_a_reopened_export_is_analysed_once_with_its_base_and_its_magnets(tmp_path: Path) -> None:
+    """`reopened`: the settings the UI ends up with on opening an export (its base settings, its old pockets placed by
+    hand at the size it fits), applied before the first analysis, so the UI does not analyse it again with each."""
+    from pokefit.pipeline import reopened
+    legs = [trimesh.creation.box((14, 9, 10)).apply_translation([0, 0, 7.0])]
+    legs += [trimesh.creation.box((2.4, 2.4, 2.5)).apply_translation([x, y, 1.25]) for x in (-5.5, 5.5) for y in (-3, 3)]
+    stl = tmp_path / "legs.stl"
+    trimesh.util.concatenate(legs).export(stl)
+    s = open_session(stl, work_dir=tmp_path / "w")
+    assert reopened(s, Params()) == Params()                    # not an export: unchanged
+    first = Params(magnets=2, flat_depth=1.0)
+    placed = analyse(s, first)[0].pockets
+    out = export(s, first, tmp_path / "out")
+    again = open_session(Path(out["figure_3mf"]), work_dir=tmp_path / "w2")
+    p = reopened(again, Params(magnets=3))
+    assert len(placed) == 2 and (p.flat_depth, p.magnets) == (1.0, 2) and p.pockets is not None
+    gap = float(np.hypot(placed[0]["x"] - placed[1]["x"], placed[0]["y"] - placed[1]["y"]))
+    # Where they were on the figure: the export is at its print size (scale 1), and the reopened figure fits a little
+    # larger without the auto placement's constraint; positions follow the figure's size.
+    rep = analyse(again, p, printing=False)[0]
+    a, b = p.pockets
+    assert len(rep.pockets) == 2
+    assert abs(float(np.hypot(a["x"] - b["x"], a["y"] - b["y"])) / rep.fit["scale"] - gap) < 0.05
+    assert reopened(again, p) == p                              # pockets already set: kept as they are

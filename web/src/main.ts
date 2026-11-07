@@ -339,7 +339,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
   // A reopened export's own base settings were the last figure's, not the user's: start from the user's again.
   const fresh: Params = { ...state.params, ...madeBefore, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
-    limbs: null,
+    limbs: null, strengthen: 0,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
     fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "steel" };
   try {
@@ -349,6 +349,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     state.params.limbs = null;
     reshape.reset();
     state.params = fresh;
+    syncControls();
     $("fileName").textContent = res.file;
     reference.figureOpened();
     $("drop").classList.add("hidden");
@@ -371,6 +372,16 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     } else autoSimplified = null;
     madeBefore = {};
     const made = applyMadeWith(r.object.made_with);
+    // An earlier export's pockets: the engine put the magnets back there as it opened the file
+    // (pokefit/pipeline.py `reopened`), so its analysis is the one to show, not a reason for another.
+    const old = r.object.old_pockets ?? [];
+    const placed = old.length > 0 && r.params.pockets !== null;
+    if (placed) {
+      state.params.magnets = r.params.magnets;
+      state.params.pockets = r.params.pockets;
+      state.params.pocket_diameter = r.params.pocket_diameter;
+      syncControls();
+    }
     const differs = REMEMBERED_KEYS.some((k) => r.params[k] !== state.params[k]);
     shownGeometry = geometryKey();
     await showFigure(res.session, null, false);
@@ -380,7 +391,8 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
       show(r);
       await completeChecks(r, seq);
     }
-    if (r.object.old_pockets?.length) await placeOldPockets(r.object.old_pockets);
+    if (placed) oldPocketsToast(old.length);
+    else if (old.length) await placeOldPockets(old);
     viewer.view("iso");
   } catch (e) {
     toast((e as Error).message);
@@ -587,15 +599,25 @@ async function placeOldPockets(old: { x: number; y: number; diameter: number }[]
   if (Math.abs(d - p.pocket_diameter) > 0.05) p.pocket_diameter = +d.toFixed(2);
   syncControls();
   await runAnalyse(false);
-  toast(`This file has ${old.length} magnet pocket${old.length > 1 ? "s" : ""} from an earlier export: filled in, and the ` +
-    `magnets placed there again${old.length > 3 ? " (the first 3)" : ""}. Move or remove them in the Magnets card.`);
+  oldPocketsToast(old.length);
+}
+
+/** Tell the user an earlier export's magnets were put back where they were. */
+function oldPocketsToast(n: number): void {
+  toast(`This file has ${n} magnet pocket${n > 1 ? "s" : ""} from an earlier export: filled in, and the ` +
+    `magnets placed there again${n > 3 ? " (the first 3)" : ""}. Move or remove them in the Magnets card.`);
 }
 
 /** Analyse with the current settings; `rememberIt` = save them as the next figure's defaults (prefs.ts). */
 async function runAnalyse(rememberIt = true): Promise<void> {
   if (rememberIt) remember();
   if (!state.session) return;
-  if (geometryKey() !== shownGeometry) await refreshFigure();
+  if (geometryKey() !== shownGeometry) {
+    // The new shape is built before its preview answers (thickening a 300k figure: ~1 min in the browser engine):
+    // say so at once, or the setting looks as if it did nothing.
+    busy(true, state.params.strengthen ? "Thickening thin parts…" : "Reshaping the figure…");
+    await refreshFigure();
+  }
   const seq = ++state.seq;
   paintDirty = false;
   busy(true);

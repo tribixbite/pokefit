@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, auto_simplify, export,
+from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, auto_simplify, export, reopened,
                        input_checks, limb_region,
                        open_session, pick, pieces_of_colour, prepare_paint, preview_faces, preview_glb, safe_stem,
                        slice_variants, steel_table)
@@ -112,7 +112,7 @@ def _load(path: Path, params: Params | None = None, quick: bool = False) -> dict
     s.presets = _presets
     s.ams = _ams
     _register(s)
-    params = auto_simplify(s, params)
+    params = reopened(s, auto_simplify(s, params))
     with _locks[s.id]:
         rep, _ = analyse(s, params, printing=not quick)
     return {"session": s.id, "file": path.name, "report": rep.to_dict()}

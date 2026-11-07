@@ -56,10 +56,11 @@
   built as a solid (an offset of the surface on a 0.1 mm grid, smoothed, united with the figure), blended into the
   surface around and never more than about half way into a gap: fine relief under it (an ear's incised line and
   panel) fills smoothly instead of crumpling. Colours carry onto it from the nearest painted triangle; taps and
-  paint still name the figure's own triangles. It can take tens of seconds on a spiky 300k-triangle figure.
+  paint still name the figure's own triangles. It can take tens of seconds on a spiky 300k-triangle figure (about a
+  minute in the browser engine; "Thickening thin parts…" shows meanwhile). It is per figure, not remembered.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
   largest that fits is used, with a note. Settings that are changed (ball, steel, floor, magnets, pockets, height, shape,
-  strengthen, simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the
+  simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the
   footer clears them. Settings set before a file is opened are used for its first analysis.
 - Simplify mesh: a dense mesh (sculpts and scans of hundreds of thousands to millions of triangles) is cut when it
   loads, like Bambu Studio's Simplify: levels Low / Medium / High keep 7 / 20 / 50 % of the file's triangles (the
@@ -130,7 +131,8 @@
   facing its axis all round, joined across parts), filled in, and the magnets placed there again as pockets placed by
   hand; the export's "flat base" parts are dropped (made again from the settings: an export records the base settings
   it was made with in Metadata/pokefit.json, flat base / depth / gap fill / fill area, and opens with them, so a figure
-  exported without a press or gap fill does not gain one; not remembered for the next figure). Checked on 7 round trips (found
+  exported without a press or gap fill does not gain one; not remembered for the next figure). Both are applied
+  before the first analysis, so an export opens in one pass. Checked on 7 round trips (found
   within 0.001 mm) and 5 original figures (none found). Painting prepares the figure's regions when it starts. Colours can be added or changed; the result
   is written as Bambu per-triangle paint (paint_color), so it slices as multi-colour. "Prints from" shows each
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour

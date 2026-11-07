@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .pipeline import (Params, Session, analyse, app_config, auto_simplify, export, limb_region, open_session, pick, pieces_of_colour,
+                       reopened,
                        prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
 
@@ -68,7 +69,7 @@ def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> 
         s.reference = _reference
     s.presets = _presets
     _sessions[s.id] = s
-    params = auto_simplify(s, params)
+    params = reopened(s, auto_simplify(s, params))
     rep, _ = analyse(s, params, printing=not quick)
     return _dump({"session": s.id, "file": path.name, "report": rep.to_dict()})
 
