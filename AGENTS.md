@@ -154,6 +154,9 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
   touching, e.g. two boxes meeting along an edge): welding it (trimesh `process=True`, as `from_manifold` did) made
   edges on four faces that Bambu Studio flagged as non-manifold. `from_manifold` keeps the topology; `repair` nudges
   such vertices apart. Test exports with `tests/conftest.edge_stats` (index AND welded).
+- A soft edge's side test uses both triangles' normals on the outline; whether to turn the outside one round must come
+  from the shared edge's winding, not from the normals being over 90 degrees apart (that misfired on every groove rim
+  and painted the surface beyond it: `Topology.outline`).
 - Soft paint edges read the field at split-lattice points (`colorize._lattice`), not linearly from the corners:
   an ellipse interpolated across a big low-poly triangle came out as a spike.
 - Real figures are messy (non-manifold, floating parts). Checks report, they don't block; `planar._xor`

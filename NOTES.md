@@ -247,7 +247,8 @@ exist only on the original Windows machine (ask the user for the files).
    rim, < 0.05 mm past it on average); 0.13 s a tap warm on 300k. UI: `nt/line_ui.py` (Ninetales, button + key, no errors).
    Open: (a) a step (block on a slab, Part mode) gets a ~0.6 mm band at its foot (TODO in `line_depth`; capping by
    high ground outside the region did not help); (b) Leafeon runs ~1 edge onto the face below the eye; Espeon's narrow
-   tip stops ~1 edge short (Grow/Shrink fix both); (c) not yet checked live on pokefit.party.
+   tip stops ~1 edge short (Grow/Shrink fix both); (c) live since 706b97b: `nt/line_ui.py OUT https://pokefit.party/`
+   passes in the browser engine (live `pokefit.zip` has `line_width`; console: only the usual local-engine probes).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
