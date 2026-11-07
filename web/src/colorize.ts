@@ -64,6 +64,8 @@ const GROW_STEP = 0.1;
 const MAX_GROW = 20;
 /** Wand: the furthest step from its first answer (colorize.MAX_LEVEL). */
 const MAX_LEVEL = 8;
+/** Modes whose region can also cover the engraved line round it (colorize.LINE_MODES). */
+const LINE_MODES: readonly PaintMode[] = ["wand", "part", "region", "fill"];
 /** Modes whose angle slider applies. */
 const ANGLED: readonly PaintMode[] = ["part", "region"];
 
@@ -139,6 +141,7 @@ export class ColorizePanel {
     $("paintSmaller").addEventListener("click", () => this.stepLast(-1));
     $("paintLarger").addEventListener("click", () => this.stepLast(1));
     $("paintShrink").addEventListener("click", () => this.growLast(-GROW_STEP));
+    $("paintLine").addEventListener("click", () => this.lineLast());
     $("paintMirror").addEventListener("click", () => void this.setMirror(!this.mirror));
     $("paintSample").addEventListener("click", () => {
       this.sampling = !this.sampling;
@@ -335,6 +338,9 @@ export class ColorizePanel {
     ($("paintGrow") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
     $("levelGroup").hidden = !(n > 0 && ops[n - 1].mode === "wand");
     ($("paintShrink") as HTMLButtonElement).disabled = n === 0 || ops[n - 1].filament === 0;
+    const lineBtn = $<HTMLButtonElement>("paintLine");
+    lineBtn.disabled = n === 0 || ops[n - 1].filament === 0 || !LINE_MODES.includes(ops[n - 1].mode);
+    lineBtn.setAttribute("aria-pressed", String(n > 0 && !!ops[n - 1].line));
     if (!this.busy && !$("paintInfo").dataset.sticky) {
       $("paintInfo").textContent = this.sampling ? "Tap the figure to pick its colour there."
         : !this.painting ? (n ? `${n} paint step${n > 1 ? "s" : ""}` : "")
@@ -530,6 +536,23 @@ export class ColorizePanel {
     this.edit((p) => [...p.slice(0, -1), next]);
     const g = (next.grow ?? 0) * s;
     $("paintInfo").textContent = g ? `Last step ${g > 0 ? "grown" : "shrunk"} by ${Math.abs(g).toFixed(1)} mm` : "Last step as painted";
+    $("paintInfo").dataset.sticky = "1";
+    window.setTimeout(() => { delete $("paintInfo").dataset.sticky; }, 2500);
+  }
+
+  /**
+   * Cover the engraved line round the last step's region, or stop covering it: a region found from the shape stops at
+   * the line's near edge (Part, Crease) or partway into it (the wand), leaving a ring of the colour round it. The
+   * engine measures the line's width along the outline and paints to its far rim with a smooth edge.
+   */
+  private lineLast(): void {
+    const ops = this.host.params().paint ?? [];
+    const last = ops[ops.length - 1];
+    if (!last || last.filament === 0 || !LINE_MODES.includes(last.mode)) return;
+    const next: PaintOp = { ...last, line: !last.line };
+    if (!next.line) delete next.line;
+    this.edit((p) => [...p.slice(0, -1), next]);
+    $("paintInfo").textContent = next.line ? "Last step covers the engraved line round it" : "Last step as painted";
     $("paintInfo").dataset.sticky = "1";
     window.setTimeout(() => { delete $("paintInfo").dataset.sticky; }, 2500);
   }
@@ -759,6 +782,7 @@ export class ColorizePanel {
     else if (k === "p" || k === "P") this.setPainting(!this.painting);
     else if (k === "Escape" && this.painting) this.setPainting(false);
     else if (k === "m" || k === "M") void this.setMirror(!this.mirror);
+    else if (k === "l" || k === "L") this.lineLast();
     else if (k === "i" || k === "I") { this.sampling = !this.sampling; if (this.sampling && !this.painting) this.setPainting(true); this.render(); }
     else if (k === "+" || k === "=") this.growLast(GROW_STEP);
     else if (k === "-" || k === "_") this.growLast(-GROW_STEP);

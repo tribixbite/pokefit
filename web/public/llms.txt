@@ -109,7 +109,10 @@
   equal relief, drawn per vertex: the structure the wand follows. Grow / Shrink are exact to a few per cent.
   Mirror paints the same spot on the other side too (the figure's mirror plane, found from its shape; asymmetric
   spots such as a curled tail paint one side). Grow / Shrink widen or narrow the last step along the surface in
-  0.1 mm steps; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
+  0.1 mm steps; Cover line (L) paints the last wand/part/crease/fill step over the engraved line round it too, so
+  an eye or panel cut out by a groove is not left with a ring of the body colour: the engine measures the groove's
+  width along the outline (depth under a grey closing of the surface's relief, smallest closing scale where the
+  line is full depth) and widens the step to its far rim with a smooth edge; Pick colour selects the colour under a tap; Undo / Redo; keyboard shortcuts on desktop. "Drop
   specks under" (default 0.5 mm²) gives tiny painted patches the colour around them, since each would cost a
   filament change on every layer it spans; a patch that is most of one paint step (an eye's small oval tapped on
   purpose) is kept: only what a step leaves of another, and the file's own stray specks, go. "Split by piece" gives each separate patch of the selected colour its own

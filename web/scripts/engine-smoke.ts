@@ -189,6 +189,12 @@ const mirror = JSON.parse(api.paint_prepare(dense.session, JSON.stringify(dense.
 const wand = JSON.parse(api.pick_face(dense.session, JSON.stringify(dense.report.params),
   JSON.stringify({ point: [0, 0, 20], normal: [0, 0, 1], mode: "wand", angle: 15, radius: 0 })));
 console.log(`[${secs()} s] simplify: ${JSON.stringify(simp)}; mirror ${JSON.stringify(mirror)}; wand ${wand.faces} faces`);
+// The wand step covering the engraved line round its region (`line`: scipy's dijkstra and the closings in Pyodide).
+const lined = JSON.parse(api.run_analyse(dense.session, JSON.stringify({ ...dense.report.params,
+  colours: ["#E05028", "#161616"],
+  paint: [{ part: wand.part, face: wand.face, filament: 2, mode: "wand", angle: 15, radius: 0, line: true }] })));
+if (!(lined.object.parts[0].painted > 0)) throw new Error("a wand step with line painted nothing");
+console.log(`[${secs()} s] wand + line: ${lined.object.parts[0].painted} faces painted`);
 // A stamp (an ellipse seen from above) painted with a soft edge: split triangles in the preview; the shape map view.
 const denseParams = dense.report.params;
 const stamp = JSON.parse(api.pick_face(dense.session, JSON.stringify(denseParams),

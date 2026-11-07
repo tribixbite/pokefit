@@ -755,3 +755,83 @@ def test_the_preview_draws_split_paint_the_same_from_its_cache() -> None:
     assert np.abs(((corners - ball.vertices[ball.faces[owner, 0]]) * normal).sum(axis=1)).max() < 1e-9
     area = float(np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1).sum()) / 2
     assert area == pytest.approx(ball.area, rel=1e-9)
+
+
+def _engraved_panel(r_in: float = 2.4, r_out: float = 3.2, depth: float = 0.3) -> trimesh.Trimesh:
+    """A ball with a ring engraved round a panel on top (an eye or a sock cut out by a line): the ring from radius
+    `r_in` to `r_out` (seen from above), its floor `depth` below the surface at its far rim."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    ring = trimesh.boolean.difference([trimesh.creation.cylinder(r_out, 4, sections=96),
+                                       trimesh.creation.cylinder(r_in, 5, sections=96)], engine="manifold")
+    ring.apply_translation([0, 0, np.sqrt(100 - r_out ** 2) - depth + 2])
+    m = trimesh.boolean.difference([ball, ring], engine="manifold")
+    v, f = trimesh.remesh.subdivide_to_size(m.vertices, m.faces, 0.25)
+    return trimesh.Trimesh(v, f)
+
+
+def _painted_points(out: Part, state: int) -> tuple[np.ndarray, np.ndarray]:
+    """(centres, areas) of everything painted `state`, split paint by its sub-triangles."""
+    cen, area = [], []
+    for i, a in out.tri_extra.items():
+        fp = attr_paint(a)
+        if fp is None:
+            continue
+        for tri, st in leaves(parse_tree(fp.code), list(out.vertices[out.faces[i]])):
+            if st == state:
+                cen.append(np.mean(tri, axis=0))
+                area.append(float(np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0]))) / 2)
+    return np.array(cen).reshape(-1, 3), np.array(area)
+
+
+def test_line_covers_the_engraved_ring_round_a_panel() -> None:
+    """Part stops at the ring's floor, Region at its top, the wand somewhere in it: each leaves the ring the body's
+    colour. With `line` the paint runs over the ring to its far rim and no further, with a smooth edge."""
+    m = _engraved_panel()
+    part = _part(m)
+    topo = TopologyCache([part])
+    top = _face_at(part, [0, 0, 10], [0, 0, 1])
+    c = m.triangles_center
+    rxy = np.hypot(c[:, 0], c[:, 1])
+    ring = (c[:, 2] > 8) & (rxy > 2.45) & (rxy < 3.15)            # floor and walls, not their rims
+    for mode, angle in (("part", 15.0), ("region", 30.0), ("wand", 15.0)):
+        (plain,) = apply_paint([part], [PaintOp(0, top, 2, mode, angle)], topo)
+        assert not (set(np.flatnonzero(ring)) & set(_states(plain))), mode   # the ring is left as it was
+        (out,) = apply_paint([part], [PaintOp(0, top, 2, mode, angle, line=True)], topo)
+        held = {i for i, a in out.tri_extra.items() if 2 in attr_paint(a).states}
+        missed = [i for i in np.flatnonzero(ring) if i not in held]
+        assert not missed, (mode, len(missed))
+        cen, area = _painted_points(out, 2)
+        past = area[np.hypot(cen[:, 0], cen[:, 1]) > 3.25].sum()
+        assert past < 0.05 * 2 * np.pi * 3.2, (mode, past)          # under 0.05 mm past the rim on average
+    op = PaintOp(0, top, 2, "part", line=True)
+    assert PaintOp.from_dict(op.to_dict()) == op and "line" not in PaintOp(0, top, 2).to_dict()
+    with pytest.raises(ValueError):
+        PaintOp.from_dict({"part": 0, "face": 0, "filament": 1, "mode": "brush", "radius": 1, "line": True})
+
+
+def test_no_line_without_a_groove() -> None:
+    """A smooth ball: nothing to cover. A block standing on a slab (a step, not a groove) is not a line either, but
+    gets a band round its foot (TODO in `Topology.line_depth`: the closing fills a step's concave corner too); this
+    pins it to what it is (0.6 mm here) so a change shows."""
+    ball = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    part = _part(ball)
+    topo = TopologyCache([part])
+    cap = np.zeros(len(ball.faces), bool)
+    cap[ball.triangles_center[:, 2] > 8] = True
+    assert topo.part(0).line_width(cap) is None
+    # Faceted (a simplified mesh's irregular triangles): its facets are "deep" under the closing everywhere, alike.
+    rng = np.random.default_rng(3)
+    rough = trimesh.creation.icosphere(subdivisions=4, radius=10)
+    rough.vertices *= (1 + rng.uniform(-0.004, 0.004, len(rough.vertices)))[:, None]
+    rough_topo = TopologyCache([_part(rough)])
+    assert rough_topo.part(0).line_width(rough.triangles_center[:, 2] > 8) is None
+    joined = trimesh.boolean.union([trimesh.creation.box([20, 20, 4]).apply_translation([0, 0, 2]),
+                                    trimesh.creation.box([6, 6, 2]).apply_translation([0, 0, 4.9])], engine="manifold")
+    m = trimesh.Trimesh(*trimesh.remesh.subdivide_to_size(joined.vertices, joined.faces, 0.25))
+    part = _part(m)
+    topo = TopologyCache([part])
+    f_top = _face_at(part, [0, 0, 5.9], [0, 0, 1])
+    (plain,) = apply_paint([part], [PaintOp(0, f_top, 2, "part")], topo)
+    (out,) = apply_paint([part], [PaintOp(0, f_top, 2, "part", line=True)], topo)
+    band = (_painted_area(out, 2) - _painted_area(plain, 2)) / (4 * 6)       # mm beyond the foot, on average
+    assert 0 <= band < 0.8                                                   # 0.6 measured

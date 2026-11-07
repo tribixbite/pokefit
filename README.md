@@ -31,7 +31,9 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   triangles (not their stepped outline). Where the shape has no edge to find (a decimated mesh), Stamp paints an
   ellipse dragged over the spot, like a decal. "Shape map" shades creases and draws contour lines of the
   surface's relief, the structure the wand follows. Mirror paints both sides at once
-  (both eyes in one tap), Grow/Shrink adjust the last step, Pick colour, Undo/Redo, and specks too small to print
+  (both eyes in one tap), Grow/Shrink adjust the last step, "Cover line" paints the last step over the engraved
+  line round it too (an eye or panel cut out by a groove: its width is measured along the outline, painted to the
+  far rim with a smooth edge), Pick colour, Undo/Redo, and specks too small to print
   are dropped. "Split by piece" gives every separate patch of a colour its own filament (white eyes and a white
   tail become three colours, each changeable on its own); "Remove colour" deletes a colour from the palette
   (what printed in it takes the closest colour left). "Colours from a picture" takes colours from official art

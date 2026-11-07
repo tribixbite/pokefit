@@ -119,6 +119,21 @@ STAMP_STEPS = 24            # a stamp's edge is drawn in sub-triangles at most 1
 WAND_SMOOTH = 4             # wand: averaging passes rounding its triangle-stepped outline (`Topology.outline`)
 SHAPE_SCALE = 0.05          # "Shape map": relief is height over the surface smoothed over this share of the size
 SHAPE_PASSES = 400          # ... in at most this many averaging passes (a dense mesh is smoothed less far)
+LINE_REACH = 16             # "line": widest engraved line covered, edge lengths from the region's outline
+LINE_RINGS = (2, 4, 8, 16)  # ... closing scales tried, rings (each fills valleys up to about twice as many edges)
+LINE_SATURATE = 0.75        # ... the smallest scale finding this share of the next larger one's depth
+LINE_FLOOR = 0.4            # ... its far rim: where the profile across it falls under this share of its deepest
+LINE_MIN_DEPTH = 0.08       # ... no line shallower than this many edge lengths
+LINE_CONTRAST = 4.0         # ... nor one under this many times the depth of the surface round it
+LINE_MIN_SAMPLES = 5        # ... vertices a distance bin of the profile needs
+LINE_SECTOR = 6             # ... its width is measured per stretch of the outline this many edge lengths long
+LINE_SECTOR_SAMPLES = 2     # ... vertices a distance bin of one stretch's profile needs
+LINE_DROP = 0.5             # ... past that, on down its far wall while the profile falls by this share a bin
+LINE_DESCENT = 2            # ... for at most this many bins
+LINE_GAP = 4                # ... profile bins without enough vertices passed over in a row
+LINE_BLEND = 8              # ... stretches blended into the width at each outline vertex
+LINE_SPREAD = 3.0           # ... a stretch's width: at most this many times the whole outline's
+LINE_MODES = ("wand", "part", "region", "fill")   # modes whose region "line" can widen
 MIN_REGION = 1e-4           # "part"/"region": a region smaller than this share of its piece's surface is crease noise
                             # (a dense sculpt's slivers along a valley) and joins the regions round it (`_absorb`)
 
@@ -142,6 +157,8 @@ class PaintOp:
     # stroke follows these, not the centres of the triangles it crossed (`path`): with a brush finer than the
     # triangles those zigzag by more than the brush. Older strokes without them fall back to the centres.
     points: tuple[float, ...] = ()
+    # Also cover the engraved line round the region (`Topology.line`), with a smooth edge on its far rim.
+    line: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PaintOp":
@@ -150,7 +167,7 @@ class PaintOp:
                  tuple(int(f) for f in d.get("path") or ()), bool(d.get("mirror", False)),
                  float(d.get("grow", 0.0)), int(d.get("level", 0)),
                  tuple(float(x) for x in d.get("stamp") or ()),
-                 tuple(float(x) for x in d.get("points") or ()))
+                 tuple(float(x) for x in d.get("points") or ()), bool(d.get("line", False)))
         if op.mode not in MODES:
             raise ValueError(f"paint mode must be one of {', '.join(MODES)}, not {op.mode!r}")
         if not (0 <= op.filament <= 64):
@@ -180,6 +197,8 @@ class PaintOp:
                 raise ValueError("a stamp's two semi-axes must be at right angles")
         elif op.stamp:
             raise ValueError("only a stamp has a stamp shape")
+        if op.line and op.mode not in LINE_MODES:
+            raise ValueError(f"only {', '.join(LINE_MODES)} steps can cover the engraved line")
         return op
 
     def to_dict(self) -> dict[str, Any]:
@@ -203,6 +222,8 @@ class PaintOp:
             d["points"] = list(self.points)
         else:
             del d["points"]
+        if not self.line:
+            del d["line"]
         return d
 
     def stroke(self) -> np.ndarray | None:
@@ -454,9 +475,15 @@ class Topology:
         flip = corners[np.arange(len(fin)), (at + 1) % 3] != uv[:, 1]
         uv[flip] = uv[flip][:, ::-1]
         # The side test's "up": both triangles on the edge (one of them alone tips over on a sharp fold, a brow's
-        # crease), the outside one turned to agree with the inside one's winding.
+        # crease), the outside one turned to agree with the inside one's winding. Agreeing neighbours run their shared
+        # edge opposite ways; one running it the same way as the inside triangle is wound the other way round. (Turning
+        # it whenever the two normals were over 90 degrees apart also turned it on a real fold that sharp, the rim of
+        # an engraved line, and the side test then put the surface beyond the rim inside: `line`.)
         n_in, n_out = self.normals[fin], self.normals[fout]
-        nrm = n_in + n_out * np.where((n_in * n_out).sum(axis=1) < 0, -1.0, 1.0)[:, None]
+        oc = self.vfaces[fout]
+        at_o = np.argmax(oc == uv[:, :1], axis=1)
+        same = oc[np.arange(len(fout)), (at_o + 1) % 3] == uv[:, 1]
+        nrm = n_in + n_out * np.where(same, -1.0, 1.0)[:, None]
         nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
         succ: dict[int, list[int]] = {}
         for k, u in enumerate(uv[:, 0].tolist()):
@@ -490,12 +517,25 @@ class Topology:
             chains.append((pts, nrm[ks]))
         return chains
 
-    def soft(self, inside: np.ndarray, smooth: int, offset: float = 0.0) -> "Field":
+    def soft(self, inside: np.ndarray, smooth: int, offset: float = 0.0,
+             widen: tuple[np.ndarray, np.ndarray] | None = None) -> "Field":
         """A face region (a mask) as a `Field` with a smooth edge: the signed distance (inside < 0) of every vertex
         near its outline (`outline`, rounded by `smooth` passes) to that outline, minus `offset` mm (> 0 widens the
-        area, < 0 narrows it, that far from the edge measured straight, within a walk along the surface)."""
+        area, < 0 narrows it, that far from the edge measured straight, within a walk along the surface). `widen`:
+        (points (k, 3), mm (k,)) widens it further by different amounts along the outline, each spot by the amount of
+        the nearest point (`line_width`)."""
         from scipy.spatial import cKDTree
 
+        if widen is not None and len(widen[0]):
+            wtree, wmm = cKDTree(widen[0]), np.asarray(widen[1], float)
+
+            def off(pts: np.ndarray) -> np.ndarray:
+                return np.asarray(offset + wmm[wtree.query(pts)[1]])
+            most = abs(offset) + float(wmm.max(initial=0.0))
+        else:
+            def off(pts: np.ndarray) -> np.ndarray:
+                return np.full(len(pts), offset)
+            most = abs(offset)
         h = self.edge_length()
         n = len(self.verts)
         vin = np.zeros(n, bool)
@@ -503,7 +543,7 @@ class Topology:
         phi = np.where(vin, -BIG, BIG)
         chains = self.outline(inside, smooth)
         if not chains:
-            return Field(np.nonzero(inside)[0], phi - offset)
+            return Field(np.nonzero(inside)[0], phi - off(self.verts))
         # Dense samples along the outline, each with its direction and the inside triangle's normal.
         pts, tan, nrm = [], [], []
         for c, cn in chains:
@@ -519,7 +559,7 @@ class Topology:
         # Only vertices reachable along the surface within the band: a distance across a gap (a finger beside the
         # body) is not a distance along the figure.
         cut = inside[self.pairs[:, 0]] != inside[self.pairs[:, 1]]
-        band = self._reach(self.pair_edges[cut].ravel(), abs(offset) * 1.3 + 3 * h)
+        band = self._reach(self.pair_edges[cut].ravel(), most * 1.3 + 3 * h)
         idx = np.nonzero(band)[0]
         d, j = cKDTree(q).query(self.verts[idx])
         left = np.cross(nq[j], tq[j])
@@ -530,15 +570,202 @@ class Topology:
         vout[self.vfaces[~inside]] = True
         sure = (vin[idx] != vout[idx]) & (d > 1.5 * h)
         side = np.where(sure, vin[idx], side)
-        phi[idx] = np.where(side, -d, d)
+        phi[idx] = np.where(side, -d, d) - off(self.verts[idx])
+        rest = np.ones(n, bool)
+        rest[idx] = False
+        phi[rest] -= offset                     # +-BIG either way
         faces = np.nonzero(inside | band[self.vfaces].any(axis=1))[0]
         tree = cKDTree(q)
 
         def exact(pts: np.ndarray) -> np.ndarray:
             dd, jj = tree.query(pts)
             inner = ((pts - q[jj]) * np.cross(nq[jj], tq[jj])).sum(axis=1) > 0
-            return np.asarray(np.where(inner, -dd, dd) - offset)
-        return Field(faces, phi - offset, exact)
+            return np.asarray(np.where(inner, -dd, dd) - off(pts))
+        return Field(faces, phi, exact)
+
+    def line_depth(self, inside: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]] | None:
+        """(distance, [depth per LINE_RINGS scale]) per merged vertex near the outline of a face region (a mask):
+        the distance from the outline along the surface (inf beyond the zone read), and how far the surface lies below
+        its grey closing over that many rings (`line_width`). None when the region has no outline."""
+        from scipy.sparse.csgraph import dijkstra
+
+        a, b = self.pairs[:, 0], self.pairs[:, 1]
+        cut = inside[a] != inside[b]
+        if not cut.any():
+            return None
+        h = self.edge_length()
+        rim = np.unique(self.pair_edges[cut].ravel())
+        # The zone read: the widest line plus about as far again, which the smoothing below spreads over.
+        dist = np.asarray(dijkstra(self.vertex_graph(), directed=False, indices=rim, limit=3 * LINE_REACH * h,
+                                   min_only=True))
+        zone = np.flatnonzero(np.isfinite(dist))
+        local = np.full(len(self.verts), -1, np.int64)
+        local[zone] = np.arange(len(zone))
+        g = self.vertex_graph()[zone][:, zone].tocsr()
+        g.data[:] = 1.0
+        deg = np.asarray(g.sum(axis=1)).ravel() + 1e-12
+        p = self.verts[zone]
+        sm = p.copy()
+        for _ in range(int(LINE_REACH ** 2 / 0.6)):      # a pass spreads about one edge (`shape_map`)
+            sm = sm + 0.5 * (g @ sm / deg[:, None] - sm)
+        # Relief: height over that smoothed surface, along its normal (the zone's faces, wound like the part's).
+        lf = local[self.vfaces[(local[self.vfaces] >= 0).all(axis=1)]]
+        tri = sm[lf]
+        fn_ = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        vn = np.zeros_like(p)
+        for k in range(3):
+            np.add.at(vn, lf[:, k], fn_)
+        vn /= np.linalg.norm(vn, axis=1, keepdims=True) + 1e-12
+        relief = ((p - sm) * vn).sum(axis=1)
+        # Grey closings over the vertex graph: n rings of neighbour max, then n of neighbour min. The dilations of
+        # the scales nest, so they are taken once.
+        rows, cols = g.nonzero()
+
+        def ring(x: np.ndarray, op: Any) -> np.ndarray:
+            nxt = x.copy()
+            op.at(nxt, rows, x[cols])
+            return nxt
+
+        # TODO: the concave foot of a step (a block on a slab, its sides in the region) reads as a line too: the
+        # closing fills a corner like a groove, and the smoothed reference bends up beside a tall wall, so the slab's
+        # relief rises away from it. Capping the depth by the highest ground outside the region did not help (and
+        # widened Leafeon's eyes); "line" is opt-in, for regions cut out by an engraved line.
+        out: list[np.ndarray] = []
+        up, done = relief, 0
+        for n in LINE_RINGS:
+            for _ in range(n - done):
+                up = ring(up, np.maximum)
+            done = n
+            closed = up
+            for _ in range(n):
+                closed = ring(closed, np.minimum)
+            depth = np.zeros(len(self.verts))
+            depth[zone] = closed - relief
+            out.append(depth)
+        return dist, out
+
+    def line_width(self, inside: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+        """How far past a face region's outline the engraved line round it reaches, along the outline: (outline
+        vertices (k, 3), mm (k,)), or None when there is no line. The line is the groove a panel, an eye or a sock is
+        cut out by: "part" and "region" stop at its top and the wand partway down, so painting the region alone leaves
+        a ring of the colour round it (Eevee evolutions, 2026-11-05). Widened by these (`Topology.soft`'s `widen`,
+        measured straight from the outline) the region covers the line to its far rim.
+
+        Depth is how far the surface lies below its grey closing (`line_depth`), which fills valleys up to about twice
+        as many edges wide as its rings and leaves broader shapes (a step, a rounded body) as they are. Outside the
+        region, the median depth of the vertices at each straight distance from the outline (bins of half an edge, out
+        to LINE_REACH edge lengths along the surface) is the line's profile across: deep at the outline or just past
+        it, back to nothing at the far rim.
+
+        Of the closing scales (LINE_RINGS, the largest only a reference), the smallest whose profile over the whole
+        outline is at least LINE_SATURATE as deep as the next larger scale's: the line is full depth there, and a larger scale would also
+        fill the broad hollow round it. When none is, the depth grows with the scale (a dome: an eye rising out of the
+        face, where the largest scale made the line four times as wide as it is on Leafeon) and the smallest scale is
+        taken. A profile never deeper than LINE_MIN_DEPTH edge lengths, or than LINE_CONTRAST times the median depth
+        in the outer quarter of the band, is no line.
+
+        The width is then measured per stretch of the outline (LINE_SECTOR edge lengths: the gap between a wand's
+        outline and the wall of a sunk eye is three times as wide on one side as the other on Espeon): from the
+        deepest bin of that stretch's profile out to where it last stays above LINE_FLOOR of the whole line's deepest
+        (and of its own),
+        plus a bin (the wall's top, not short of it), at most LINE_SPREAD times the width the whole outline's profile
+        gives; a stretch never that deep has no line. Along the outline the stretches' widths are blended (a Gaussian
+        one stretch wide), so the edge runs smoothly from wide to narrow."""
+        from scipy.spatial import cKDTree
+
+        if not inside.any():
+            return None
+        got = self.line_depth(inside)
+        if got is None:
+            return None
+        dist, depths = got
+        h = self.edge_length()
+        vin = np.zeros(len(self.verts), bool)
+        vin[self.vfaces[inside]] = True
+        band = np.flatnonzero(np.isfinite(dist) & (dist <= LINE_REACH * h) & ~vin)
+        if not len(band):
+            return None
+        a, b = self.pairs[:, 0], self.pairs[:, 1]
+        rim = np.unique(self.pair_edges[inside[a] != inside[b]].ravel())
+        rp = self.verts[rim]
+        step = h / 2
+        nb = 2 * LINE_REACH + 1
+        straight, near = cKDTree(rp).query(self.verts[band])
+        k = np.minimum((straight / step).astype(np.intp), nb - 1)
+
+        def profiles(groups: np.ndarray, n: int, depth: np.ndarray, least: int) -> np.ndarray:
+            """(n, nb) median depth per group and distance bin (nan: fewer than `least` vertices)."""
+            key = groups * nb + k
+            order = np.lexsort((depth[band], key))
+            ks, ds = key[order], depth[band][order]
+            starts = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]])
+            ends = np.r_[starts[1:], len(ks)]
+            cnt = ends - starts
+            med = 0.5 * (ds[starts + (cnt - 1) // 2] + ds[starts + cnt // 2])
+            out = np.full(n * nb, np.nan)
+            ok = cnt >= least
+            out[ks[starts[ok]]] = med[ok]
+            return out.reshape(n, nb)
+
+        whole = [profiles(np.zeros(len(band), np.intp), 1, d, LINE_MIN_SAMPLES)[0] for d in depths]
+        peaks = [float(np.nanmax(pr)) if np.isfinite(pr).any() else 0.0 for pr in whole]
+        # The largest scale only tells whether the one below it is full: a line found only there is the zone's own
+        # broad shape (a ball's cap read as 2 mm of "line").
+        # A line stands out from the surface round it: its profile's deepest is LINE_CONTRAST times the median depth
+        # in the outer quarter of the band (a faceted ball's facets are 0.1 edge lengths "deep" under the closing,
+        # everywhere: without this a smooth ball read as 6 mm of line).
+        outer = k >= 3 * LINE_REACH // 2               # the outer quarter (a wide line can fill half the band)
+        base = [float(np.median(d[band][outer])) if outer.any() else 0.0 for d in depths]
+        ok = [i for i, pk in enumerate(peaks[:-1]) if pk >= max(LINE_MIN_DEPTH * h, LINE_CONTRAST * base[i])]
+        if not ok:
+            return None
+        # The smallest scale as deep as the next larger one (the line is full there); none: the smallest that finds a
+        # line at all (the depth grows with every scale round a dome).
+        full = [i for i in ok if peaks[i] >= LINE_SATURATE * peaks[i + 1]]
+        scale = full[0] if full else ok[0]
+        thr = LINE_FLOOR * peaks[scale]
+        # Stretches of the outline: its vertices thinned to one per LINE_SECTOR-edge cell, each outline vertex in the
+        # stretch of the nearest kept one.
+        cell = np.floor(rp / (LINE_SECTOR * h)).astype(np.int64)
+        _, first = np.unique(cell, axis=0, return_index=True)
+        centres = rp[np.sort(first)]
+        ctree = cKDTree(centres)
+        sector = ctree.query(rp)[1]
+        prof = profiles(sector[near], len(centres), depths[scale], LINE_SECTOR_SAMPLES)
+        def extent(pr: np.ndarray, floor: float) -> float:
+            """Width a profile gives: from its deepest bin out while it stays over `floor`, then on while it falls
+            steeply (by LINE_DROP of `floor` a bin: down the far wall, whose top rows are shallow under the closing)
+            for at most LINE_DESCENT bins (a gentle fall ran out over a dome's shallow surround on Leafeon), plus a
+            bin. Bins with too few vertices (nan; a regular mesh leaves distances no vertex lies at) are passed
+            over, up to LINE_GAP in a row."""
+            end = i = int(np.nanargmax(pr))
+            core = None                                   # the last bin over `floor`, once past it
+            while i + 1 < nb and i - end < LINE_GAP:
+                i += 1
+                if not np.isfinite(pr[i]):
+                    continue
+                if core is None and pr[i] < floor:
+                    core = end
+                if core is not None and not (pr[end] - pr[i] >= LINE_DROP * floor and i - core <= LINE_DESCENT):
+                    break
+                end = i
+            return (end + 2) * step
+
+        # The whole outline's width bounds every stretch's (a stretch of a few vertices is noisy).
+        most = LINE_SPREAD * extent(whole[scale], thr)
+        width = np.zeros(len(centres))
+        for c in range(len(centres)):
+            pr = prof[c]
+            if np.isfinite(pr).any() and np.nanmax(pr) >= thr:
+                width[c] = min(extent(pr, max(thr, LINE_FLOOR * float(np.nanmax(pr)))), most)
+        if not width.any():
+            return None
+        # Each outline vertex: the stretches' widths round it, weighted by a Gaussian of the distance (sigma one
+        # stretch), so the width changes smoothly along the outline instead of in steps from stretch to stretch.
+        d, j = ctree.query(rp, k=min(LINE_BLEND, len(centres)))
+        d, j = d.reshape(len(rp), -1), j.reshape(len(rp), -1)
+        w = np.exp(-0.5 * (d / (LINE_SECTOR * h)) ** 2)
+        return rp, (w * width[j]).sum(axis=1) / (w.sum(axis=1) + 1e-12)
 
     def brush_field(self, seeds: list[int], radius: float, points: np.ndarray | None = None) -> "Field":
         """A brush dab or stroke with a round edge: distance from each point to the stroke (`points`, else the
@@ -1444,7 +1671,7 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
             faces = topo.wand_like(pi, fi, area, state(pi))
         else:
             faces = region_faces(topo, pi, fi, op.mode, op.angle, op.radius, path, state(pi), op.level)
-        if op.mode != "wand" and not op.grow:
+        if op.mode != "wand" and not op.grow and not op.line:
             paint = state(pi)
             over = None
             if paint is not None and op.mode == "fill":
@@ -1473,6 +1700,7 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
             continue
         mask = np.zeros(t.n_faces, bool)
         mask[faces] = True
+        widen = t.line_width(mask) if op.line else None
         paint = state(pi)
         over = None
         if paint is not None and op.mode in BOUNDED:
@@ -1489,7 +1717,8 @@ def op_cover(topo: "TopologyCache", op: PaintOp, state: Any) -> list[Cover]:
                     wider[pa[mask[pb] & other[pa]]] = True
                     wider[pb[mask[pa] & other[pb]]] = True
                     mask = wider
-        fld = t.soft(mask, WAND_SMOOTH, op.grow)
+        # "line": widened over the engraved line round the region (measured before a colour bound widens the mask).
+        fld = t.soft(mask, WAND_SMOOTH, op.grow, widen)
         out.append(Cover(pi, fld.faces, fld, over))
     return out
 

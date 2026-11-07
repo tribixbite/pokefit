@@ -367,9 +367,10 @@
             <button id="paintShrink" class="btn" title="Narrow the last paint step by 0.1 mm along the surface (−)">− Shrink</button>
             <button id="paintGrow" class="btn" title="Widen the last paint step by 0.1 mm along the surface: an eye that stops short of its socket's rim (+)">+ Grow</button>
           </span>
+          <button id="paintLine" class="btn" aria-pressed="false" title="Paint the last step over the engraved line round it too, to the line's far rim with a smooth edge: an eye or a panel cut out by a groove that was left the body's colour (L)">Cover line</button>
           <span id="paintInfo" class="muted" aria-live="polite"></span>
         </div>
-        <p class="hint keys">Keys: 1–9 colour, 0 erase, P paint, M mirror, I pick colour, , . wand smaller / larger, [ ] brush or angle, + − grow the last step, Ctrl+Z / Ctrl+Shift+Z undo / redo, Esc stop.</p>
+        <p class="hint keys">Keys: 1–9 colour, 0 erase, P paint, M mirror, L cover the engraved line, I pick colour, , . wand smaller / larger, [ ] brush or angle, + − grow the last step, Ctrl+Z / Ctrl+Shift+Z undo / redo, Esc stop.</p>
         <label class="row seat-row" title="How far painted colours reach into the figure (Bambu “maximum width of a segmented region”); deeper inside is the figure's main filament. Print time and colour changes stay about the same — the colours still appear on the same layers — but less of each colour is used and the inside is one material."><span class="muted">Paint depth</span>
           <select id="paintDepth">
             <option value="">Project's setting</option>
@@ -580,7 +581,7 @@
           Choose <i>Raised into the figure</i> to hide it in the part instead (it then holds less). Nothing goes below the plane the figure stands on.</li>
         <li><b>Colour it</b> — for single-colour models: pick a colour, press <i>Paint</i> and tap the figure. Each tap fills a part found
           from the shape (up to the valley where an ear, tail, leg or eye meets the body), a separate piece, or a brush patch.
-          <i>Show regions</i> previews the parts. <i>Colours from a picture</i> takes the colours from the official art
+          <i>Show regions</i> previews the parts. <i>Cover line</i> paints the last step over the engraved line round it too (an eye cut out by a groove). <i>Colours from a picture</i> takes the colours from the official art
           (type the Pokémon's name) or any picture: tap it, or match the whole palette. Exported as Bambu paint.</li>
         <li><b>Shape it for the ball</b> (Figure card) — legs or a tail lying straight out past the steel disc are bent up along the
           sphere so the figure fits larger, and the base over the steel disc is made flat (low bumps pressed, gaps under the

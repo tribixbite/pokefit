@@ -180,6 +180,8 @@ export interface PaintOp {
   grow?: number;
   /** Wand: 0 its best answer, -1 / +1 the next smaller / larger region. */
   level?: number;
+  /** Also cover the engraved line round the region (wand, part, region, fill; colorize `Topology.line_width`). */
+  line?: boolean;
   /** Stamp: the ellipse (centre, semi-axis u, semi-axis v; 9 numbers in the file's frame), from `PickResult.stamp`. */
   stamp?: number[];
   /** Brush stroke: where the drag went (3 numbers per sample, the tap first; file frame), from `PickResult.points`. */

@@ -217,7 +217,7 @@ exist only on the original Windows machine (ask the user for the files).
    Open: not re-sliced this pass (user: don't worry about slicing; third pass sliced fine with pads, ~1.5-5 h);
    pockets without pads are walled only 0.5-1.2 mm of the 2 mm magnet on most figures; pupils/highlights not
    modelled on Leafeon/Flareon/Jolteon/Umbreon/Vaporeon (one colour per eye); Vaporeon fins under 0.4 mm in places;
-   the app could offer `band`/straight cuts as paint modes ("fill to the engraved line").
+   `band` is now the app's "Cover line" (item 22); straight soft cuts are not a paint mode.
 21. **Colours from a picture** (2026-11-06; user: make colouring like the Eevee batch easy in the app; test with
    Ninetales). `web/src/reference.ts` (+ `reference.test.ts`), Colours card fold "Colours from a picture": official art
    by name/number via PokeAPI (species list `pokeapi.co/api/v2/pokemon-species?limit=2000`, art
@@ -235,8 +235,19 @@ exist only on the original Windows machine (ask the user for the files).
    (b) a file chosen within ~1 s of page load, before `/api/config` answers, loads in the browser engine while later
    calls go to the local server ("Unknown session"; api.ts `mode` set after config) — seen only from automation;
    (c) live since f3cf1ec, checked on pokefit.party with `nt_ui.py live https://pokefit.party/` (same palette as
-   locally; console: only the usual local-engine probes); (d) painting tools unchanged this round (`band`-style "cover the engraved
-   line" from item 19 still open).
+   locally; console: only the usual local-engine probes).
+22. **Cover line** (2026-11-06; user: "add the engraved lines feat"). `PaintOp.line` (wand/part/region/fill),
+   UI "Cover line" button + L key on the last step (`colorize.ts lineLast`). Engine: `Topology.line_depth` (relief over
+   the surface smoothed ~LINE_REACH edges, grey closings at LINE_RINGS 2/4/8/16 rings), `Topology.line_width` (depth
+   profile vs straight distance from the outline; smallest scale whose peak is >= 0.75 of the next; none -> smallest
+   (domes); per 6-edge stretch of outline, Gaussian-blended) -> `soft(widen=)`. Also fixed `Topology.outline`: the
+   outside normal was flipped on any fold over 90 degrees (a groove's rim), which put the surface beyond the rim inside.
+   Checked (scratchpad `line_diag.py NAME EYE MODE`, renders in `linechk/`): Leafeon eyes widths 0.08-0.38 mm (median
+   0.18; the hand-tuned band was 0.15), Espeon sunk eye 0.07-0.25 (reaches its wall), synthetic ring 0.89 (to the far
+   rim, < 0.05 mm past it on average); 0.13 s a tap warm on 300k. UI: `nt/line_ui.py` (Ninetales, button + key, no errors).
+   Open: (a) a step (block on a slab, Part mode) gets a ~0.6 mm band at its foot (TODO in `line_depth`; capping by
+   high ground outside the region did not help); (b) Leafeon runs ~1 edge onto the face below the eye; Espeon's narrow
+   tip stops ~1 edge short (Grow/Shrink fix both); (c) not yet checked live on pokefit.party.
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
