@@ -181,6 +181,11 @@ exist only on the original Windows machine (ask the user for the files).
      (c) thin spikes become rounded sausages (that is what 2 mm on a 0.5 mm spike is); (d) printed black showing
      through the ear = paint depth (`mmu_segmented_region_max_width` 0 = unlimited): use Paint depth 0.4 mm (not
      sliced or printed to confirm).
+   - 2026-11-07 (user: "thicken thin parts doesn't work anymore"): it worked, but ran inside the preview call with
+     no busy pill: 57 s of nothing on the Vaporeon in the browser engine (then 10 s of analysis). Now the pill shows at
+     once ("Thickening thin parts…"); the 4D ball search takes `KD_EPS` 0.5 (single-threaded 47 -> 35 s; the same on
+     the 3D search left a fin unthickened); it is no longer remembered (`prefs.ts`): a remembered 2 mm ran on every
+     figure opened. Open: still ~45 s in the browser engine on a 300k figure (`_shell` KD queries, 780k fine points).
    - Paint (2026-11-05): "Drop specks under" cleared an Umbreon's wand-painted eye ovals (0.3-0.6 mm², under the
      0.5 default at print size): a patch that is at least half of the paint step that last covered it is now kept
      (`PaintState.owner`/`step_area`/`deliberate`); only leftovers of a step and the file's own specks go. Grow /
@@ -214,6 +219,17 @@ exist only on the original Windows machine (ask the user for the files).
    | Sylveon | 38.5 | 1 |
    | Umbreon | 38.5 | 2 |
    | Vaporeon | 27.9 | 1 |
+   2026-11-07 (user: Umbreon's rings warped and moved, one tail ring missing, the other partial; check the others):
+   the Umbreon came from the user's `umbreon3.3mf` paint per triangle (stepped, ~10 % off each engraved band) and one
+   hand-placed tail band. Now every ring is the model's band between two grooves (`gregions` 2.5 deg for ears, forehead,
+   legs: the user's patches only say which; 0.8 deg for the two tail bands) painted with the app's Cover line
+   (`line_width` medians 0.15-0.22 mm); under the tail, where the grooves fade on the bed, each band is closed between
+   planes fitted to its two grooves (`groove_planes`), `bottoms()` skips those faces (`Fig.keep_bottom`). Check tool:
+   scratchpad `linecheck.py EXPORT OUT [TH] [SIZE] [x,y,z,span] [yaw:pitch;...]` (split paint as written, engraved lines
+   in blue): the other 6 follow their lines, except Leafeon's tail stem, whose green ran ~6 mm past the join along the
+   foot of the rump (no line there): now a straight soft cut square to the stem at the join. Both re-exported to
+   Downloads (old ones in `superseded_2026-11-06_rings_stem/`). Open: a ~0.3 mm jagged notch where each Umbreon tail
+   band meets the inside of the curl, on the bed side.
    Open: not re-sliced this pass (user: don't worry about slicing; third pass sliced fine with pads, ~1.5-5 h);
    pockets without pads are walled only 0.5-1.2 mm of the 2 mm magnet on most figures; pupils/highlights not
    modelled on Leafeon/Flareon/Jolteon/Umbreon/Vaporeon (one colour per eye); Vaporeon fins under 0.4 mm in places;
@@ -249,6 +265,13 @@ exist only on the original Windows machine (ask the user for the files).
    high ground outside the region did not help); (b) Leafeon runs ~1 edge onto the face below the eye; Espeon's narrow
    tip stops ~1 edge short (Grow/Shrink fix both); (c) live since 706b97b: `nt/line_ui.py OUT https://pokefit.party/`
    passes in the browser engine (live `pokefit.zip` has `line_width`; console: only the usual local-engine probes).
+23. **Opening an export** (2026-11-07; user: loading an Eevee evolution takes forever). Browser engine, Vaporeon export:
+   38 s -> 14 s. It was analysed three times: with the app's defaults (incl. gap fill and pads, 6 s), again with the
+   export's own base settings, again with its old pockets placed. `pipeline.reopened` applies both before the first
+   analysis (UI takes the pockets from the report: `main.ts load`); old pockets are placed at the size it fits at
+   (`max_scale`, as manual pockets are analysed; the UI used the auto-placement's scale). Fixed on the way:
+   `Session.old_pockets` was empty until something else read the parts. Calls now: load 9.2 s, faces 0.6, full analysis
+   5.9 (scratchpad `nt/str_ui.py OUT FILE [URL]`: load + strengthen timings per worker call, live or local).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
