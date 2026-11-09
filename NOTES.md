@@ -272,6 +272,22 @@ exist only on the original Windows machine (ask the user for the files).
    (`max_scale`, as manual pockets are analysed; the UI used the auto-placement's scale). Fixed on the way:
    `Session.old_pockets` was empty until something else read the parts. Calls now: load 9.2 s, faces 0.6, full analysis
    5.9 (scratchpad `nt/str_ui.py OUT FILE [URL]`: load + strengthen timings per worker call, live or local).
+24. **Weak points, per-feature thickening, reinforcement, Changes to your model** (2026-11-09; user: Leafeon's ears and
+   tail look brittle; a tool grading thin connections; thicken tail + ears; more walls/infill inside; flag settings
+   that reshape the model). `pokefit/joints.py` (module doc), `Params.strengthen_at` / `reinforce`, UI `web/src/weak.ts`,
+   `web/src/changes.ts`. Measured: rod 1.5 x 10 mm 1.34 N vs 1.33 N beam formula (tests/test_joints.py). Leafeon
+   at 34.3 mm: tail 1.8 N (D), ears 2.6 N (D), ear tips F; graded in ~10 s (CPython), ~12 s in the local UI.
+   Tail 4.5 mm + ears 3.0 mm (`strengthen_at`): tail 10.6 N, ears 9-10 N (B), but the shell union crumples the tail
+   blade and swells the ear rims (renders: scratchpad `weak/close_tail2.png`, `close_ears2.png`). A vertex-displacement
+   prototype (scratchpad `displace.py`) kept veins but still bulged: not adopted. Reinforcement: Bambu honours the
+   modifiers (10 % box: -0.4 g), but the X2D 0.20 Standard process is already 100 % infill: same 45.0 g with them.
+   Open: (a) a thickening that keeps relief on thin sheets (displacement along sheet normals + self-intersection
+   cleanup, or a hidden internal rib); (b) weak points in the browser engine: wired (worker `weak`) but not timed
+   there; (c) the ear's brown panel shrinks under a thickened rim (paint from the nearest old triangle).
+25. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
+   `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
+   personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).
+   Next: Phase 0 there (S6 runner, port 8780, one AMS parser), then pokefit task 0.4 (`printer.py` reads it).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
