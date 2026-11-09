@@ -6,6 +6,7 @@
  * Every call rejects with the engine's error text.
  */
 import type {
+  WeakReport,
   ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, LimbRegion, SliceVariants, SteelRow,
 } from "./types";
 import { versioned } from "./version";
@@ -213,6 +214,12 @@ export async function limb(session: string, params: Params,
   req: { point: number[]; normal: number[]; angle: number } | { part: number; face: number; angle: number }): Promise<LimbRegion> {
   if (mode === "local") return postJson<LimbRegion>("/api/limb", { session, params, ...req });
   return json<LimbRegion>(await call("limb", [session, JSON.stringify(params), JSON.stringify(req)]));
+}
+
+/** Thin features graded by the push that snaps them, weakest first (pokefit/pipeline.py `weak_points`). */
+export async function weakPoints(session: string, params: Params): Promise<WeakReport> {
+  if (mode === "local") return postJson<WeakReport>("/api/weak_points", { session, params });
+  return json<WeakReport>(await call("weak", [session, JSON.stringify(params)]));
 }
 
 export async function colourPieces(session: string, params: Params, filament: number): Promise<ColourPiece[]> {

@@ -38,6 +38,7 @@ NS_PROD = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 NS = {"m": NS_CORE, "p": NS_PROD}
 P_PATH = f"{{{NS_PROD}}}path"
 
+REINFORCE_NAME = "reinforce"   # name prefix of pokefit's reinforcement modifier volumes (joints.reinforcements)
 DEFAULT_COLOURS = ["#E05028", "#161616", "#FFFFFF", "#2850E0", "#0ACC38", "#FFF144", "#A03CF7", "#F98C36"]
 
 # Fast path for Bambu/Prusa-written meshes: fixed attribute order.
@@ -56,6 +57,9 @@ class Part:
     faces: np.ndarray                   # (m, 3) int64
     tri_extra: dict[int, str] = field(default_factory=dict)  # face index -> raw extra attrs
     subtype: str = "normal_part"
+    # Bambu per-part settings written into Metadata/model_settings.config (a "modifier_part" applies them to the
+    # solid inside it, e.g. {"wall_loops": "6", "sparse_infill_density": "100%"}).
+    settings: dict[str, str] = field(default_factory=dict)
 
     def mesh(self) -> trimesh.Trimesh:
         return trimesh.Trimesh(self.vertices, self.faces, process=False)
@@ -66,8 +70,10 @@ class Part:
         v = self.vertices @ m[:3, :3].T + m[:3, 3]
         if np.linalg.det(m[:3, :3]) < 0:
             extra = {i: remap_paint_attrs(a, (2, 1, 0)) for i, a in self.tri_extra.items()}
-            return Part(self.name, self.extruder, v, self.faces[:, ::-1].copy(), extra, self.subtype)
-        return Part(self.name, self.extruder, v, self.faces.copy(), dict(self.tri_extra), self.subtype)
+            return Part(self.name, self.extruder, v, self.faces[:, ::-1].copy(), extra, self.subtype,
+                        dict(self.settings))
+        return Part(self.name, self.extruder, v, self.faces.copy(), dict(self.tri_extra), self.subtype,
+                    dict(self.settings))
 
 
 _PAINT_ATTR_RE = re.compile(r'(paint_\w+)="([0-9A-Fa-f]+)"')
@@ -135,6 +141,9 @@ class FigureObject:
             from .oldpockets import strip_pockets
 
             parts, self.old_pockets, self.old_bases = strip_pockets(parts, self.transform)
+            # An earlier export's reinforcement volumes (joints.reinforcements): the "reinforce" setting makes them again
+            # for the shape as it is then. Kept as they are, they would be painted, fitted and measured as figure.
+            parts = [p for p in parts if not (p.subtype == "modifier_part" and p.name.startswith(REINFORCE_NAME))]
             # Like Bambu Studio's "Fix model": every edge joins exactly two faces before anything is cut or painted.
             from .repair import repair_parts
 
@@ -605,6 +614,7 @@ def write_project(src: Project, name: str, extruder: int, parts: list[Part], out
         f'      <metadata key="name" value={quoteattr(p.name)}/>\n'
         f'      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>\n'
         + (f'      <metadata key="extruder" value="{p.extruder}"/>\n' if p.extruder else "")
+        + "".join(f'      <metadata key={quoteattr(k)} value={quoteattr(v)}/>\n' for k, v in p.settings.items())
         + f'      <mesh_stat face_count="{len(p.faces)}" edges_fixed="0" degenerate_facets="0" '
           f'facets_removed="0" facets_reversed="0" backwards_edges="0"/>\n    </part>'
         for i, p in enumerate(parts))

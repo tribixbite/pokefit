@@ -29,7 +29,7 @@ from .checks import (bed_contact_check, merged, islands_check, mesh_checks, over
                      self_intersections, supports_verdict, thickness_check)
 from .conform import (DEFAULT_FILL, DEFAULT_MAX_DEPTH, FILL_CELL, FILL_NAME, FILL_OVERLAP, ConformInfo, ConformSpec,
                       Shaped, base_fill, conform_fill, conform_shape, disc_region)
-from .strengthen import StrengthenInfo, Thickening, thicken, with_shells
+from .strengthen import Local, StrengthenInfo, Thickening, thicken, with_shells
 from .colorize import (BOUNDED, MAX_PATH, MIRROR_MAX_ERROR, WAND_ANGLES, PaintOp, PaintState, TopologyCache,
                        PaintReplay, apply_paint, centroid_trees, colour_pieces, op_faces, pick_face, region_colours)
 from .fit import FLOOR_MAX, HullPoints, annulus_margin, best_floor, best_offset, check_fit, max_scale, prepare_points
@@ -148,6 +148,11 @@ class Params:
     # Strengthen thin parts (strengthen.py): thin features get this minimum thickness in mm where they join the
     # figure, tapering toward their tips (0 = off). Measured at `figure_height` if set, else the largest size.
     strengthen: float = 0.0
+    # Single features thickened to their own minimum (with `strengthen` for the rest, or alone): [{"part": i,
+    # "face": f, "mm": t, "root": r}] = the thin feature holding triangle f of `base_parts`' part i gets t mm where it
+    # joins, on the far side of triangle r (where it would break; -1 = anywhere) (strengthen.Local). The UI's
+    # weak-points list (`weak_points`, joints.py) fills it. None / [] = none.
+    strengthen_at: list[dict[str, Any]] | None = None
     # How far painted colours reach into the figure, in mm (Bambu `mmu_segmented_region_max_width`; deeper is
     # the object's own filament). None = the project's value (0 there = unlimited: paint fills inward until it
     # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
@@ -166,6 +171,17 @@ class Params:
     # Painted patches smaller than this (mm² at the print size) take the colour around them: a stray dab costs a
     # filament change on every layer it spans (colorize.Topology.specks). 0 = keep every patch.
     despeckle: float = 0.5
+    # Print weak features solid (joints.reinforcements): the export gets Bambu modifier volumes over every thin feature
+    # graded C or worse (more walls, 100 % infill inside). The shape is unchanged.
+    reinforce: bool = False
+
+    @property
+    def strengthens(self) -> bool:
+        """Whether thin parts are thickened at all (everywhere, or single features)."""
+        return self.strengthen > 0 or bool(self.strengthen_at)
+
+    def local_strengthen(self) -> list[Local]:
+        return [Local(q["part"], q["face"], q["mm"], q.get("root", -1)) for q in self.strengthen_at or []]
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -214,6 +230,12 @@ class Params:
         self.strengthen = float(self.strengthen)
         if not 0 <= self.strengthen <= 5:
             raise ValueError("strengthen must be 0..5 mm (0 = off)")
+        if self.strengthen_at:
+            at = [{"part": int(q["part"]), "face": int(q["face"]), "mm": round(float(q["mm"]), 3),
+                   "root": int(q.get("root", -1))} for q in self.strengthen_at]
+            if any(not 0 < q["mm"] <= 5 or q["part"] < 0 or q["face"] < 0 for q in at):
+                raise ValueError("strengthen_at: each needs part >= 0, face >= 0 and 0 < mm <= 5")
+            self.strengthen_at = at
         if self.figure_height is not None:
             self.figure_height = float(self.figure_height)
             if not 1 <= self.figure_height <= 1000:
@@ -358,11 +380,12 @@ class Session:
         return okey + (json.dumps(params.limbs, sort_keys=True),) if params.limbs else okey
 
     def _spec_key(self, params: Params, spec: ConformSpec | None) -> tuple:
-        strong = (round(params.strengthen, 3), params.figure_height if params.strengthen else None,
-                  round(self.ball_scale(params), 6) if params.strengthen else None,
-                  params.clearance if params.strengthen else None)
+        on = params.strengthens
+        strong = (round(params.strengthen, 3), params.figure_height if on else None,
+                  round(self.ball_scale(params), 6) if on else None, params.clearance if on else None,
+                  json.dumps(params.strengthen_at) if params.strengthen_at else None)
         if spec is None:
-            return self._figure_key(params) + strong + (self._floor_key(params) if params.strengthen else ())
+            return self._figure_key(params) + strong + (self._floor_key(params) if on else ())
         return self._figure_key(params) + (spec.bend, spec.flat_diameter, spec.max_depth, spec.fill,
                                              spec.fill_circle, spec.fill_shape, spec.fill_all,
                                              round(self.ball_scale(params), 6), params.clearance) + strong + \
@@ -489,7 +512,7 @@ class Session:
                     self._shapes[skey] = conform_shape(parts, cavity, spec)
                 parts, self._conform[key] = conform_fill(self._shapes[skey], spec)
             self._base[key] = parts
-            if params.strengthen > 0:
+            if params.strengthens:
                 parts = self._strengthened(params, parts, key)
             self._frames[key] = parts
             self._points[key] = prepare_points(np.vstack([p.vertices for p in parts]))
@@ -538,7 +561,7 @@ class Session:
             s = min(s, params.figure_height / height) if s > 0 else params.figure_height / height
         # The flat base gains nothing (no shell), so the shells line up with `parts` (and the painted ones) by index.
         th = thicken([p if p.name != FILL_NAME else replace(p, faces=p.faces[:0]) for p in parts], s,
-                     params.strengthen)
+                     params.strengthen, params.local_strengthen())
         self._thick[key], self._strength[key] = th, th.info
         return with_shells(parts, th)
 
@@ -546,7 +569,7 @@ class Session:
         """`parts` (`base_parts` order and shapes, e.g. painted) with strengthen's additions (`unit_parts`' shape),
         paint carried to the new triangles; `parts` themselves when strengthen is off."""
         self.unit_parts(params)
-        th = self._thick.get(self._key(params)) if params.strengthen > 0 else None
+        th = self._thick.get(self._key(params)) if params.strengthens else None
         return with_shells(parts, th) if th is not None else parts
 
     def strengthen_info(self, params: Params) -> StrengthenInfo | None:
@@ -1278,12 +1301,17 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     sinfo = session.strengthen_info(params)
     if sinfo is not None:
         fit_dict["strengthen"] = sinfo.to_dict()
-        checks.append(Check("strengthen", "Thin parts strengthened", "info",
-                            f"{sinfo.thin_share:.1%} of the surface was thinner than {sinfo.target_mm:g} mm at "
-                            f"{sinfo.scale * hp.height:.1f} mm tall: thickened at the joins, tapering to the tips "
-                            f"(up to {sinfo.max_push_mm:.2f} mm out)." if sinfo.thin_share > 0 else
-                            f"Nothing was thinner than {sinfo.target_mm:g} mm at {sinfo.scale * hp.height:.1f} mm tall.",
-                            round(sinfo.thin_share, 4)))
+        tall = f"{sinfo.scale * hp.height:.1f} mm tall"
+        each = (f" {sinfo.features} feature{'s' if sinfo.features != 1 else ''} thickened to {'their' if sinfo.features != 1 else 'its'} "
+                f"own minimum." if sinfo.features else "")
+        if sinfo.target_mm <= 0:
+            text = f"At {tall}:{each} (up to {sinfo.max_push_mm:.2f} mm out)"
+        elif sinfo.thin_share > 0:
+            text = (f"{sinfo.thin_share:.1%} of the surface was thinner than {sinfo.target_mm:g} mm at {tall}: thickened "
+                    f"at the joins, tapering to the tips (up to {sinfo.max_push_mm:.2f} mm out).{each}")
+        else:
+            text = f"Nothing was thinner than {sinfo.target_mm:g} mm at {tall}.{each}"
+        checks.append(Check("strengthen", "Thin parts strengthened", "info", text, round(sinfo.thin_share, 4)))
 
     t2 = time.time()
     uncut = False                         # pockets left uncut by a quick analysis (the full one cuts them)
@@ -1983,6 +2011,37 @@ def limb_region(session: Session, params: Params, point: list[float] | None, nor
             "length_mm": round(limb.length * s, 2), "joined": bool(len(limb.joint))}
 
 
+def weak_points(session: Session, params: Params) -> dict[str, Any]:
+    """Thin features graded by the push at their far end that would snap them (joints.py), weakest first, measured
+    on the figure as it prints (strengthened, at the fitted size). Each names a triangle of `base_parts` (`part`,
+    `face`: what `Params.strengthen_at` takes) and carries the preview triangles that show the piece that would
+    break off (`view_faces`)."""
+    from . import joints
+
+    session.use_simplify(params.simplify)
+    scale = solved(session, params)[0]
+    unit, base = session.unit_parts(params), session.base_parts(params)
+    t0 = time.time()
+    found = joints.weak_points(unit, scale) if scale > 0 else []
+    out = []
+    for w in found:
+        d = w.to_dict()
+        faces = w.faces
+        if unit[w.part] is not base[w.part] and len(faces):         # strengthened: a re-meshed copy of the part
+            faces = np.unique(_nearest_faces(base[w.part], replace(unit[w.part], faces=unit[w.part].faces[faces])))
+        # `strengthen_at`'s triangles (strengthen.Local): `root` nearest the section's centre, `face` the piece's
+        # triangle nearest the last section past it still under joints.GOAL: thickening covers the stretch between.
+        bp = base[w.part]
+        cen = bp.vertices[bp.faces].mean(axis=1)
+        d["root"] = int(np.argmin(((cen - np.asarray(w.centre)) ** 2).sum(axis=1))) if len(bp.faces) else -1
+        d["face"] = int(faces[np.argmin(((cen[faces] - np.asarray(w.end)) ** 2).sum(axis=1))]) if len(faces) else -1
+        d["view_faces"] = view_faces(session, params, w.part, faces) if len(faces) else []
+        out.append(d)
+    return {"scale": scale, "height_mm": round(scale * session.points(params).height, 2), "points": out,
+            "grades": {g: lim for lim, g in joints.GRADES}, "probe_mm": joints.PROBE,
+            "seconds": round(time.time() - t0, 2)}
+
+
 def _mirror_info(topo: TopologyCache) -> dict[str, Any]:
     plane = topo.mirror()
     return {"ok": plane.error <= MIRROR_MAX_ERROR, "error": round(plane.error, 4),
@@ -2158,8 +2217,11 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     # File tag: the ball's print percentage, or its inner diameter when that was given.
     pct = f"d{params.ball_diameter:.0f}mm" if params.ball_diameter else str(int(round(ball_s * 100)))
     stem = export_stem(session, params)
-    f3 = write_project(session.project, obj.name, session.extruder(params), final, out_dir / f"{stem}_pokefit_{pct}.3mf",
-                       settings=export_settings(session, params), made=made_with(params))
+    # Weak features printed solid (joints.reinforcements): Bambu modifier volumes, written to the 3MFs only.
+    settings = export_settings(session, params)
+    mods, held = reinforced(final, settings) if params.reinforce else ([], [])
+    f3 = write_project(session.project, obj.name, session.extruder(params), final + mods,
+                       out_dir / f"{stem}_pokefit_{pct}.3mf", settings=settings, made=made_with(params))
     shell_path = out_dir / f"shell_floor{session.cavity(params).seat_diameter:.1f}mm_{pct}.stl"
     shell_note = ""
     try:
@@ -2172,7 +2234,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     imp = None
     matches = [m for m in session.slot_matches(params) if m.used]
     if matches and session.reference:
-        parts, ext = remap_parts(final, session.extruder(params), matches)
+        parts, ext = remap_parts(final + mods, session.extruder(params), matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
                             settings=session.reference, made=made_with(params))
     # The same figure as one STL with a colour per triangle, for tools that take STL (Bambu Studio ignores it).
@@ -2183,7 +2245,16 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     rpath.write_text(json.dumps(rep.to_dict(), indent=1), encoding="utf-8")
     return {"figure_3mf": str(f3), "import_3mf": str(imp) if imp else None, "colour_stl": str(cstl),
             "shell_stl": str(shell_path) if shell_path else None, "report": str(rpath),
-            "note": shell_note, "status": rep.status, "import_map": [m.to_dict() for m in matches]}
+            "note": shell_note, "status": rep.status, "import_map": [m.to_dict() for m in matches],
+            "reinforced": [w.to_dict() for w in held], "reinforce_volumes": len(mods)}
+
+
+def reinforced(final: list[Part], process: dict | None) -> tuple[list[Part], list[Any]]:
+    """Modifier parts printing the weak features of `final` (print size) more solid than `process` does, and the
+    weak points graded for it (joints.reinforcements)."""
+    from .joints import reinforcements
+
+    return reinforcements(final, 1.0, process=process)
 
 
 def _shell_mesh(model: Path) -> trimesh.Trimesh:

@@ -41,6 +41,7 @@ export interface WebApi {
   paint_prepare(sid: string, params: string, req: string): string;
   colour_pieces(sid: string, params: string, req: string): string;
   limb(sid: string, params: string, req: string): string;
+  weak(sid: string, params: string): string;
   run_export(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
 }
 

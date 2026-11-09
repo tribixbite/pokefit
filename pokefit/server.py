@@ -15,6 +15,8 @@ API (all JSON unless noted):
   POST /api/pick        {session, params, point, normal, mode, angle, radius, stroke?} -> {part, face, path, faces, ...}
   POST /api/paint_prepare {session, params, mode, angle} -> builds tap structures before the first tap
   POST /api/colour_pieces {session, params, filament} -> {pieces: [{part, face, area_mm2, faces}]}
+  POST /api/weak_points {session, params} -> {scale, height_mm, points: [{grade, force_n, width_mm, ... part, face,
+                          view_faces}], grades, probe_mm, seconds}
   POST /api/limb        {session, params, point, normal | part, face; angle?} -> {part, face, faces, share, length_mm, joined}
   POST /api/slice       {session, params, x10}                     -> {job}
   GET  /api/job         ?id                                        -> {state, result|error}
@@ -42,7 +44,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, analyse, app_config, auto_simplify, export, reopened,
-                       input_checks, limb_region,
+                       input_checks, limb_region, weak_points,
                        open_session, pick, pieces_of_colour, prepare_paint, preview_faces, preview_glb, safe_stem,
                        slice_variants, steel_table)
 from .gltf import GLTF_SUFFIXES
@@ -500,6 +502,14 @@ class Handler(BaseHTTPRequestHandler):
                 res = limb_region(s, params, point, normal, float(body.get("angle", 15.0)), at)
         except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(400, str(exc)) from exc
+        self._json(res)
+
+    def post_weak_points(self, q: dict[str, str]) -> None:
+        body = self._json_body()
+        s, lock = _session(body.get("session"))
+        params = _params(body)
+        with lock:
+            res = weak_points(s, params)
         self._json(res)
 
     def post_colour_pieces(self, q: dict[str, str]) -> None:

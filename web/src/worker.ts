@@ -1,7 +1,7 @@
 /**
  * Web Worker running the pokefit Python engine in the browser (Pyodide), so the
  * static site (pokefit.party) needs no server. Messages:
- *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | steels | preview | faces | pick | paintPrepare | limb | colourPieces | export
+ *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | steels | preview | faces | pick | paintPrepare | limb | colourPieces | weak | export
  *   out: { id, ok: true, result } | { id, ok: false, error } | { status: string }
  */
 import Module from "manifold-3d";
@@ -70,6 +70,7 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
       case "paintPrepare": result = api.paint_prepare(args[0] as string, args[1] as string, args[2] as string); break;
       case "limb": result = api.limb(args[0] as string, args[1] as string, args[2] as string); break;
       case "colourPieces": result = api.colour_pieces(args[0] as string, args[1] as string, args[2] as string); break;
+      case "weak": result = api.weak(args[0] as string, args[1] as string); break;
       case "export": {
         const p = api.run_export(args[0] as string, args[1] as string);
         const [json, files] = p.toJs({ create_proxies: false });

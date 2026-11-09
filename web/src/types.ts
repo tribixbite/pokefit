@@ -75,6 +75,10 @@ export interface Params {
   figure_height: number | null;
   /** Strengthen thin parts: minimum thickness (mm) at their joins, tapering to their tips; 0 = off. */
   strengthen: number;
+  /** Single weak parts thickened (pipeline `strengthen_at`): from the weak-points list (`WeakPoint` part/face/root). */
+  strengthen_at?: StrengthenAt[] | null;
+  /** Print weak parts solid: Bambu modifier volumes over them in the export (joints.reinforcements). */
+  reinforce?: boolean;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
   /** Simplify the mesh when it loads (shape within 0.1 % of its size): a share of the file's triangles (0..1, the
@@ -238,6 +242,49 @@ export interface PickRequest {
 export interface PrepareResult {
   parts: number;
   mirror?: { ok: boolean; error: number; normal: number[] };
+}
+
+/** One weak part thickened to its own minimum (strengthen.Local): its triangles from `WeakPoint`. */
+export interface StrengthenAt {
+  part: number;
+  face: number;
+  root: number;
+  mm: number;
+}
+
+/** A thin feature graded by the push at its far end that would snap it (pokefit/joints.py WeakPoint). */
+export interface WeakPoint {
+  part: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+  force_n: number;
+  width_mm: number;
+  depth_mm: number;
+  area_mm2: number;
+  lever_mm: number;
+  length_mm: number;
+  volume_mm3: number;
+  /** 0 = the section is upright (stress along the layers) .. 1 = flat (pulls the layers apart). */
+  flat: number;
+  centre: number[];
+  normal: number[];
+  /** Triangles of `base_parts` naming it for `strengthen_at`: on the piece, and on its weak section. */
+  face: number;
+  root: number;
+  /** How far past the section it is still under grade C (mm). */
+  weak_mm: number;
+  /** Preview triangles showing the piece that would break off. */
+  view_faces: number[];
+}
+
+/** pipeline.weak_points. */
+export interface WeakReport {
+  scale: number;
+  height_mm: number;
+  points: WeakPoint[];
+  /** Grade -> the push (N) it holds at least. */
+  grades: Record<string, number>;
+  probe_mm: number;
+  seconds: number;
 }
 
 /** A resized or bent limb (reshape.py `LimbOp`): the tapped triangle names it, as for paint. */

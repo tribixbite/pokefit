@@ -2,6 +2,8 @@
 import * as api from "./api";
 import { makeCollapsible, sectionToggle } from "./collapse";
 import { Reshape } from "./reshape";
+import { carriedOver, modelChanges } from "./changes";
+import { WeakPanel } from "./weak";
 import { ColorizePanel } from "./colorize";
 import { textOn } from "./colour";
 import { formatDuration, pct } from "./geometry";
@@ -42,7 +44,7 @@ let defaults: Params = {
   pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "steel", object_id: null, slot: null, settings_source: "reference",
   process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null,
   filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
-  simplify: null, despeckle: 0.5,
+  simplify: null, despeckle: 0.5, strengthen_at: null, reinforce: false,
 };
 /** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
 const prefStore = browserStore();
@@ -142,6 +144,19 @@ const reshape = new Reshape({
   apply: () => void runAnalyse(),
   toast: (msg) => toast(msg),
 });
+
+/** "Weak points" (Figure card): thin parts graded, each thickened on its own; "print weak parts solid". */
+const weak = new WeakPanel({
+  params: () => state.params,
+  grade: () => api.weakPoints(state.session ?? "", state.params),
+  highlight: (part, faces) => viewer.highlightFaces(part, faces),
+  apply: () => void runAnalyse(),
+  busy: (on, text) => busy(on, text),
+  toast: (msg) => toast(msg),
+});
+
+/** The prefs a figure opened with (prefs.ts): what "Changes to your model" calls carried over from the last figure. */
+let carried: Partial<Params> = { ...remembered };
 
 // ------------------------------------------------------------------ helpers
 
@@ -339,7 +354,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
   // A reopened export's own base settings were the last figure's, not the user's: start from the user's again.
   const fresh: Params = { ...state.params, ...madeBefore, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
-    limbs: null, strengthen: 0,
+    limbs: null, strengthen: 0, strengthen_at: null,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
     fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "steel" };
   try {
@@ -349,6 +364,8 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     state.params.limbs = null;
     reshape.reset();
     state.params = fresh;
+    carried = readPrefs(prefStore);
+    weak.reset();
     syncControls();
     $("fileName").textContent = res.file;
     reference.figureOpened();
@@ -393,6 +410,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
     }
     if (placed) oldPocketsToast(old.length);
     else if (old.length) await placeOldPockets(old);
+    carriedToast();
     viewer.view("iso");
   } catch (e) {
     toast((e as Error).message);
@@ -452,7 +470,8 @@ function geometryKey(): string {
   const p = state.params;
   return JSON.stringify([state.session, p.object_id, p.rotate_x, p.rotate_y, p.rotate_z, p.bend, p.flat_base,
     p.steel, p.floor_diameter, JSON.stringify(p.limbs ?? null), p.flat_depth, p.flat_fill, p.fill_area, p.fill_circle, p.fill_shape, p.ball_scale, p.ball_diameter,
-    p.clearance, p.strengthen, p.strengthen ? p.figure_height : null, p.simplify]);
+    p.clearance, p.strengthen, JSON.stringify(p.strengthen_at ?? null),
+    p.strengthen || p.strengthen_at?.length ? p.figure_height : null, p.simplify]);
 }
 let shownGeometry = "";
 
@@ -519,6 +538,51 @@ function syncControls(): void {
     b.setAttribute("aria-checked", String(b.dataset.seat === p.pocket_seat)));
   for (const [id, key] of POCKET_INPUTS) $<HTMLInputElement>(id).value = String(p[key]);
   syncFillCircle();
+  weak.sync();
+}
+
+const ORIGIN_TEXT: Record<string, string> = {
+  remembered: "from your last figure", default: "pokefit's default", "this figure": "set for this figure",
+  file: "as the file opened",
+};
+
+/**
+ * "Changes to your model" (changes.ts): each setting reshaping the figure now, where it came from, and an Undo; the
+ * controls that set them are marked.
+ */
+function renderChanges(rep: Report | null): void {
+  const changes = modelChanges(state.params, rep, defaults, carried);
+  document.querySelectorAll(".changed-control").forEach((el) => el.classList.remove("changed-control"));
+  const rows = changes.map((c) => {
+    const row = h("div", { cls: "change-row" });
+    const what = h("span", { cls: "what" });
+    what.append(h("b", { textContent: c.label }), ` · ${c.detail}`);
+    const origin = h("span", { cls: `origin ${c.origin === "remembered" ? "remembered" : ""}`, textContent: ORIGIN_TEXT[c.origin] });
+    const undo = h("button", { cls: "btn small", textContent: "Undo", title: "Leave the model as it is here" });
+    undo.addEventListener("click", () => {
+      Object.assign(state.params, c.undo);
+      if ("limbs" in c.undo) reshape.reset();
+      syncControls();
+      void runAnalyse();
+    });
+    row.append(what, origin, undo);
+    const control = document.getElementById(c.control);
+    (control?.closest("label") ?? control)?.classList.add("changed-control");
+    return row;
+  });
+  $("changesList").replaceChildren(...rows);
+  $("changesBox").hidden = !rows.length;
+}
+
+/** As a file opens: say which settings carried over from the last figure are reshaping this one (Undo is listed). */
+function carriedToast(): void {
+  const c = carriedOver(modelChanges(state.params, state.report, defaults, carried));
+  if (!c.length) return;
+  const msg = `Carried over from your last figure: ${c.map((x) => x.label.toLowerCase()).join(", ")}. ` +
+    "Undo it under Figure → Changes to your model.";
+  // Another message from the same load (old pockets put back) stays: this one is added to it.
+  const t = $("toast");
+  toast(t.hidden ? msg : `${t.textContent} ${msg}`);
 }
 
 /** The "Fill where" controls from `state.params` (the circle's Ø shown at the print size). */
@@ -615,7 +679,8 @@ async function runAnalyse(rememberIt = true): Promise<void> {
   if (geometryKey() !== shownGeometry) {
     // The new shape is built before its preview answers (thickening a 300k figure: ~1 min in the browser engine):
     // say so at once, or the setting looks as if it did nothing.
-    busy(true, state.params.strengthen ? "Thickening thin parts…" : "Reshaping the figure…");
+    busy(true, state.params.strengthen || state.params.strengthen_at?.length ? "Thickening thin parts…" : "Reshaping the figure…");
+    weak.invalidate();
     await refreshFigure();
   }
   const seq = ++state.seq;
@@ -679,6 +744,7 @@ function show(rep: Report): void {
       `moved by at most ${scale ? `${Math.max(0.001, simp.error * scale).toFixed(3)} mm at this size` : `${simp.error.toFixed(3)} mm`}.`
     : state.params.simplify ? `${rep.object.faces.toLocaleString()} triangles: already within ${state.params.simplify.toLocaleString()}.` : "";
   $("simplifyInfo").hidden = !$("simplifyInfo").textContent;
+  renderChanges(rep);
   fileFaces = rep.object.file_faces;
   showSimplify(state.params.simplify);
   renderStatus(rep);

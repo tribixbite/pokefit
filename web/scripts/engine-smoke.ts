@@ -232,6 +232,13 @@ _, cnt = np.unique(e, axis=0, return_counts=True)
 f"{n} triangles, {int((cnt != 2).sum())} edges not on two"
 `) as string : "missing";
 console.log(`[${secs()} s] split by piece: ${pieces.length} patches; coloured STL ${stlEdges}`);
+// Weak points (joints.py) and the export's reinforcement volumes (modifier meshes simplified by the WASM meshopt).
+const weakRep = JSON.parse(api.weak(sitting.session, JSON.stringify(sitting.report.params)));
+const [reinfJson] = api.run_export(sitting.session, JSON.stringify({ ...sitting.report.params, reinforce: true }))
+  .toJs({ create_proxies: false }) as [string, unknown];
+const reinf = JSON.parse(reinfJson);
+console.log(`[${secs()} s] weak points: ${weakRep.points.length} (${weakRep.points.map((w: { grade: string }) => w.grade).join("")})` +
+  ` in ${weakRep.seconds} s; reinforced ${reinf.reinforced?.length ?? "?"}, volumes ${reinf.reinforce_volumes ?? "?"}`);
 
 const problems: string[] = [];
 if (!simp || simp.faces_before !== 20480 || !(simp.faces_after < 20480) || dense.report.object.parts[0].faces !== simp.faces_after) {
@@ -243,6 +250,10 @@ if (stamp.stamp?.length !== 9 || !(stamp.faces > 0) || !(splitShown > 0)) proble
 if (!(shapeView.shape?.length >= 1) || !(atob(shapeView.shape[0]).length > 0)) problems.push("shape map view");
 if (outlined.params.fill_area !== "shape" || outlined.status === undefined) problems.push("fill outline");
 if (pieces.length !== 3) problems.push(`split by piece (${pieces.length} patches, expected 3)`);
+if (!Array.isArray(weakRep.points) || weakRep.points.some((w: { face: number; view_faces: number[] }) => w.face < 0 || !w.view_faces.length) ||
+    !Array.isArray(reinf.reinforced)) {
+  problems.push("weak points / reinforcement");
+}
 if (!stlEdges.endsWith(", 0 edges not on two")) problems.push(`coloured STL (${stlEdges})`);
 if (!(wide.ball.floor_diameter > 21) || !(legTap.faces.length > 0 && legTap.share < 0.6) ||
     !(bentLeg.fit.max_scale > 0)) {

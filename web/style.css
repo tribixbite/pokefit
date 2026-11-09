@@ -471,3 +471,29 @@ body.painting .fit-pill, body.painting .view-legend { display: none; }
 .slot-chip .arrow { color: var(--muted); }
 .mini-sw { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 3px; border-radius: 5px; border: 1px solid #ffffff22; font: 700 10px/1 inherit; }
 .mini-sw.none { background: repeating-linear-gradient(45deg, #2a3446 0 3px, #1b2230 3px 6px); color: var(--muted); }
+
+/* "Changes to your model" (changes.ts): what is reshaping the figure now, with an Undo each. */
+.changes { border: 1px solid rgba(255, 179, 71, .45); border-radius: 10px; padding: 8px 10px; background: rgba(255, 179, 71, .06);
+  display: flex; flex-direction: column; gap: 6px; }
+.changes-head { font-size: 13px; font-weight: 600; }
+.change-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; }
+.change-row .what { flex: 1 1 160px; min-width: 0; }
+.change-row .origin { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: rgba(255, 255, 255, .08); color: var(--muted); }
+.change-row .origin.remembered { background: rgba(255, 179, 71, .18); color: var(--warn); }
+/* A control whose setting is reshaping the figure. */
+.changed-control { box-shadow: inset 3px 0 0 var(--warn); padding-left: 6px; border-radius: 4px; }
+
+/* Weak points (weak.ts). */
+.weak { display: flex; flex-direction: column; gap: 6px; }
+.weak-list { display: flex; flex-direction: column; gap: 4px; }
+.weak-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; padding: 4px 0; border-top: 1px solid rgba(255, 255, 255, .06); }
+.weak-text { flex: 1 1 180px; min-width: 0; color: var(--muted); }
+.weak-actions { display: flex; gap: 6px; align-items: center; }
+.weak-actions select { min-height: 30px; }
+.weak-done { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.grade { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; font-weight: 700; font-size: 13px; color: #111; }
+.grade-A { background: #3fbf6f; }
+.grade-B { background: #9bd14a; }
+.grade-C { background: #f2c94c; }
+.grade-D { background: #f2994a; }
+.grade-F { background: #ff4d5e; color: #fff; }

@@ -188,6 +188,10 @@
 
       <section class="card">
         <h2>Figure</h2>
+        <div id="changesBox" class="changes" hidden role="group" aria-label="Changes to your model">
+          <div class="changes-head">Changes to your model <span class="muted">(the controls that make them are marked)</span></div>
+          <div id="changesList"></div>
+        </div>
         <div class="rot-grid" role="group" aria-label="Rotation">
           <label>X <span class="unit"><input id="rotX" type="number" step="1" inputmode="decimal" /> °</span></label>
           <label>Y <span class="unit"><input id="rotY" type="number" step="1" inputmode="decimal" /> °</span></label>
@@ -246,6 +250,14 @@
             <select id="strengthenSelect"><option value="0">Off</option><option value="1.2">1.2 mm</option>
               <option value="1.6">1.6 mm</option><option value="2">2 mm</option><option value="2.5">2.5 mm</option>
               <option value="3">3 mm</option><option value="4">4 mm</option></select></label>
+        </div>
+        <div class="weak" role="group" aria-label="Weak points">
+          <div class="row">
+            <button id="weakFind" class="btn" type="button" title="Grade every thin part (ear, tail, claw) by how hard a push at its end snaps it at its weakest point, at the print size">Find weak points</button>
+            <span id="weakInfo" class="muted"></span>
+          </div>
+          <div id="weakList" class="weak-list"></div>
+          <label class="check" title="The export gets Bambu modifier volumes over every weak part (grade C or worse): more walls and full infill inside them. The shape stays as it is. Nothing to add when your process already prints 100 % infill with 6 walls."><input id="reinforce" type="checkbox" /> print weak parts solid (more walls, full infill; shape unchanged)</label>
         </div>
         <div class="simplify" title="Cut a dense mesh down when it loads (like Bambu Studio's Simplify): painting, the analysis and slicing get several times faster, and noisy sculpts paint in cleaner regions. The surface moves by at most 0.1 % of the figure's size (about 0.03 mm), so it stops early where the shape needs the triangles. Changing it clears paint steps (they name triangles).">
           <div class="row seat-row">

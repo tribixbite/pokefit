@@ -58,6 +58,20 @@
   panel) fills smoothly instead of crumpling. Colours carry onto it from the nearest painted triangle; taps and
   paint still name the figure's own triangles. It can take tens of seconds on a spiky 300k-triangle figure (about a
   minute in the browser engine; "Thickening thin parts…" shows meanwhile). It is per figure, not remembered.
+- Weak points (Figure card, "Find weak points"): every thin part (thinner than 3 mm at the print size: an ear, a tail,
+  a claw) is graded by the push at its far end that would snap it at its weakest section (bending: strength x section
+  modulus / lever; about half the strength where the section lies flat, so the layers pull apart). A holds ~2 kg, B
+  ~800 g, C ~300 g, D ~100 g, F less or under 0.8 mm across. A cantilever rod 1.5 mm x 10 mm measures 1.34 N against
+  1.33 N by the beam formula. Each can be shown on the view and thickened on its own ("Thicken", per-feature
+  strengthen: only that part, from its weak section to where it already holds grade C; ~10 s to grade and ~30 s to
+  thicken a 300k figure on a PC). Thickening a thin detailed sheet (a leaf-shaped ear or tail) changes its look:
+  rims swell and fine relief fills in. "Print weak parts solid" instead adds Bambu modifier volumes over grade C-F
+  parts in the export (6 walls, 100 % infill): the shape stays; nothing changes when the process already prints 100 %
+  infill (Bambu's X2D 0.20 mm Standard does).
+- Changes to your model (top of the Figure card): every setting reshaping the figure now (simplified, parts reshaped,
+  legs bent, base pressed or filled, thickened), where it came from (your last figure, the default, set now) and an
+  Undo; its control is marked. A setting carried over from the last figure that reshapes the new one is also announced
+  as the file opens.
 - Height: a height in mm can be set (also before opening a file); it is used unless it does not fit, then the
   largest that fits is used, with a note. Settings that are changed (ball, steel, floor, magnets, pockets, height, shape,
   simplify, paint depth, specks) are remembered in the browser as the defaults; "reset settings" in the

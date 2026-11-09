@@ -100,7 +100,11 @@ def remap_parts(parts: list[Part], object_extruder: int, matches: list[SlotMatch
                 code, tail = rest.split('"', 1)
                 attrs = f'{head}paint_color="{remap_states(code, m)}"{tail}'
             extra[i] = attrs
-        # A part without its own filament inherits the object's; give it the mapped one explicitly.
-        ext = m.get(p.extruder or object_extruder, p.extruder or object_extruder)
-        out.append(Part(p.name, ext, p.vertices, p.faces, extra, p.subtype))
+        # A part without its own filament inherits the object's; give it the mapped one explicitly. Not a modifier:
+        # a filament on a modifier volume recolours the solid inside it.
+        if p.subtype == "modifier_part":
+            ext = m.get(p.extruder, p.extruder) if p.extruder else 0
+        else:
+            ext = m.get(p.extruder or object_extruder, p.extruder or object_extruder)
+        out.append(Part(p.name, ext, p.vertices, p.faces, extra, p.subtype, dict(p.settings)))
     return out, m.get(object_extruder, object_extruder)

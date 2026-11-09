@@ -84,6 +84,7 @@ BALLS = 8            # ... the candidates tried per grid point
 GROW_DEG = 45.0      # ... by their full push within this angle of their normal
 FACE_DEG = 80.0      # ... fading to nothing at this angle
 COARSE = 2           # the shell's first pass fills every COARSE-th grid point (`_shell`)
+LOCAL_REACH = (0.25, 1.0)  # a single feature (`Local`): in full to a quarter target past its last weak section, to 0 at 1
 # The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
 # (1 + KD_EPS) of the nearest (scipy `eps`). The Vaporeon at 2 mm: 47 -> 35 s single-threaded (as in the browser engine),
 # its surface within 0.08 mm of the exact build's (0.07 between two exact builds, by sampling); 1.0 moved 0.13. The same on
@@ -98,17 +99,36 @@ class StrengthenInfo:
     thin_share: float = 0.0         # share of the surface (vertices) thinner than the target
     max_push_mm: float = 0.0        # largest outward move
     voxel_mm: float = 0.0
+    features: int = 0               # thin features thickened to their own minimum (`Local`)
 
     def to_dict(self) -> dict[str, float]:
         return {k: round(v, 4) for k, v in asdict(self).items()}
 
 
-def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points: np.ndarray,
-                 inward: np.ndarray, reach: float, voxel: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per point (on the surface): the largest distance to the surface found along `inward` up to `reach` (about
-    half the local thickness, capped near `reach` for thick material), how far along `inward` the solid ends
-    (`reach` when it does not end within it), and how far OUT (against `inward`) the next solid is (`reach` when
-    none is within it: open space). All in the same units."""
+@dataclass
+class Voxels:
+    """Solid voxels of closed meshes: `inside[i, j, k]` is the cell centred at (xs[j], ys[i], zs[k]), `h` apart."""
+    inside: np.ndarray
+    xs: np.ndarray
+    ys: np.ndarray
+    zs: np.ndarray
+    h: float
+
+    def index(self, p: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(i, j, k) of the cells holding points `p` (clipped to the grid)."""
+        j = np.clip(np.round((p[:, 0] - self.xs[0]) / self.h).astype(np.intp), 0, len(self.xs) - 1)
+        i = np.clip(np.round((p[:, 1] - self.ys[0]) / self.h).astype(np.intp), 0, len(self.ys) - 1)
+        k = np.clip(np.round((p[:, 2] - self.zs[0]) / self.h).astype(np.intp), 0, len(self.zs) - 1)
+        return i, j, k
+
+    def centres(self, idx: tuple[np.ndarray, ...]) -> np.ndarray:
+        """Centres of cells (i, j, k)."""
+        return np.c_[self.xs[idx[1]], self.ys[idx[0]], self.zs[idx[2]]]
+
+
+def voxels(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], voxel: float) -> Voxels:
+    """The meshes' solid (ray parity along z: `magnets._crossings`) on a `voxel` grid, coarser when it would hold
+    over MAX_VOXELS cells, with two empty cells round it."""
     tri = np.vstack([v[f] for v, f in zip(meshes_v, meshes_f)]).astype(np.float64)
     lo, hi = tri.reshape(-1, 3).min(axis=0), tri.reshape(-1, 3).max(axis=0)
     h = voxel
@@ -123,6 +143,18 @@ def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points:
     acc = np.zeros((len(ys) * len(xs), len(zs) + 1), np.int16)
     np.add.at(acc, (cell, np.searchsorted(zs, z)), sign.astype(np.int16))
     inside = (np.cumsum(acc, axis=1)[:, :-1] > 0).reshape(len(ys), len(xs), len(zs))
+    return Voxels(inside, xs, ys, zs, h)
+
+
+def local_radius(meshes_v: list[np.ndarray], meshes_f: list[np.ndarray], points: np.ndarray,
+                 inward: np.ndarray, reach: float, voxel: float,
+                 grid: Voxels | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per point (on the surface): the largest distance to the surface found along `inward` up to `reach` (about
+    half the local thickness, capped near `reach` for thick material), how far along `inward` the solid ends
+    (`reach` when it does not end within it), and how far OUT (against `inward`) the next solid is (`reach` when
+    none is within it: open space). All in the same units. `grid`: the meshes' `voxels` at `voxel`, if made already."""
+    grid = grid if grid is not None else voxels(meshes_v, meshes_f, voxel)
+    inside, xs, ys, zs, h = grid.inside, grid.xs, grid.ys, grid.zs, grid.h
     dist = ndimage.distance_transform_edt(inside, sampling=h).astype(np.float32)
     r = np.zeros(len(points))
     exit_at = np.full(len(points), reach)
@@ -583,6 +615,61 @@ def _tidy(v: np.ndarray, f: np.ndarray, unit: float) -> tuple[np.ndarray, np.nda
     return sv, sf
 
 
+def _triangle(part: Part, face: int) -> tuple[np.ndarray, np.ndarray]:
+    """A triangle's centre and outward unit normal."""
+    a, b, c = part.vertices[part.faces[face]]
+    n = np.cross(b - a, c - a)
+    return (a + b + c) / 3, n / (np.linalg.norm(n) + 1e-12)
+
+
+def _local_weight(g: _Graph, part: Part, q: Local, thick: np.ndarray, t_unit: float, grid: Voxels,
+                  scale: float) -> np.ndarray:
+    """Per merged vertex of `part`, how much of a `t_unit` push the feature `q` takes (`Local`).
+
+    With a root triangle: the volumetric thin feature `joints.weak_points` found it in (`joints.feature_cells`: the
+    thin part holding `q.face`, from the section through `q.root` outward and one target back toward the body), the
+    surface over it, eased in over a quarter target. Without one, or when that triangle is not on a thin feature: the
+    connected surface thinner than `t_unit` round `q.face`, and the band its push blends out over (BLEND + 1 targets),
+    fading over half a target past that. A thin surface can run on from one feature to others over the bed (a tail
+    lying beside the legs), so the first is preferred: those are separate thin features there."""
+    from scipy.sparse.csgraph import connected_components, dijkstra
+
+    from .joints import PROBE, cell_under, feature_along
+
+    corners = part.faces[q.face]
+    if 0 <= q.root < len(part.faces):
+        along = feature_along(grid, PROBE / scale, _triangle(part, q.face), _triangle(part, q.root), t_unit)
+        if along is not None:
+            cells = cell_under(grid, g.pos, g.normals, np.isfinite(along))
+            d = np.full(g.n, np.nan)
+            d[cells >= 0] = along.flat[cells[cells >= 0]]
+            # Full from a target behind the section to `face` (the last weak section: joints.GOAL) and LOCAL_REACH[0]
+            # targets past it, none past LOCAL_REACH[1]: the weak stretch gets stronger; the rest of the feature (a
+            # leaf's blade past its stalk, an ear's serrated edge) keeps its shape.
+            fp, fn = _triangle(part, q.face)
+            fc = cell_under(grid, fp[None], fn[None], np.isfinite(along))[0]
+            far = float(along.flat[fc]) if fc >= 0 else 0.0
+            lo, hi = far + LOCAL_REACH[0] * t_unit, far + LOCAL_REACH[1] * t_unit
+            w = np.where(np.isfinite(d), np.clip((hi - np.nan_to_num(d, nan=hi)) / (hi - lo), 0.0, 1.0), 0.0)
+            # Eased out over about half a target onto the body round the feature's join (its cells stop at the
+            # body: cut off there, the push's fillet into the body would end in a step).
+            return np.asarray(np.clip(np.maximum(w, 2.0 * g.smooth(w, t_unit / 2, g.plain_lap())), 0.0, 1.0))
+    thin = thick < t_unit
+    seeds = np.unique(g.ids[corners])
+    seeds = seeds[thin[seeds]]
+    if not len(seeds):
+        return np.zeros(g.n)
+    e = g.edges[thin[g.edges[:, 0]] & thin[g.edges[:, 1]]]
+    _, comp = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(g.n, g.n)),
+                                   directed=False)
+    feature = thin & np.isin(comp, comp[seeds])
+    reach = (BLEND + 1.5) * t_unit
+    w = coo_matrix((g.elen, (g.edges[:, 0], g.edges[:, 1])), shape=(g.n, g.n)).tocsr()
+    d = np.asarray(dijkstra(w, directed=False, indices=np.flatnonzero(feature), min_only=True, limit=reach),
+                   np.float64)
+    return np.asarray(np.clip((reach - d) / (t_unit / 2), 0.0, 1.0))
+
+
 @dataclass
 class Thickening:
     """What `thicken` found: per part (in the order given), the solid it gains, or None."""
@@ -590,25 +677,42 @@ class Thickening:
     info: StrengthenInfo
 
 
-def thicken(parts: list[Part], scale: float, target: float) -> Thickening:
+@dataclass(frozen=True)
+class Local:
+    """A thin feature thickened to its own minimum: the one holding triangle `face` of part `part`, to `mm`. With a
+    `root` triangle (on the section where it would break: joints.py), only that feature from the section outward
+    (and one target back toward the body) gains (`_local_weight`)."""
+    part: int
+    face: int
+    mm: float
+    root: int = -1
+
+
+def thicken(parts: list[Part], scale: float, target: float, local: list[Local] | None = None) -> Thickening:
     """The solids that thicken figure-frame parts (scale 1) to `target` mm at print scale `scale` where thin
-    features join the figure, tapering to TIP x target at their far ends (module doc). Only solid parts gain."""
+    features join the figure, tapering to TIP x target at their far ends (module doc), and each `local` feature
+    to its own minimum (`_local_weight`). Only solid parts gain."""
     info = StrengthenInfo(target_mm=target, scale=scale)
     shells: list[tuple[np.ndarray, np.ndarray] | None] = [None] * len(parts)
     solid = [i for i, p in enumerate(parts) if p.subtype == "normal_part" and len(p.faces)]
-    if target <= 0 or scale <= 0 or not solid:
+    local = [q for q in (local or []) if q.mm > 0 and q.part in solid and 0 <= q.face < len(parts[q.part].faces)]
+    widest = max([target, *(q.mm for q in local)])
+    if widest <= 0 or scale <= 0 or not solid:
         return Thickening(shells, info)
-    t_unit, vox = target / scale, VOXEL / scale
+    # Measured to the widest target asked for (the same measurement as before when there are no local ones).
+    t_unit, vox = widest / scale, VOXEL / scale
     info.voxel_mm = VOXEL
+    info.features = len(local)
     graphs = {i: _Graph(parts[i].vertices, parts[i].faces) for i in solid}
     normals = {i: g.smooth_normals(t_unit / 2) for i, g in graphs.items()}
     # One measurement over all solid parts together: an eye set into a head is as thick as the head. Along smoothed
     # normals: a vertex's own normal beside a sharp convex edge runs along the wall and reads a solid box as thin.
     # TODO: a sharp 90-degree join (a flat fin on a box) then reads thick for its first ~half target (smoothed
     # normals tilt into the box there); sculpted figures join smoothly, so this is left as is.
+    grid = voxels([parts[i].vertices for i in solid], [parts[i].faces for i in solid], vox)
     radius, exits, clears = local_radius([parts[i].vertices for i in solid], [parts[i].faces for i in solid],
                                          np.vstack([graphs[i].pos for i in solid]),
-                                         np.vstack([normals[i] for i in solid]), REACH * t_unit, vox)
+                                         np.vstack([normals[i] for i in solid]), REACH * t_unit, vox, grid)
     start, thin_n, total, push_max = 0, 0, 0, 0.0
     for i in solid:
         g = graphs[i]
@@ -618,9 +722,17 @@ def thicken(parts: list[Part], scale: float, target: float) -> Thickening:
         # Pushed only across the feature (module doc): 1 where the solid ends within ACROSS[0] x its thickness
         # along the inward ray, 0 past ACROSS[1] x (a rim, an edge or a point: the ray runs along the feature).
         across = _fill_grooves(g, _across(thick, exits[sl], vox), normals[i])
-        thin_n += int((thick < t_unit).sum())
+        thin_n += int((thick < target / scale).sum())
         total += g.n
-        push = _push_sizes(g, thick, across, clears[sl], t_unit, vox)
+        push = (_push_sizes(g, thick, across, clears[sl], target / scale, vox) if target > 0 else np.zeros(g.n))
+        sizes: dict[float, np.ndarray] = {}          # `_push_sizes` per local target (several features share one)
+        for q in local:
+            if q.part != i:
+                continue
+            t_q = q.mm / scale
+            if t_q not in sizes:
+                sizes[t_q] = _push_sizes(g, thick, across, clears[sl], t_q, vox)
+            push = np.maximum(push, sizes[t_q] * _local_weight(g, parts[i], q, thick, t_q, grid, scale))
         if push.max(initial=0.0) <= 0:
             continue
         shells[i] = _shell(parts[i].vertices, parts[i].faces, push[g.ids], 1.0 / scale)
@@ -669,8 +781,9 @@ def with_shells(parts: list[Part], thickening: Thickening) -> list[Part]:
     return out
 
 
-def strengthen(parts: list[Part], scale: float, target: float) -> tuple[list[Part], StrengthenInfo]:
-    """Figure-frame parts (scale 1) with thin features thickened to `target` mm at print scale `scale` (`thicken`
-    then `with_shells`)."""
-    th = thicken(parts, scale, target)
+def strengthen(parts: list[Part], scale: float, target: float,
+               local: list[Local] | None = None) -> tuple[list[Part], StrengthenInfo]:
+    """Figure-frame parts (scale 1) with thin features thickened to `target` mm at print scale `scale`, and `local`
+    features to their own (`thicken` then `with_shells`)."""
+    th = thicken(parts, scale, target, local)
     return with_shells(parts, th), th.info

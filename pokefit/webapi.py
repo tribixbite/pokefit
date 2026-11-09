@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .pipeline import (Params, Session, analyse, app_config, auto_simplify, export, limb_region, open_session, pick, pieces_of_colour,
+from .pipeline import (Params, Session, analyse, app_config, auto_simplify, export, limb_region, open_session, pick, pieces_of_colour, weak_points,
                        reopened,
                        prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
@@ -150,6 +150,11 @@ def limb(sid: str, params_json: str, req_json: str) -> str:
     at = (int(req["part"]), int(req["face"])) if "part" in req else None
     return _dump(limb_region(_session(sid), Params.from_dict(json.loads(params_json)), req.get("point"),
                              req.get("normal"), float(req.get("angle", 15.0)), at))
+
+
+def weak(sid: str, params_json: str) -> str:
+    """Thin features graded by how hard a push snaps them (`pipeline.weak_points`)."""
+    return _dump(weak_points(_session(sid), Params.from_dict(json.loads(params_json))))
 
 
 def colour_pieces(sid: str, params_json: str, req_json: str) -> str:
