@@ -71,6 +71,19 @@ def test_a_thin_rod_is_graded_by_the_push_that_snaps_it_at_its_root() -> None:
     assert (tri[:, 0] > 9.5).all()
 
 
+def test_a_straight_rod_gets_stronger_towards_its_tip_at_every_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every section listed (none merged into the weakest): the push that snaps a uniform rod grows as its lever
+    # shortens. Counting slab voxels read some sections 30 % small (a dip mid-rod that was not in the rod).
+    monkeypatch.setattr(joints, "NEST", 0.0)
+    monkeypatch.setattr(joints, "MAX_REPORTED", 999)
+    rod = sorted((w for w in joints.weak_points([_part(_rods())], 1.0) if w.centre[0] > 10 and w.centre[1] < 0),
+                 key=lambda w: w.centre[0])
+    assert len(rod) > 20
+    forces = np.array([w.force_n for w in rod])
+    assert (forces[1:] >= forces[:-1] * 0.97).all(), forces.round(2)
+    assert all(w.area_mm2 == pytest.approx(np.pi * 0.75 ** 2, rel=0.2) for w in rod)
+
+
 def test_nothing_is_reported_without_thin_features() -> None:
     block = trimesh.creation.box((10, 10, 10)).apply_translation([0, 0, 5]).subdivide_to_size(0.5)
     assert joints.weak_points([_part(block)], 1.0) == []
@@ -86,9 +99,18 @@ def test_one_feature_thickened_and_the_other_left_as_it_is() -> None:
     face = int(thin.faces[np.argmin(((cen[thin.faces] - np.asarray(thin.end)) ** 2).sum(axis=1))])
     (out,), info = strengthen([part], 1.0, 0.0, [Local(0, face, 2.5, root)])
     assert info.features == 1 and info.max_push_mm > 0.2
+    # Stretched (strengthen._stretch): the same triangles, so paint and relief stay; only vertices move.
+    assert np.array_equal(out.faces, part.faces) and out.tri_extra == part.tri_extra
     after = joints.weak_points([out], 1.0)
     rods = {("thin" if w.centre[0] > 0 else "thick"): w for w in after if w.volume_mm3 > 5}
-    assert rods["thin"].force_n > 2 * thin.force_n                  # D -> C or better
+    assert rods["thin"].force_n > 2.5 * thin.force_n                # D -> C or better, all along the rod
+    # Thickest at its root, tapering (the moment falls towards the tip), the tip itself as it was.
+    v = out.vertices
+    def radius(x: float) -> float:
+        sel = (np.abs(v[:, 0] - x) < 0.2) & (v[:, 1] < 0)
+        return float(np.median(np.linalg.norm(v[sel][:, 1:] - [-3.0, 5.0], axis=1)))
+    assert radius(11.5) > radius(15) > radius(19) == pytest.approx(0.75, abs=0.02)
+    assert radius(11.5) > 1.0
     # The other rod (x < -10) and the body are untouched: every vertex there is one of the original's.
     from scipy.spatial import cKDTree
 

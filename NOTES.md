@@ -276,14 +276,20 @@ exist only on the original Windows machine (ask the user for the files).
    tail look brittle; a tool grading thin connections; thicken tail + ears; more walls/infill inside; flag settings
    that reshape the model). `pokefit/joints.py` (module doc), `Params.strengthen_at` / `reinforce`, UI `web/src/weak.ts`,
    `web/src/changes.ts`. Measured: rod 1.5 x 10 mm 1.34 N vs 1.33 N beam formula (tests/test_joints.py). Leafeon
-   at 34.3 mm: tail 1.8 N (D), ears 2.6 N (D), ear tips F; graded in ~10 s (CPython), ~12 s in the local UI.
-   Tail 4.5 mm + ears 3.0 mm (`strengthen_at`): tail 10.6 N, ears 9-10 N (B), but the shell union crumples the tail
-   blade and swells the ear rims (renders: scratchpad `weak/close_tail2.png`, `close_ears2.png`). A vertex-displacement
-   prototype (scratchpad `displace.py`) kept veins but still bulged: not adopted. Reinforcement: Bambu honours the
-   modifiers (10 % box: -0.4 g), but the X2D 0.20 Standard process is already 100 % infill: same 45.0 g with them.
-   Open: (a) a thickening that keeps relief on thin sheets (displacement along sheet normals + self-intersection
-   cleanup, or a hidden internal rib); (b) weak points in the browser engine: wired (worker `weak`) but not timed
-   there; (c) the ear's brown panel shrinks under a thickened rim (paint from the nearest old triangle).
+   at 34.3 mm (grader after the projected-area fix): tail 1.5 N (D), ears 2.0-2.4 N (D), ear tips F. Reinforcement:
+   Bambu honours the modifiers (10 % box: -0.4 g), but the X2D 0.20 Standard process is already 100 % infill.
+   **Stretch** (2026-11-09, second pass): single features are stretched across their thin directions
+   (`strengthen._stretch`, module doc), replacing the shell union for `Local`: veins, outline and the ears' brown
+   panels stay. Leafeon tail 4.5 / ears 3.0: ears 6.3-6.4 N (C); the tail is no longer a thin feature at the 3 mm
+   probe; at a 6 mm probe its weakest is 2.6 N at the stalk's join to the body (behind the weak section, not stretched).
+   Rods test: 1.3 N -> >= 3.6 N along the whole rod, triangles unchanged. Browser engine, 300k Leafeon: grade 15-18 s,
+   thicken the tail 39 s (local UI ~12 s / ~30 s). Files: Downloads `leafeon_pokefit_60_stretched_tail4.5_ears3*.3mf`,
+   `review_leafeon_stretched_{tail,ears}.png` (rows: current / old shell union / stretch); export in scratchpad
+   `batch/export_stretch/leafeon`, script `stretch.py` (prototype) and `stretch_grade.py` (per-feature grades, PROBE env).
+   Open: (a) slight lumps on the lower tail stalk and fine creases where the ears meet the head (the ease onto the body);
+   (b) the forehead leaf is still D (2.9 N): thicken it the same way; (c) the stalk's join behind the weak section
+   (probe 6 shows it): `REINFORCE_BACK`-like reach back into the join for the stretch?; (d) the user picks a Leafeon
+   variant (current / stretched).
 25. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).

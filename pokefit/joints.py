@@ -10,9 +10,10 @@ How (all parts' solid together, on a VOXEL grid at print size: `strengthen.voxel
    transforms); the rest of the solid falls into thin features (connected voxels), each joined to the body at its
    root.
 2. **Sections.** Each feature's geodesic distance from its root (Dijkstra over voxel neighbours, inside the feature)
-   grows by 1 mm per mm, so the voxels between two levels STEP apart are a slab whose volume / STEP is the area of the
-   cross-section there (the coarea formula). The slab's voxels projected onto the plane across the feature (normal:
-   from the slab to the next one) give the section's second moments and its narrowest width.
+   cuts it into slabs STEP thick. A slab's voxels projected onto the plane across the feature (normal: from the slab
+   to the next one), one per voxel-sized cell, are the cross-section there: its area, second moments and narrowest
+   width. (Volume / STEP, the coarea formula, was used first: how many voxel layers a slab holds varies with where
+   it starts, and some sections of a straight rod read 30 % small.)
 3. **Breaking force.** A push F at the far end bends the section by F x lever: the stress at its edge is
    F x lever / Z (Z = I / c, the section modulus about its weak axis). It breaks at the material's strength:
    F = sigma x Z / lever. The lever is the farthest point of the piece beyond the section (the voxels past it that
@@ -121,18 +122,22 @@ class _Section:
     long: np.ndarray
 
 
-def _section(pts: np.ndarray, normal: np.ndarray, h: float, cell_area: float) -> _Section | None:
-    """The cross-section the slab voxels `pts` (print mm, centres) make across `normal`; each voxel stands for
-    `cell_area` mm² of it."""
+def _section(pts: np.ndarray, normal: np.ndarray, h: float) -> _Section | None:
+    """The cross-section the slab voxels `pts` (print mm, centres, `h` apart) make across `normal`."""
     n = normal / (np.linalg.norm(normal) + 1e-12)
     u = np.cross(n, [1.0, 0.0, 0.0] if abs(n[0]) < 0.9 else [0.0, 1.0, 0.0])
     u /= np.linalg.norm(u)
     w = np.cross(n, u)
-    centre = pts.mean(axis=0)
-    r = pts - centre
-    xy = np.c_[r @ u, r @ w]
-    area = cell_area * len(pts)
-    m = cell_area * (xy.T @ xy) + np.eye(2) * area * h * h / 12      # each voxel's own spread
+    # The slab's voxels projected onto the section plane, one per h x h cell: how many voxel layers a geodesic slab
+    # holds varies with where it starts (26-neighbour steps), and counting voxels (n h³ / thickness) read some
+    # sections 30 % small (a dip in a straight rod's strength that was not in the rod).
+    r0 = pts - pts.mean(axis=0)
+    cells = np.unique(np.round(np.c_[r0 @ u, r0 @ w] / h).astype(np.int64), axis=0)
+    xy = cells * h
+    centre = pts.mean(axis=0) + (xy.mean(axis=0) @ np.vstack([u, w]))
+    xy = xy - xy.mean(axis=0)
+    area = h * h * len(cells)
+    m = h * h * (xy.T @ xy) + np.eye(2) * area * h * h / 12           # each cell's own spread
     vals, vecs = np.linalg.eigh(m)
     if vals[0] <= 0:
         return None
@@ -304,7 +309,6 @@ def _feature(grid: Voxels, sl: tuple[slice, ...], mask: np.ndarray, dist: np.nda
         return []
     offset = np.array([s.start for s in sl])
     slab_w = STEP                                                    # each section's slab is STEP thick
-    cell_area = h ** 3 / slab_w
 
     def sections(s: float) -> list[tuple[Any, dict]]:
         """The sections at distance `s` from the root (one per slab: a fork has one per branch)."""
@@ -329,7 +333,7 @@ def _feature(grid: Voxels, sl: tuple[slice, ...], mask: np.ndarray, dist: np.nda
                 normal = np.linalg.eigh(np.cov((pts - pts.mean(axis=0)).T))[1][:, 0]
             if np.linalg.norm(normal) < 1e-9:
                 continue
-            sec = _section(pts, normal, h, cell_area)
+            sec = _section(pts, normal, h)
             if sec is None:
                 continue
             force, lever, flat = _strength(sec, grid.centres(tuple((piece + offset).T)))

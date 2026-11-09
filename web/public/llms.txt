@@ -63,9 +63,10 @@
   modulus / lever; about half the strength where the section lies flat, so the layers pull apart). A holds ~2 kg, B
   ~800 g, C ~300 g, D ~100 g, F less or under 0.8 mm across. A cantilever rod 1.5 mm x 10 mm measures 1.34 N against
   1.33 N by the beam formula. Each can be shown on the view and thickened on its own ("Thicken", per-feature
-  strengthen: only that part, from its weak section to where it already holds grade C; ~10 s to grade and ~30 s to
-  thicken a 300k figure on a PC). Thickening a thin detailed sheet (a leaf-shaped ear or tail) changes its look:
-  rims swell and fine relief fills in. "Print weak parts solid" instead adds Bambu modifier volumes over grade C-F
+  strengthen: only that part, from its weak section to where it already holds grade C). It is stretched across its
+  thin direction (vertices move, no triangles are added): veins, outline and paint stay, and it tapers towards the tip
+  as the load does. A 300k figure takes ~12 s to grade and ~30 s to thicken on a PC, ~18 s and ~40 s in the browser
+  engine. "Print weak parts solid" instead adds Bambu modifier volumes over grade C-F
   parts in the export (6 walls, 100 % infill): the shape stays; nothing changes when the process already prints 100 %
   infill (Bambu's X2D 0.20 mm Standard does).
 - Changes to your model (top of the Figure card): every setting reshaping the figure now (simplified, parts reshaped,
