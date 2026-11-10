@@ -1137,7 +1137,7 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
   }
 }
 
-/** beambam's check of the G-code before "Start print": time, weight, purge, nozzle swaps, its warnings. */
+/** beambam's check of the G-code before "Start print": time, weight, waste (purge + prime tower), nozzle swaps, its warnings. */
 function printCheckView(plan: PrintPlan): HTMLElement {
   const c = plan.check;
   if (!c) return h("div", { cls: "muted", textContent: `File check unavailable: ${plan.check_error}` });
@@ -1145,7 +1145,8 @@ function printCheckView(plan: PrintPlan): HTMLElement {
     c.seconds != null ? formatDuration(c.seconds) : "",
     c.grams != null ? `${c.grams.toFixed(1)} g` : "",
     c.tool_changes != null ? `${c.tool_changes} tool changes` : "",
-    c.purge_g != null ? `purge ${c.purge_g.toFixed(1)} g` : "",
+    c.waste_g != null ? `waste ${c.waste_g.toFixed(1)} g` + (c.tower_g != null
+      ? ` (purge ${(c.purge_g ?? 0).toFixed(1)} g + prime tower ${c.tower_g.toFixed(1)} g)` : "") : "",
     c.nozzle_swaps != null ? `${c.nozzle_swaps} nozzle swaps` : "",
   ].filter(Boolean);
   const notes = [...c.warnings.map((w) => h("div", { cls: "warn-text", textContent: `⚠ ${w}` })),

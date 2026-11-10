@@ -197,7 +197,8 @@ def test_print_file_check_reads_beambams_analysis(tmp_path: Path, monkeypatch: p
     log = tmp_path / "args.json"
     report = {"plate": {"predicted_seconds": 6030, "weight_g": 19.62},
               "filaments": [{"id": 1, "nozzle": 0}, {"id": 2, "nozzle": 1}],
-              "totals": {"nozzle_swaps": 0, "tool_calls_total": 150, "flush_volume_g": 0.0},
+              "totals": {"nozzle_swaps": 0, "tool_calls_total": 150, "flush_volume_g": 0.0,
+                         "prime_tower_g": 3.25, "waste_g": 3.25},
               "warnings": ["purge over 10 g"], "hints": ["put filament 2 on the other nozzle"]}
     script = tmp_path / "fake_analyze.py"
     script.write_text("import json, sys\n"
@@ -207,9 +208,15 @@ def test_print_file_check_reads_beambams_analysis(tmp_path: Path, monkeypatch: p
     f = _print_file(tmp_path / "f.gcode.3mf")
     got = print_file_check(f)
     assert json.loads(log.read_text()) == ["analyze", "--json", str(f)]
-    assert got == {"seconds": 6030, "grams": 19.62, "purge_g": 0.0, "nozzle_swaps": 0, "tool_changes": 150,
-                   "nozzles": {"1": 0, "2": 1}, "warnings": ["purge over 10 g"],
-                   "hints": ["put filament 2 on the other nozzle"]}
+    assert got == {"seconds": 6030, "grams": 19.62, "waste_g": 3.25, "purge_g": 0.0, "tower_g": 3.25,
+                   "nozzle_swaps": 0, "tool_changes": 150, "nozzles": {"1": 0, "2": 1},
+                   "warnings": ["purge over 10 g"], "hints": ["put filament 2 on the other nozzle"]}
+    # An older beambam reports only the commanded purge: that is the waste then.
+    del report["totals"]["prime_tower_g"], report["totals"]["waste_g"]  # type: ignore[attr-defined]
+    report["totals"]["flush_volume_g"] = 1.5  # type: ignore[index]
+    script.write_text(f"print({json.dumps(json.dumps(report))})\n", encoding="utf-8")
+    old = print_file_check(f)
+    assert (old["waste_g"], old["purge_g"], old["tower_g"]) == (1.5, 1.5, None)
     fail = tmp_path / "fake_fail.py"
     fail.write_text("import sys\nsys.exit('not a .gcode.3mf')\n", encoding="utf-8")
     monkeypatch.setenv("POKEFIT_BEAMBAM", f'"{sys.executable}" "{fail}"')

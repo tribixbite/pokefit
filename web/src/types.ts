@@ -467,7 +467,11 @@ export interface PrintPlan {
 export interface PrintCheck {
   seconds: number | null;
   grams: number | null;
+  /** Filament thrown away: purge + prime tower (beambam `waste_g`). */
+  waste_g: number | null;
+  /** Commanded purge alone; 0 when a prime tower takes the purges. */
   purge_g: number | null;
+  tower_g: number | null;
   nozzle_swaps: number | null;
   tool_changes: number | null;
   /** Filament id -> nozzle index (0 / 1). */

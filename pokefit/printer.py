@@ -281,7 +281,7 @@ ANALYZE_TIMEOUT_S = 60.0
 
 
 def print_file_check(path: Path, timeout: float = ANALYZE_TIMEOUT_S) -> dict[str, Any]:
-    """beambam's own reading of a sliced print file (`beambam analyze --json`: the G-code's tool changes, purge,
+    """beambam's own reading of a sliced print file (`beambam analyze --json`: the G-code's tool changes, waste (purge + prime tower),
     nozzle swaps, its warnings and hints). Reads only the file: it never contacts the printer. The same
     analysis `beambam print --dry-run` gates on."""
     cmd = beambam_command()
@@ -301,8 +301,12 @@ def print_file_check(path: Path, timeout: float = ANALYZE_TIMEOUT_S) -> dict[str
     except json.JSONDecodeError as exc:
         raise PrinterError(f"beambam analyze printed no JSON: {exc}") from exc
     plate, totals = d.get("plate") or {}, d.get("totals") or {}
+    purge, tower = totals.get("flush_volume_g"), totals.get("prime_tower_g")
+    # With a prime tower, same-nozzle purges go into the tower and `flush_volume_g` reads 0: beambam's `waste_g`
+    # (purge + tower) is what is thrown away. Older beambam builds have only `flush_volume_g`.
+    waste = totals.get("waste_g", purge if tower is None else (purge or 0.0) + tower)
     return {"seconds": plate.get("predicted_seconds"), "grams": plate.get("weight_g"),
-            "purge_g": totals.get("flush_volume_g"), "nozzle_swaps": totals.get("nozzle_swaps"),
+            "waste_g": waste, "purge_g": purge, "tower_g": tower, "nozzle_swaps": totals.get("nozzle_swaps"),
             "tool_changes": totals.get("tool_calls_total"),
             "nozzles": {str(f.get("id")): f.get("nozzle") for f in d.get("filaments") or []},
             "warnings": [str(w) for w in d.get("warnings") or []], "hints": [str(h) for h in d.get("hints") or []]}
