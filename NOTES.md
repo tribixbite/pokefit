@@ -45,7 +45,8 @@ exist only on the original Windows machine (ask the user for the files).
    `local-installs`).
 5. **Paint depth**: `mmu_segmented_region_interlocking_depth` 0 / 0.4 / 0.8 mm (max width 1.6) = 666.6 / 664.6 /
    665.8 min, 284 changes each (8-colour Charmander): no time effect; strength needs a physical test. Not exposed.
-6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only).
+6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only;
+   waste = beambam `waste_g`, purge + prime tower: `flush_volume_g` alone read 0 g with a tower).
 7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
    automated download). The user downloads, then opens the file.
 8. **Conform limits**: designed for the largest-fit scale and the figure's floor (`Session.floor`); the flat base's walls are
@@ -282,14 +283,22 @@ exist only on the original Windows machine (ask the user for the files).
    (`strengthen._stretch`, module doc), replacing the shell union for `Local`: veins, outline and the ears' brown
    panels stay. Leafeon tail 4.5 / ears 3.0: ears 6.3-6.4 N (C); the tail is no longer a thin feature at the 3 mm
    probe; at a 6 mm probe its weakest is 2.6 N at the stalk's join to the body (behind the weak section, not stretched).
-   Rods test: 1.3 N -> >= 3.6 N along the whole rod, triangles unchanged. Browser engine, 300k Leafeon: grade 15-18 s,
-   thicken the tail 39 s (local UI ~12 s / ~30 s). Files: Downloads `leafeon_pokefit_60_stretched_tail4.5_ears3*.3mf`,
-   `review_leafeon_stretched_{tail,ears}.png` (rows: current / old shell union / stretch); export in scratchpad
-   `batch/export_stretch/leafeon`, script `stretch.py` (prototype) and `stretch_grade.py` (per-feature grades, PROBE env).
+   Rods test: 1.3 N -> >= 3.6 N along the whole rod, triangles unchanged.
+   **Even sheets** (2026-11-09, third pass; user: the ear's brown panel should scale with the outline): the stretch
+   shrank the panel 11 % (concave face pushed inward). `strengthen._even_sheet`: a bent sheet thickens on its convex
+   side, its sideways move spreads linearly from the rim. Leafeon v2 (tail 4.5 / ears 3.0): brown 110.6 mm2 vs 115.6
+   original at the same scale (v1 105.0); ears C 5.8 N (v1 6.3-6.4; probe 3); tail off the list at probe 3, 2.2 N at the
+   stalk join at probe 6 (v1 2.6; grader placement there moves +-10 % with the blade's shape, not pinned on the change).
+   Slice 3.14 h, 45.1 g, 55 colour changes. Browser engine, 300k Leafeon, thicken the tail: worker 29 s (v1 30 s; the
+   restricted `smooth` halved the stretch's own time). Files: Downloads
+   `leafeon_pokefit_60_stretched_v2_tail4.5_ears3*.3mf`, `review_leafeon_stretched_v2_{ears,ear_backs,tail}.png` (rows:
+   current / v1 / v2); scratchpad `batch/export_stretch8/leafeon`, `panel_area.py` (area per filament), `closeup.py`,
+   `stretch_grade.py` (per-feature grades, PROBE env), `nt/weak_browser.py` (THICKEN=1).
    Open: (a) slight lumps on the lower tail stalk and fine creases where the ears meet the head (the ease onto the body);
    (b) the forehead leaf is still D (2.9 N): thicken it the same way; (c) the stalk's join behind the weak section
-   (probe 6 shows it): `REINFORCE_BACK`-like reach back into the join for the stretch?; (d) the user picks a Leafeon
-   variant (current / stretched).
+   (probe 6 shows it): reach the stretch back into the join?; (d) the panel still keeps 4 % less than the original: an
+   exact per-vertex cancellation keeps 98 % but left a 0.1 mm ripple on the ear's back (the shift is smoothed over a
+   target); (e) the user picks a Leafeon variant (current / v2; they said stretched is fine).
 25. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).

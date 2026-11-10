@@ -119,6 +119,44 @@ def test_one_feature_thickened_and_the_other_left_as_it_is() -> None:
     assert d.max() < 1e-6
 
 
+def _curved_fin() -> trimesh.Trimesh:
+    """A 20 x 12 x 10 mm body with a bent fin 10 mm long out of its +x face: the lower part of a pipe along x (inner
+    radius 2.5, 0.6 mm wall, axis at y = 0, z = 7) below z = 6, a sheet curved like an ear (concave face up)."""
+    body = trimesh.creation.box((20, 12, 10)).apply_translation([0, 0, 5])
+    pipe = trimesh.creation.annulus(r_min=2.5, r_max=3.1, height=10.5, sections=96)
+    pipe.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [0, 1, 0]))
+    pipe.apply_translation([10 + 10.5 / 2 - 0.5, 0, 7])
+    lower = trimesh.creation.box((12, 16, 6)).apply_translation([15, 0, 3])
+    fin = trimesh.boolean.intersection([pipe, lower], engine="manifold")
+    m = trimesh.boolean.union([body, fin], engine="manifold").subdivide_to_size(0.3)
+    assert isinstance(m, trimesh.Trimesh)
+    return m
+
+
+def test_a_bent_sheet_thickens_on_its_convex_side_and_keeps_its_concave_face() -> None:
+    # Pushing a concave face out along its normals shrinks it: an ear's painted inner panel lost 11 % of its area, this
+    # fin's 4.5 % (the outer face grew 4 %).
+    # strengthen._even_sheet puts the thickening on the convex side instead; the concave face keeps its size.
+    part = _part(_curved_fin())
+    thin = min((w for w in joints.weak_points([part], 1.0) if w.centre[0] > 10), key=lambda w: w.force_n)
+    cen = part.vertices[part.faces].mean(axis=1)
+    root = int(np.argmin(((cen - np.asarray(thin.centre)) ** 2).sum(axis=1)))
+    face = int(thin.faces[np.argmin(((cen[thin.faces] - np.asarray(thin.end)) ** 2).sum(axis=1))])
+    (out,), _ = strengthen([part], 1.0, 0.0, [Local(0, face, 2.0, root)])
+    assert np.array_equal(out.faces, part.faces)
+    # The fin's faces (past the body), split by their distance to the pipe's axis: inner (concave) and outer.
+    r = np.linalg.norm(cen[:, 1:] - [0.0, 7.0], axis=1)
+    fin = (cen[:, 0] > 10.3) & (cen[:, 2] < 5.9) & (np.abs(r - 2.8) < 0.35)
+    inner, outer = fin & (r < 2.8), fin & (r > 2.8)
+    def area(v: np.ndarray, sel: np.ndarray) -> float:
+        t = v[part.faces[sel]]
+        return float(np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1).sum() / 2)
+    assert area(out.vertices, inner) == pytest.approx(area(part.vertices, inner), rel=0.02)
+    assert area(out.vertices, outer) > 1.05 * area(part.vertices, outer)
+    after = [w for w in joints.weak_points([out], 1.0) if w.centre[0] > 10]
+    assert not after or min(w.force_n for w in after) > 1.4 * thin.force_n
+
+
 def test_params_take_single_features_and_check_them() -> None:
     p = Params(strengthen_at=[{"part": 0, "face": 3, "mm": 2.5, "root": 7}])
     assert p.strengthens and p.local_strengthen() == [Local(0, 3, 2.5, 7)]

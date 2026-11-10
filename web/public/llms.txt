@@ -65,7 +65,8 @@
   1.33 N by the beam formula. Each can be shown on the view and thickened on its own ("Thicken", per-feature
   strengthen: only that part, from its weak section to where it already holds grade C). It is stretched across its
   thin direction (vertices move, no triangles are added): veins, outline and paint stay, and it tapers towards the tip
-  as the load does. A 300k figure takes ~12 s to grade and ~30 s to thicken on a PC, ~18 s and ~40 s in the browser
+  as the load does. A curved part (a cupped ear) is thickened on its outer side, so a panel painted inside keeps its
+  size. A 300k figure takes ~12 s to grade and ~30 s to thicken on a PC, ~18 s and ~40 s in the browser
   engine. "Print weak parts solid" instead adds Bambu modifier volumes over grade C-F
   parts in the export (6 walls, 100 % infill): the shape stays; nothing changes when the process already prints 100 %
   infill (Bambu's X2D 0.20 mm Standard does).

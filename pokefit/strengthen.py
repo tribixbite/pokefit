@@ -43,11 +43,14 @@ of the normals over STRETCH_AXES targets of surface: n n^T is the same on both f
 a rod two, and the length none), the feature's thickness across them (chords from its faces, not its rim), and a move
 of (k - 1) x half that thickness along P n (the smoothed normal's part across the feature: a sheet's faces move straight
 out, its rim barely, a rod all round), k = the thickness needed / the thickness there. The thickness needed tapers as
-sqrt(the length left to the tip) (bending moment linear, strength ~ thickness squared). The moves are smoothed over
+sqrt(the length left to the tip) (bending moment linear, strength ~ thickness squared). On a sheet (`_even_sheet`) a
+bent one is thickened on its convex side only (a concave face pushed out along its normal shrinks: an ear's painted
+inner panel lost 11 % of its area) and the sideways part is spread linearly across the faces from the rim (a panel
+widens with its outline); Leafeon's ear panels then keep their area within 2 %. The moves are smoothed over
 STRETCH_SMOOTH targets. A shell union (below) instead filled a leaf tail's veins, crumpled its blade and swelled an
 ear's rims and shrank the panel painted inside it (Leafeon, 2026-11-09); stretched, the veins and panel stay, and the
-grade came out at least as strong (tail 1.6 -> 3.0 N vs 2.4 N, ears 2.2 -> 8.3-8.6 N vs 8.8 N, both graded with a 6 mm
-probe). Moving vertices along plain normals was tried before for the whole figure and left scaly relief (see 4): the
+grade came out at least as strong (graded with a 6 mm probe, before joints.py read sections by projected area: tail
+1.6 -> 3.0 N vs 2.4 N, ears 2.2 -> 8.3-8.6 N vs 8.8 N; with it and `_even_sheet`, probe 3: ears 2.0-2.4 -> 5.8 N). Moving vertices along plain normals was tried before for the whole figure and left scaly relief (see 4): the
 stretch's moves are smooth fields and only across the feature.
 
 Limits: the thickness is measured at one print size (the height asked for, else the largest that fits); a smaller
@@ -101,11 +104,16 @@ COARSE = 2           # the shell's first pass fills every COARSE-th grid point (
 # nothing a target further on.
 LOCAL_REACH = (0.25, 1.25)
 STRETCH_AXES = 1.0   # its thin directions: the normals' second moments smoothed over this many targets of surface
-STRETCH_SMOOTH = 0.5  # the move itself smoothed over this many targets (no creases where the thin directions turn)
+STRETCH_SMOOTH = 0.5  # the move smoothed over this many targets (no creases where the thin directions turn; 1.0 took
+#                       13 % off a rod's gain: the peak at its weak section flattened)
+STRETCH_SHIFT_SMOOTH = 1.0  # a bent sheet's shift to its convex side smoothed over this many targets first (at 0.5 it
+#                             left a 0.1 mm ripple on an ear's back; a shift adds no thickness, so this costs none)
 STRETCH_FACE = 4     # the local thickness is a mean of chords weighted by |P n|^this: a sheet's faces, not its rim
 STRETCH_KNOWN = 0.02  # ... measured only where that weight averages at least this (else noise: no move)
 STRETCH_MIN = 1e-4   # moves under this share of a target are dropped (the smoothing's far tail: the rest stays exact)
-# The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
+STRETCH_SHEET = 0.5  # a feature is a sheet where its second thin direction is under this share of the first
+STRETCH_RIM = 0.5    # a sheet vertex whose move is over this share sideways is on its rim (`_even_sheet`)
+STRETCH_CURVE = (0.05, 0.2)  # targets / bend radius: a sheet thickened half each side .. all on its convex side# The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
 # (1 + KD_EPS) of the nearest (scipy `eps`). The Vaporeon at 2 mm: 47 -> 35 s single-threaded (as in the browser engine),
 # its surface within 0.08 mm of the exact build's (0.07 between two exact builds, by sampling); 1.0 moved 0.13. The same on
 # the 3D distance search (47 -> 27 s) left a thin fin unthickened (tests/test_strengthen): not there.
@@ -256,17 +264,25 @@ class _Graph:
 
         if radius <= 0 or self.n == 0:
             return x
-        a = diags(self.share) + (radius * radius / 8.0) * lap
-        pre = diags(1.0 / a.diagonal())
         cols = x.reshape(len(x), -1).astype(np.float64)
-        out = np.empty_like(cols)
+        out = cols.copy()
+        # Only vertices with an edge in `lap` change (a vertex without one keeps its value): a feature's surface
+        # (`_stretch`'s sub-graph) is a few % of a 300k figure, and every CG step otherwise ran over all of it.
+        live = np.flatnonzero(lap.diagonal() > 0)
+        if not len(live):
+            return x
+        if len(live) < self.n:
+            lap = lap.tocsr()[live][:, live]
+        share = self.share[live]
+        a = diags(share) + (radius * radius / 8.0) * lap
+        pre = diags(1.0 / a.diagonal())
         for j in range(cols.shape[1]):
-            b = self.share * cols[:, j]
+            b = share * cols[live, j]
             try:
-                y, _ = cg(a, b, x0=cols[:, j], rtol=1e-6, maxiter=500, M=pre)
+                y, _ = cg(a, b, x0=cols[live, j], rtol=1e-6, maxiter=500, M=pre)
             except TypeError:                     # scipy < 1.12 names it `tol`
-                y, _ = cg(a, b, x0=cols[:, j], tol=1e-6, maxiter=500, M=pre)
-            out[:, j] = y
+                y, _ = cg(a, b, x0=cols[live, j], tol=1e-6, maxiter=500, M=pre)
+            out[live, j] = y
         return out.reshape(x.shape)
 
     def smooth_normals(self, radius: float) -> np.ndarray:
@@ -750,9 +766,95 @@ def _stretch(g: _Graph, part: Part, q: Local, prof: _Profile, t_q: float, grid: 
     short = np.where(np.isfinite(t_loc), np.maximum(need - t_loc, 0.0), 0.0)
     amount = np.clip(prof.weight[on] * short / 2.0, 0.0, GAP_SHARE * clear)
     move[on] = d * amount[:, None]
+    # Which way each bit of a sheet curves: smoothing over a target pulls the surface toward its concave side. Each
+    # face only sees its own side, so a lens-shaped blade (a leaf tail) reads convex on both and a cupped ear the same
+    # way on both: the sheet's bend is the mean of a vertex's and the far face's (the nearest vertex where the chord
+    # across leaves the solid): cancelled on the lens, kept on the cup.
+    from scipy.spatial import cKDTree
+
+    bow = sub.smooth(g.pos, t_q, lap)[on] - g.pos[on]
+    across = chord < REACH * t_q
+    far = g.pos[on] - d / np.maximum(mag[:, None], 1e-9) * np.where(across, chord, 0.0)[:, None]
+    _, opp = cKDTree(g.pos[on]).query(far)
+    bow = 0.5 * (bow + bow[np.where(across, opp, np.arange(len(bow)))])
+    move = _even_sheet(move, on, vec[:, :, 2], rel[:, 1], d, bow, t_q, GAP_SHARE * clear, sub, lap)
     move = sub.smooth(move, STRETCH_SMOOTH * t_q, lap)
     move[np.linalg.norm(move, axis=1) < STRETCH_MIN * t_q] = 0.0
     return move
+
+
+def _even_sheet(move: np.ndarray, on: np.ndarray, thin_axis: np.ndarray, rel2: np.ndarray, d: np.ndarray,
+                bow: np.ndarray, t_q: float, cap: np.ndarray, sub: _Graph, lap: Any) -> np.ndarray:
+    """`_stretch`'s moves on a sheet (leaf, ear) made to keep what is painted or carved on its faces. Two things
+    shrank an ear's painted inner panel (by 11 % of its area on Leafeon) while its outline grew:
+
+    - Curvature. Each face moved out along its normal by half the shortfall, and a concave face moved outward
+      shrinks (a convex one grows). Where the sheet curves, the thickening goes to its convex side instead: the
+      concave face stays, the convex one moves the whole shortfall (same thickness gained). By STRETCH_CURVE: from a
+      bend radius of 1 / STRETCH_CURVE[0] targets (flat: half each, as before) to 1 / STRETCH_CURVE[1] (all to the
+      convex side). Never past `cap` (its share of the open space in front, per vertex).
+    - Width. A face's vertices moved only through the sheet and only the rim, whose normals lie in it, moved
+      sideways: the outline widened round a panel of the same size. The sideways part is kept as it is on the rim
+      (in-plane share over STRETCH_RIM) and off the feature (none), and on the faces is the harmonic blend between
+      those: linear across a strip, so the whole section widens by one factor and a panel with its outline.
+
+    `on`: the vertices `_stretch` measured; per one of them, `thin_axis` (the thinnest direction), `rel2` (how thin
+    the second direction is, relative to the first: near 1 on a rod, whose moves are left as they are), `d` (the
+    move's direction), `bow` (the surface smoothed over a target `t_q`, minus where it is, averaged with the far
+    face's: toward the sheet's concave side).
+    `sub`, `lap`: the feature's surface and its Laplacian (vertices off it have no edges)."""
+    from scipy.sparse.linalg import spsolve
+
+    sheet = rel2 < STRETCH_SHEET
+    if not sheet.any():
+        return move
+    m = move[on]
+    along_thin = np.einsum("vi,vi->v", m, thin_axis)
+    through = along_thin[:, None] * thin_axis
+    side = m - through
+    # The bend: one implicit heat step over radius r moves a surface of mean curvature H by about r^2 H / 4 toward
+    # its centre; a sheet bent like a cylinder of radius R has H = 1 / 2R, so 1 / R ~ 8 |bow . axis| / r^2.
+    toward = np.einsum("vi,vi->v", bow, thin_axis)
+    bend = 8.0 * np.abs(toward) / (t_q * t_q) * t_q          # targets / bend radius
+    x = np.clip((bend - STRETCH_CURVE[0]) / (STRETCH_CURVE[1] - STRETCH_CURVE[0]), 0.0, 1.0)
+    shift = np.where(sheet, x * x * (3.0 - 2.0 * x), 0.0)
+    convex = -np.sign(toward)[:, None] * thin_axis            # away from the centre of the bend
+    # Concave face (moving toward the centre): + shift x its move back out; convex face: + the same again outward.
+    # Both faces move the same way, so it is a shift of the whole section, not thickness: smoothed wider than the
+    # move, as a mean over the faces only (the rim moves sideways, so its own shift is ~0: counted, it thinned the
+    # shift near a panel's edge and the panel kept 5 % less of its area), and the rim takes the faces' shift.
+    share = np.linalg.norm(d - np.einsum("vi,vi->v", d, thin_axis)[:, None] * thin_axis, axis=1) / \
+        np.maximum(np.linalg.norm(d, axis=1), 1e-12)
+    faces = sheet & (share < STRETCH_RIM)
+    src = np.zeros((len(move), 4))
+    src[on, :3] = np.where(faces, shift * np.abs(along_thin), 0.0)[:, None] * convex
+    src[on, 3] = faces
+    mean = sub.smooth(src, STRETCH_SHIFT_SMOOTH * t_q, lap)[on]
+    seen = mean[:, 3] > STRETCH_KNOWN
+    spread = np.where((seen & sheet)[:, None], mean[:, :3] / np.where(seen, mean[:, 3], 1.0)[:, None], 0.0)
+    gained = through + spread
+    size = np.linalg.norm(gained, axis=1)
+    through = gained * np.minimum(1.0, cap / np.maximum(size, 1e-12))[:, None]
+    move = move.copy()
+    move[on] = through + side
+    free = np.zeros(len(move), bool)
+    free[np.flatnonzero(on)[faces]] = True
+    if not free.any():
+        return move
+    side_all = np.zeros_like(move)
+    side_all[on] = side
+    fixed = ~free
+    lap = lap.tocsr()
+    a = lap[free][:, free]
+    rhs = -(lap[free][:, fixed] @ side_all[fixed])
+    # A free patch that touches nothing fixed (or a vertex with no edges) would make the system singular: a tiny
+    # pull to zero on every free vertex settles those at no sideways move and changes the rest by ~1e-9.
+    a = a + diags(np.full(a.shape[0], 1e-9 * max(float(np.abs(a.diagonal()).mean()), 1e-12)))
+    blend = spsolve(a.tocsc(), rhs)
+    out = move.copy()
+    idx = np.flatnonzero(free)
+    out[idx] = (through[np.searchsorted(np.flatnonzero(on), idx)] + np.asarray(blend).reshape(len(idx), 3))
+    return out
 
 
 @dataclass
