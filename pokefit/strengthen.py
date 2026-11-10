@@ -46,8 +46,10 @@ out, its rim barely, a rod all round), k = the thickness needed / the thickness 
 sqrt(the length left to the tip) (bending moment linear, strength ~ thickness squared). On a sheet (`_even_sheet`) a
 bent one is thickened on its convex side only (a concave face pushed out along its normal shrinks: an ear's painted
 inner panel lost 11 % of its area) and the sideways part is spread linearly across the faces from the rim (a panel
-widens with its outline); Leafeon's ear panels then keep their area within 2 %. The moves are smoothed over
-STRETCH_SMOOTH targets. A shell union (below) instead filled a leaf tail's veins, crumpled its blade and swelled an
+widens with its outline); Leafeon's ear panels then lose about 4 % of their area instead of 11 % (a test's bent fin
+keeps its concave face within 2 %). The moves are smoothed over STRETCH_SMOOTH targets with the cotangent Laplacian
+(`_Graph.cot_lap`) in STRETCH_STEPS heat steps, and where two features' moves overlap they are blended by length^
+OVERLAP_POWER (`_stretched`). A shell union (below) instead filled a leaf tail's veins, crumpled its blade and swelled an
 ear's rims and shrank the panel painted inside it (Leafeon, 2026-11-09); stretched, the veins and panel stay, and the
 grade came out at least as strong (graded with a 6 mm probe, before joints.py read sections by projected area: tail
 1.6 -> 3.0 N vs 2.4 N, ears 2.2 -> 8.3-8.6 N vs 8.8 N; with it and `_even_sheet`, probe 3: ears 2.0-2.4 -> 5.8 N). Moving vertices along plain normals was tried before for the whole figure and left scaly relief (see 4): the
@@ -113,7 +115,12 @@ STRETCH_KNOWN = 0.02  # ... measured only where that weight averages at least th
 STRETCH_MIN = 1e-4   # moves under this share of a target are dropped (the smoothing's far tail: the rest stays exact)
 STRETCH_SHEET = 0.5  # a feature is a sheet where its second thin direction is under this share of the first
 STRETCH_RIM = 0.5    # a sheet vertex whose move is over this share sideways is on its rim (`_even_sheet`)
-STRETCH_CURVE = (0.05, 0.2)  # targets / bend radius: a sheet thickened half each side .. all on its convex side# The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
+STRETCH_CURVE = (0.05, 0.2)  # targets / bend radius: a sheet thickened half each side .. all on its convex side
+OVERLAP_POWER = 4    # overlapping features' moves weigh in by their length to this power (`_stretched`)
+COT_FLOOR = 0.01    # `_Graph`'s smallest edge weight (a cotangent weight under it, from an obtuse sliver, is raised)
+STRETCH_STEPS = 3   # the final smoothing of the moves in this many heat steps (one step's kernel has a cusp: a jump in
+#                      the moves, e.g. where the thickness is first measured, came out as a 0.05 mm crease on a forehead)
+# The shell's search for samples pushed in front of a grid point (4D power distance) returns candidates within
 # (1 + KD_EPS) of the nearest (scipy `eps`). The Vaporeon at 2 mm: 47 -> 35 s single-threaded (as in the browser engine),
 # its surface within 0.08 mm of the exact build's (0.07 between two exact builds, by sampling); 1.0 moved 0.13. The same on
 # the 3D distance search (47 -> 27 s) left a thin fin unthickened (tests/test_strengthen): not there.
@@ -239,10 +246,52 @@ class _Graph:
         self.elen = np.linalg.norm(self.pos[self.edges[:, 0]] - self.pos[self.edges[:, 1]], axis=1)
         self.edge = float(np.median(self.elen)) if len(self.elen) else 0.0
         # For `smooth`: edge weights 1 / length^2 and each vertex's share deg / 4 (on an even mesh 4 / deg x the sum
-        # of (x_j - x_i) / h^2 is the Laplacian), so a radius is the same mm on any triangles.
+        # of (x_j - x_i) / h^2 is the Laplacian), so a radius is the same mm on any even triangles.
         self.w = 1.0 / np.maximum(self.elen, 1e-6 * max(self.edge, 1e-12)) ** 2
         self.share = np.maximum(np.asarray(a.sum(axis=1)).ravel(), 1) / 4.0
         self._plain: Any = None
+        self._fi = fi
+        self._cot: Any = None
+        self.area = np.zeros(0)
+
+    def cot_lap(self) -> Any:
+        """The cotangent Laplacian (use with `smooth(..., area=True)`): the surface's own Laplace-Beltrami operator on
+        any triangles, for smoothing that becomes a shape. `plain_lap`'s weights tie a vertex to its short edges'
+        neighbours only: on a simplified sculpt mixing 0.02 and 0.3 mm edges in one triangle a smoothed move stayed
+        0.05 mm uneven across single edges (creases on Leafeon's forehead). The measuring steps keep `plain_lap`:
+        the thickening's strength was tuned on it (a rod's gain fell from 2.8x to 2.3x with this one everywhere)."""
+        if self._cot is None:
+            w, self.area = self._cotangent(self._fi, self.edges, self.n)
+            self._cot = self._laplacian(w)
+        return self._cot
+
+    def _cotangent(self, fi: np.ndarray, edges: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+        """Per edge of `edges` its cotangent weight (half the sum of the cotangents of the angles facing it), clamped
+        to COT_FLOOR (an obtuse sliver's long edge keeps a small positive weight: a weighted average, connected); per
+        vertex a third of its triangles' area (merged ids `fi`)."""
+        p = self.pos[fi]
+        area = np.zeros(n)
+        weight = np.zeros(len(edges))
+        if not len(fi) or not len(edges):
+            return weight, np.maximum(area, 1e-12)
+        cross = np.linalg.norm(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]), axis=1)
+        for c in range(3):
+            np.add.at(area, fi[:, c], cross / 6.0)
+        scale_sq = float(np.median(self.elen)) ** 2 if len(self.elen) else 1.0
+        ok = cross > 1e-12 * max(scale_sq, 1e-30)                 # degenerate triangles add nothing
+        keys = edges[:, 0].astype(np.int64) * n + edges[:, 1]
+        order = np.argsort(keys)
+        for c in range(3):
+            i, j, k = fi[:, c], fi[:, (c + 1) % 3], fi[:, (c + 2) % 3]
+            u, v = self.pos[j] - self.pos[i], self.pos[k] - self.pos[i]   # the angle at i faces edge (j, k)
+            cot = np.einsum("fi,fi->f", u, v) / np.maximum(cross, 1e-30)
+            a_, b_ = np.minimum(j, k), np.maximum(j, k)
+            sel = ok & (a_ != b_)
+            pos = np.searchsorted(keys, a_[sel].astype(np.int64) * n + b_[sel], sorter=order)
+            np.add.at(weight, order[np.minimum(pos, len(order) - 1)], 0.5 * cot[sel])
+        weight = np.maximum(weight, COT_FLOOR)
+        mean_area = float(np.mean(area[area > 0])) if (area > 0).any() else 1.0
+        return weight, np.maximum(area, 1e-9 * mean_area)
 
     def _laplacian(self, w: np.ndarray) -> Any:
         """D - W for symmetric edge weights `w` (one per edge)."""
@@ -256,10 +305,13 @@ class _Graph:
             self._plain = self._laplacian(self.w)
         return self._plain
 
-    def smooth(self, x: np.ndarray, radius: float, lap: Any) -> np.ndarray:
-        """`x` (per vertex, one or more columns) diffused over about `radius` of surface: one implicit heat step,
-        (M + tau L) y = M x with tau = radius^2 / 8 (what (radius / edge)^2 passes of 0.5 x + 0.5 x the neighbours'
-        mean do on an even mesh), by conjugate gradients."""
+    def smooth(self, x: np.ndarray, radius: float, lap: Any, steps: int = 1, area: bool = False) -> np.ndarray:
+        """`x` (per vertex, one or more columns) diffused over about `radius` of surface: implicit heat steps,
+        (M + tau L) y = M x with tau = radius^2 / 8 in all (what (radius / edge)^2 passes of 0.5 x + 0.5 x the
+        neighbours' mean do on an even mesh), by conjugate gradients. One step's kernel, exp(-|x| / sqrt(tau)), has a
+        cusp: a jump in `x` comes out as a crease. `steps` > 1 splits tau over that many steps (same spread), whose
+        kernel is smooth at its centre: use it where the result is a shape. `area`: `lap` is `cot_lap()`, whose mass
+        is each vertex's area (else `plain_lap()`'s, deg / 4)."""
         from scipy.sparse.linalg import cg
 
         if radius <= 0 or self.n == 0:
@@ -273,15 +325,18 @@ class _Graph:
             return x
         if len(live) < self.n:
             lap = lap.tocsr()[live][:, live]
-        share = self.share[live]
-        a = diags(share) + (radius * radius / 8.0) * lap
+        share = (self.area if area else self.share)[live]
+        steps = max(int(steps), 1)
+        a = diags(share) + (radius * radius / 8.0 / steps) * lap
         pre = diags(1.0 / a.diagonal())
         for j in range(cols.shape[1]):
-            b = share * cols[live, j]
-            try:
-                y, _ = cg(a, b, x0=cols[live, j], rtol=1e-6, maxiter=500, M=pre)
-            except TypeError:                     # scipy < 1.12 names it `tol`
-                y, _ = cg(a, b, x0=cols[live, j], tol=1e-6, maxiter=500, M=pre)
+            y = cols[live, j]
+            for _ in range(steps):
+                b = share * y
+                try:
+                    y, _ = cg(a, b, x0=y, rtol=1e-6, maxiter=500, M=pre)
+                except TypeError:                 # scipy < 1.12 names it `tol`
+                    y, _ = cg(a, b, x0=y, tol=1e-6, maxiter=500, M=pre)
             out[live, j] = y
         return out.reshape(x.shape)
 
@@ -778,7 +833,8 @@ def _stretch(g: _Graph, part: Part, q: Local, prof: _Profile, t_q: float, grid: 
     _, opp = cKDTree(g.pos[on]).query(far)
     bow = 0.5 * (bow + bow[np.where(across, opp, np.arange(len(bow)))])
     move = _even_sheet(move, on, vec[:, :, 2], rel[:, 1], d, bow, t_q, GAP_SHARE * clear, sub, lap)
-    move = sub.smooth(move, STRETCH_SMOOTH * t_q, lap)
+    # The shape: smoothed with the surface's own Laplacian (`cot_lap`), in steps (no cusp).
+    move = sub.smooth(move, STRETCH_SMOOTH * t_q, sub.cot_lap(), STRETCH_STEPS, area=True)
     move[np.linalg.norm(move, axis=1) < STRETCH_MIN * t_q] = 0.0
     return move
 
@@ -923,12 +979,18 @@ def _stretched(parts: list[Part], solid: list[int], local: list[Local], scale: f
                 measured["t"] = 2 * r
             return measured["t"]
 
-        total = np.zeros((g.n, 3))
+        # Where two features' moves overlap (their eases onto the body meet), each weighs in by its length to the power
+        # OVERLAP_POWER: the longer one wins where they differ, smoothly. Picking the longer outright switched
+        # between two moves of about the same length but different ways along a line: a crease (Leafeon's forehead,
+        # between an ear's ease and the forehead leaf's).
+        num, den = np.zeros((g.n, 3)), np.zeros(g.n)
         for q in qs:
             t_q = q.mm / scale
             m = _stretch(g, parts[i], q, _local_profile(g, parts[i], q, thick, t_q, grid, scale), t_q, grid, nrm)
-            longer = np.linalg.norm(m, axis=1) > np.linalg.norm(total, axis=1)
-            total[longer] = m[longer]
+            w = (np.linalg.norm(m, axis=1) * scale) ** OVERLAP_POWER       # print mm: only the ratios count
+            num += m * w[:, None]
+            den += w
+        total = np.where(den[:, None] > 0, num / np.where(den > 0, den, 1.0)[:, None], 0.0)
         if total.any():
             moves[i] = total[g.ids]
             longest = max(longest, float(np.linalg.norm(total, axis=1).max()))

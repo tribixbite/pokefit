@@ -171,6 +171,12 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
   bend is the mean of a vertex's and the far face's.
 - `_Graph.smooth` on a feature's sub-graph solves only over the vertices with edges: CG over all 300k vertices of a
   figure (most of them isolated) made the stretch twice as slow for identical moves.
+- Smoothing that becomes a shape uses `_Graph.cot_lap` (cotangent Laplacian, area mass) in several heat steps:
+  `plain_lap`'s 1/length² weights left a smoothed move uneven across single edges on a simplified sculpt (edges 0.02
+  and 0.3 mm in one triangle: lumps), and one implicit step's kernel has a cusp. The measuring steps keep `plain_lap`
+  (the stretch's strength was tuned on it). Overlapping features' moves are blended by length⁴, never "the longer
+  one": the switch between two equal-length moves drew crack lines (Leafeon's forehead, ear vs forehead leaf). To find
+  such lines, render the export's raw triangles (`scripts`-style z-buffer, no split paint) beside the moved part.
 - A geodesic slab's voxel count / thickness (coarea) misread some sections of a straight rod by 30 % (how many voxel
   layers a 26-neighbour Dijkstra slab holds varies): count the slab's cells projected onto the section plane.
 - Bambu does honour per-part modifier settings written in model_settings.config (a 10 % infill box took 0.4 g off a

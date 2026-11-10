@@ -284,21 +284,21 @@ exist only on the original Windows machine (ask the user for the files).
    panels stay. Leafeon tail 4.5 / ears 3.0: ears 6.3-6.4 N (C); the tail is no longer a thin feature at the 3 mm
    probe; at a 6 mm probe its weakest is 2.6 N at the stalk's join to the body (behind the weak section, not stretched).
    Rods test: 1.3 N -> >= 3.6 N along the whole rod, triangles unchanged.
-   **Even sheets** (2026-11-09, third pass; user: the ear's brown panel should scale with the outline): the stretch
-   shrank the panel 11 % (concave face pushed inward). `strengthen._even_sheet`: a bent sheet thickens on its convex
-   side, its sideways move spreads linearly from the rim. Leafeon v2 (tail 4.5 / ears 3.0): brown 110.6 mm2 vs 115.6
-   original at the same scale (v1 105.0); ears C 5.8 N (v1 6.3-6.4; probe 3); tail off the list at probe 3, 2.2 N at the
-   stalk join at probe 6 (v1 2.6; grader placement there moves +-10 % with the blade's shape, not pinned on the change).
-   Slice 3.14 h, 45.1 g, 55 colour changes. Browser engine, 300k Leafeon, thicken the tail: worker 29 s (v1 30 s; the
-   restricted `smooth` halved the stretch's own time). Files: Downloads
-   `leafeon_pokefit_60_stretched_v2_tail4.5_ears3*.3mf`, `review_leafeon_stretched_v2_{ears,ear_backs,tail}.png` (rows:
-   current / v1 / v2); scratchpad `batch/export_stretch8/leafeon`, `panel_area.py` (area per filament), `closeup.py`,
-   `stretch_grade.py` (per-feature grades, PROBE env), `nt/weak_browser.py` (THICKEN=1).
-   Open: (a) slight lumps on the lower tail stalk and fine creases where the ears meet the head (the ease onto the body);
-   (b) the forehead leaf is still D (2.9 N): thicken it the same way; (c) the stalk's join behind the weak section
-   (probe 6 shows it): reach the stretch back into the join?; (d) the panel still keeps 4 % less than the original: an
-   exact per-vertex cancellation keeps 98 % but left a 0.1 mm ripple on the ear's back (the shift is smoothed over a
-   target); (e) the user picks a Leafeon variant (current / v2; they said stretched is fine).
+   **Even sheets** (third pass): `strengthen._even_sheet`, a bent sheet thickens on its convex side (the ear's brown
+   panel had shrunk 11 %). **v3** (2026-11-10, fourth pass): forehead leaf added (`{"part":0,"face":208384,"root":296339,
+   "mm":3.0}`: 2.0 N D -> 4.0 N C); overlapping features' moves blended by length^4 (`OVERLAP_POWER`; picking the longer
+   drew crack lines on the forehead where the ear's and leaf's eases met); the final move smoothing uses the cotangent
+   Laplacian (`_Graph.cot_lap`) in 3 heat steps (lumps on the tail stalk and ear backs gone; measuring steps keep
+   `plain_lap`: with cot everywhere the rod test's gain fell to 2.3x). Leafeon v3 (tail 4.5 / ears 3 / leaf 3): brown
+   112.6 mm2 (v2 110.6, current file 117.5); probe-3 list: ears C 3.3 / 3.8 N, leaf C 4.0 N, remaining D/F are tips
+   <= 4 mm3 and a 20 mm3 piece low at the front (3.0 N); scale 0.8508 (v2 0.8516). Slice 3.13 h, 45.0 g, 55 changes.
+   `_stretched` for tail + ears 46 s in Python (not timed in the browser this round). Files: Downloads
+   `leafeon_pokefit_60_stretched_v3_tail4.5_ears3_leaf3*.3mf`, `review_leafeon_stretched_v3_{head,forehead,tail}.png`
+   (rows: current / v2 / v3); scratchpad `batch/export_stretch12/leafeon`, `weak/leafeon_lf3_at.json`, `weak_list.py`
+   (app's weak list + handles), `raw_view.py` (export triangles, no paint), `panel_area.py`, `closeup.py`.
+   Open: (c) the stalk's join behind the weak section (probe 6: 2.2 N): reach the stretch back into the join?; (d) the
+   panel keeps ~4 % less than the original (exact cancellation left a 0.1 mm ripple); (e) the user picks a Leafeon
+   variant (current / v2 / v3); (f) no test yet for overlapping features' blend (verified on Leafeon only).
 25. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).

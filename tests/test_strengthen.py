@@ -182,3 +182,34 @@ def test_a_pointed_end_keeps_its_shape(target: float) -> None:
     widths = [_width(after, z) for z in (7.5, 8.5, 9.5, 10.3)]
     assert all(a >= b - 0.02 for a, b in zip(widths, widths[1:])), widths
     assert widths[0] > _width(m, 7.5) + 0.2
+
+
+def test_shape_smoothing_is_even_on_uneven_triangles() -> None:
+    """`_Graph.cot_lap` (the stretch's final smoothing) leaves a linear field linear on a flat mesh of very uneven
+    triangles; the 1 / length^2 weights of `plain_lap` do not (a smoothed move stayed uneven across single edges: creases
+    on a simplified sculpt). Several heat steps spread as far as one."""
+    from scipy.spatial import Delaunay
+
+    from pokefit.strengthen import _Graph
+
+    rng = np.random.default_rng(3)
+    # Uneven on purpose: dense clusters among sparse points (edges from ~0.01 to ~1 mm).
+    pts = np.vstack([rng.uniform(0, 10, (400, 2)), rng.normal([5, 5], 0.15, (300, 2)),
+                     rng.normal([3, 7], 0.05, (200, 2))])
+    tri = Delaunay(pts).simplices
+    v = np.c_[pts, np.zeros(len(pts))]
+    g = _Graph(v, tri)
+    x = g.pos[:, 0].copy()
+    inner = np.linalg.norm(g.pos[:, :2] - [5, 5], axis=1) < 2.5           # away from the free border
+    cot = g.smooth(x, 1.0, g.cot_lap(), area=True)
+    plain = g.smooth(x, 1.0, g.plain_lap())
+    assert np.abs(cot - x)[inner].max() < 0.02
+    assert np.abs(plain - x)[inner].max() > 5 * np.abs(cot - x)[inner].max()
+    # Steps: the same spread (a spike's second moment) as one step.
+    spike = np.zeros(g.n)
+    i0 = int(np.argmin(np.linalg.norm(g.pos[:, :2] - [5, 5], axis=1)))
+    spike[i0] = 1.0
+    d2 = ((g.pos - g.pos[i0]) ** 2).sum(axis=1)
+    lap = g.cot_lap()
+    one, three = (g.smooth(spike, 1.0, lap, k, area=True) * g.area for k in (1, 3))
+    assert (one * d2).sum() / one.sum() == pytest.approx((three * d2).sum() / three.sum(), rel=0.1)
