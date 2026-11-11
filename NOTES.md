@@ -303,6 +303,22 @@ exist only on the original Windows machine (ask the user for the files).
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).
    Next: Phase 0 there (S6 runner, port 8780, one AMS parser), then pokefit task 0.4 (`printer.py` reads it).
+26. **Neck under a heavy end: not found, not fixable in the app** (2026-11-11; user: Charmander's tail flame snaps off,
+   "printed a bunch"). `printed/charmander.3mf` (Bambu-resaved import, 6892 tris, prints 24 mm tall, no pokefit
+   metadata) has an hourglass neck under the flame: 2.31 x 2.64 mm, 4.7 mm² at 9 mm above the bed, flame bulb 5.4 mm
+   above it, the paint's red/orange boundary on the same layer. Section model (joints' sigma_Z 20 MPa, lever to the
+   flame tip): 2.9 N (~290 g) at the tip. Gaps: (a) `joints.weak_points` never lists it at any probe 3-6: the bulb is
+   "body" (a ball fits), so the neck is a short thin piece between two bodies, lever ~1 mm, grade A/B; a neck should
+   take the lever of the smaller body beyond it. (b) `strengthen_at` without a root (`Local`, connected surface thinner
+   than mm) moved it +0.02 mm at 4 mm: `_stretch` averages chords over a target of surface, and the neck is ~1 target
+   long next to a 5.4 mm bulb (t_loc >= target, no shortfall). (c) Reshape "base width" on the flame limb: its joint
+   ring also runs round the side flicks (would bloat them) and the narrowest section is just below the joint.
+   Delivered by a script instead (`printed/charmander_tail_widen.py TARGET OUT.3mf`, force: `charmander_tail_force.py OUT.npy`; each horizontal section widened about its centroid to
+   softmax(width, T), only vertex lines of the user's 3MF changed): `printed/charmander_tail3.8mm.3mf` (narrowest
+   3.64 mm, 10.3 N, 3.6x) and `charmander_tail3.5mm.3mf` (3.37 mm, 8.1 N, 2.8x); watertight, same paint, slice 1.89 h
+   / 28.3 g / 24 changes as the original (+0.03 g). Reviews `printed/review_charmander_tail_{grey,colour}.png`
+   (rows: original / 3.5 / 3.8). A max filter on the widening along z made the bulb's underside a straight wall
+   (rejected). Open: (a)-(b) in the engine; the user picks 3.5 or 3.8 and reports a print.
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 
