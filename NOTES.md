@@ -303,22 +303,26 @@ exist only on the original Windows machine (ask the user for the files).
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).
    Next: Phase 0 there (S6 runner, port 8780, one AMS parser), then pokefit task 0.4 (`printer.py` reads it).
-26. **Neck under a heavy end: not found, not fixable in the app** (2026-11-11; user: Charmander's tail flame snaps off,
-   "printed a bunch"). `printed/charmander.3mf` (Bambu-resaved import, 6892 tris, prints 24 mm tall, no pokefit
-   metadata) has an hourglass neck under the flame: 2.31 x 2.64 mm, 4.7 mm² at 9 mm above the bed, flame bulb 5.4 mm
-   above it, the paint's red/orange boundary on the same layer. Section model (joints' sigma_Z 20 MPa, lever to the
-   flame tip): 2.9 N (~290 g) at the tip. Gaps: (a) `joints.weak_points` never lists it at any probe 3-6: the bulb is
-   "body" (a ball fits), so the neck is a short thin piece between two bodies, lever ~1 mm, grade A/B; a neck should
-   take the lever of the smaller body beyond it. (b) `strengthen_at` without a root (`Local`, connected surface thinner
-   than mm) moved it +0.02 mm at 4 mm: `_stretch` averages chords over a target of surface, and the neck is ~1 target
-   long next to a 5.4 mm bulb (t_loc >= target, no shortfall). (c) Reshape "base width" on the flame limb: its joint
-   ring also runs round the side flicks (would bloat them) and the narrowest section is just below the joint.
-   Delivered by a script instead (`printed/charmander_tail_widen.py TARGET OUT.3mf`, force: `charmander_tail_force.py OUT.npy`; each horizontal section widened about its centroid to
-   softmax(width, T), only vertex lines of the user's 3MF changed): `printed/charmander_tail3.8mm.3mf` (narrowest
-   3.64 mm, 10.3 N, 3.6x) and `charmander_tail3.5mm.3mf` (3.37 mm, 8.1 N, 2.8x); watertight, same paint, slice 1.89 h
-   / 28.3 g / 24 changes as the original (+0.03 g). Reviews `printed/review_charmander_tail_{grey,colour}.png`
-   (rows: original / 3.5 / 3.8). A max filter on the widening along z made the bulb's underside a straight wall
-   (rejected). Open: (a)-(b) in the engine; the user picks 3.5 or 3.8 and reports a print.
+26. **Neck under a heavy end** (2026-11-11; user: Charmander's tail flame snaps off, PLA, "printed a bunch"; then "make
+   it print both colors ... the tail color keeps printing in the middle of the tip"). `printed/charmander.3mf` (Bambu-
+   resaved, 6892 tris, prints 24 mm tall, PLA 0.20 HQ, 15 % infill, 2 walls, object filament 16 = red, paint depth
+   unlimited): hourglass neck under the flame, 2.31 x 2.64 mm at 9 mm up, 2.9 N at the tip by hand.
+   Engine (this commit): `joints.thin_parts` keeps only each solid's biggest thick piece as body (a flame bulb belongs
+   to its neck's feature: lever to the flame tip), a NECK_PROBE (4 mm) pass for necks under a thick piece (skips skins:
+   NECK_THIN, and necks seen at PROBE: NECK_SEEN), `WeakPoint.probe` -> `strengthen_at[].probe` -> `Local.probe`;
+   `strengthen._widen_neck` for such features (rings from voxel cuts across a centre line carried a target back into
+   the stalk, soft max of width and target). Charmander: graded C 3.2 N at 24 mm (was not listed), C 5.1 N at the app's
+   31 mm (probe 4); `strengthen_at` 4 mm at 31 mm: neck 2.97 -> 3.71 mm, no longer listed; at 24 mm / 3.8 mm: 2.31 ->
+   3.37 (the hand script reached 3.64: smoothing takes the peak). Leafeon v3 now also lists its whole tail from the base
+   (D 2.1 N, lever 29 mm = NOTES 24 (c)'s join); grading 9.5 -> 12.7 s (second labelling at 4 mm).
+   User's files (`printed/`, scripts beside them): `charmander_tail{3.5,3.8}mm.3mf` (widened by script, 8.1 / 10.3 N)
+   and `..._core.3mf` (+ paint depth 1.6 mm, object filament 4 = orange so the flame's core is orange from the tail up,
+   + a "Solid tail and flame" modifier: 6 walls / 100 %); slice 1.88 h 28.2 g 24 changes. G-code drawing
+   `review_charmander_tail_layers.png` (top: original, bottom: core): orange core in the flame at 10-14 mm (~1.2 mm
+   wide just above the neck, ~2.5 mm in the bulb). The original neck already printed solid (walls + solid infill: it is
+   thin), so the modifier adds little there. Open: the user prints and reports; belly cream is now 1.6 mm over an
+   orange core (should be opaque in PLA; unverified); paint depth is not in the UI (`Params.paint_depth` only); the app
+   cannot set the object's core filament; `_widen_neck` is not capped by open space (TODO in code).
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

@@ -177,6 +177,14 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
   (the stretch's strength was tuned on it). Overlapping features' moves are blended by length⁴, never "the longer
   one": the switch between two equal-length moves drew crack lines (Leafeon's forehead, ear vs forehead leaf). To find
   such lines, render the export's raw triangles (`scripts`-style z-buffer, no split paint) beside the moved part.
+- A neck holding a thick piece (Charmander's flame on its tail) was invisible: the piece fits a PROBE ball, so it was
+  "body" and the neck a short piece between two bodies (~1 mm lever, grade A; it snapped in print). `joints.thin_parts`
+  keeps only the biggest thick piece of each solid as body; such features are also searched at NECK_PROBE (a 3 mm neck
+  at 31 mm tall), and `strengthen._widen_neck` widens them (rings from voxel cuts across a centre line): `_stretch`'s
+  chord average over a target of surface read a one-target-long neck as thick as the flame (+0.02 mm). The NECK_PROBE
+  pass skips features mostly thin skin (NECK_THIN: at 4 mm Leafeon's surface joined into one 198k-voxel feature round
+  its tail, 10 s to measure) or already measured at PROBE (NECK_SEEN), and stops at the thick piece. Setting PROBE
+  itself to 4 failed the tuned ear/fin stretch tests.
 - A geodesic slab's voxel count / thickness (coarea) misread some sections of a straight rod by 30 % (how many voxel
   layers a 26-neighbour Dijkstra slab holds varies): count the slab's cells projected onto the section plane.
 - Bambu does honour per-part modifier settings written in model_settings.config (a 10 % infill box took 0.4 g off a

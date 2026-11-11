@@ -250,6 +250,8 @@ export interface StrengthenAt {
   face: number;
   root: number;
   mm: number;
+  /** The ball (mm) the weak point was found with (`WeakPoint.probe_mm`): a neck under a thick piece is found wider. */
+  probe?: number;
 }
 
 /** A thin feature graded by the push at its far end that would snap it (pokefit/joints.py WeakPoint). */
@@ -272,6 +274,8 @@ export interface WeakPoint {
   root: number;
   /** How far past the section it is still under grade C (mm). */
   weak_mm: number;
+  /** The ball (mm at print size) it was found with: joints PROBE, or NECK_PROBE for a neck under a thick piece. */
+  probe_mm: number;
   /** Preview triangles showing the piece that would break off. */
   view_faces: number[];
 }

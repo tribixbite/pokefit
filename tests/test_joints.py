@@ -157,12 +157,74 @@ def test_a_bent_sheet_thickens_on_its_convex_side_and_keeps_its_concave_face() -
     assert not after or min(w.force_n for w in after) > 1.4 * thin.force_n
 
 
+def _flame(d: float) -> trimesh.Trimesh:
+    """A 20 x 12 x 10 mm body with an upright neck Ø`d` from its top (z 10 to 15) holding a ball Ø6 (centre z 17.5):
+    a flame on a tail. Its sections lie flat (the layers pull apart) and the lever reaches the ball's top, z 20.5."""
+    body = trimesh.creation.box((20, 12, 10)).apply_translation([0, 0, 5])
+    neck = trimesh.creation.cylinder(radius=d / 2, height=6.0, sections=48).apply_translation([0, 0, 12.5])
+    ball = trimesh.creation.icosphere(subdivisions=4, radius=3.0).apply_translation([0, 0, 17.5])
+    m = trimesh.boolean.union([body, neck, ball], engine="manifold").subdivide_to_size(0.3)
+    assert isinstance(m, trimesh.Trimesh)
+    return m
+
+
+def _handle(part: Part, w: joints.WeakPoint) -> Local:
+    """What the app hands `strengthen_at` for a weak point (pipeline.weak_points: root and face triangles, probe)."""
+    cen = part.vertices[part.faces].mean(axis=1)
+    root = int(np.argmin(((cen - np.asarray(w.centre)) ** 2).sum(axis=1)))
+    face = int(w.faces[np.argmin(((cen[w.faces] - np.asarray(w.end)) ** 2).sum(axis=1))])
+    return Local(0, face, 3.6, root, w.probe)
+
+
+def test_a_neck_holding_a_thick_piece_is_graded_by_the_lever_to_its_far_end() -> None:
+    # The ball fits a PROBE ball, so it is thick; taken as a body of its own, the neck between it and the body was a
+    # short piece with a ~1 mm lever (graded A; Charmander's flame neck, which snapped in print).
+    found = [w for w in joints.weak_points([_part(_flame(2.2))], 1.0) if w.volume_mm3 > 100]   # the ball goes with it
+    assert len(found) == 1, [w.to_dict() for w in found]     # found at both probes, listed once (the weaker reading)
+    neck = found[0]
+    assert neck.flat > 0.9 and neck.centre[2] == pytest.approx(10.5, abs=1.5)
+    assert neck.lever_mm == pytest.approx(10.0, abs=1.5)
+    assert neck.force_n == pytest.approx(joints.SIGMA_Z * np.pi * 2.2 ** 3 / 32 / 10.0, rel=0.4)
+    assert neck.grade in "DF" and neck.probe in (joints.PROBE, joints.NECK_PROBE)
+    # A neck a little thicker than PROBE (a ball fits round its axis: "body" at PROBE) is found with NECK_PROBE.
+    wide = [w for w in joints.weak_points([_part(_flame(3.4))], 1.0) if w.volume_mm3 > 100]
+    assert len(wide) == 1 and wide[0].probe == joints.NECK_PROBE and wide[0].grade in "CD"
+
+
+def test_a_neck_holding_a_thick_piece_widens_and_the_piece_keeps_its_shape() -> None:
+    # strengthen._stretch read the neck as thick as the ball beside it (+0.02 mm on Charmander): `_widen_neck` widens it
+    # about its centre line, each ring to a soft maximum of its width and the target, so the ball stays round.
+    m = _flame(2.2)
+    part = _part(m)
+    neck = min(joints.weak_points([part], 1.0), key=lambda w: w.force_n)
+    (out,), info = strengthen([part], 1.0, 0.0, [_handle(part, neck)])
+    assert info.features == 1 and np.array_equal(out.faces, part.faces)
+    v0, v1 = part.vertices, out.vertices
+
+    def radius(v: np.ndarray, z: float) -> float:
+        sel = (np.abs(v0[:, 2] - z) < 0.15) & (np.linalg.norm(v0[:, :2], axis=1) < 2.0)
+        return float(np.median(np.linalg.norm(v[sel][:, :2], axis=1)))
+    for z in (11.5, 12.5, 13.5):
+        assert 2 * radius(v1, z) > 0.85 * 3.6, z                   # 2.2 mm -> near the 3.6 mm target
+    ball = np.linalg.norm(v0 - [0, 0, 17.5], axis=1) < 3.05
+    top = ball & (v0[:, 2] > 17.5)
+    assert np.abs(np.linalg.norm(v1[top] - [0, 0, 17.5], axis=1) - 3.0).max() < 0.03   # the ball's top half as it was
+    body = v0[:, 2] < 9.0
+    assert np.abs(v1[body] - v0[body]).max() < 1e-9
+    after = min(joints.weak_points([out], 1.0), key=lambda w: w.force_n)
+    assert after.force_n > 3.0 * neck.force_n
+
+
 def test_params_take_single_features_and_check_them() -> None:
     p = Params(strengthen_at=[{"part": 0, "face": 3, "mm": 2.5, "root": 7}])
     assert p.strengthens and p.local_strengthen() == [Local(0, 3, 2.5, 7)]
+    assert Params(strengthen_at=[{"part": 0, "face": 3, "mm": 2.5, "root": 7, "probe": 4}]).local_strengthen() == \
+        [Local(0, 3, 2.5, 7, 4.0)]
     assert not Params().strengthens
     with pytest.raises(ValueError, match="strengthen_at"):
         Params(strengthen_at=[{"part": 0, "face": 3, "mm": 6}])
+    with pytest.raises(ValueError, match="probe"):
+        Params(strengthen_at=[{"part": 0, "face": 3, "mm": 2, "probe": 40}])
 
 
 def test_reinforcement_volumes_cover_weak_features_and_add_only_what_the_process_lacks(tmp_path: Path) -> None:

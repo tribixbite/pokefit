@@ -31,9 +31,14 @@ are typical PETG/PLA values for well-tuned prints (bending ~40 MPa along the lay
 forces are estimates for comparing features and choosing what to thicken, not a guarantee. Pieces under MIN_VOLUME
 (a fine point, a serration) are not listed: losing one is cosmetic.
 
-Limits: a feature thicker than PROBE is not examined (a 3 mm rod 15 mm long already holds ~70 N); a neck (thin between
-two thick parts, e.g. a thin leg) is measured as the piece between its ends, so its lever is short; sections are
-measured to a voxel (VOXEL mm), so widths under ~0.5 mm are rough.
+A thick piece held on by thin necks only (a flame on a tail, a paw on a thin arm) is part of the feature that holds
+it (`thin_parts`: the body is the biggest thick piece of each solid), so the lever runs to its far end; and such
+features are looked for again with a wider ball, NECK_PROBE (a neck a little thicker than PROBE under a heavy end, its
+section lying flat, is still weak). Each weak point carries the probe it was found with (`strengthen.Local.probe`).
+
+Limits: other features thicker than PROBE are not examined (a 3 mm rod 15 mm long already holds ~70 N); a neck between
+two parts of the body itself (a thin leg standing on the bed) is measured as the piece between its ends, so its lever
+is short; sections are measured to a voxel (VOXEL mm), so widths under ~0.5 mm are rough.
 """
 from __future__ import annotations
 
@@ -49,6 +54,13 @@ from .model3mf import REINFORCE_NAME, Part
 from .strengthen import Voxels, voxels
 
 PROBE = 3.0          # mm at print size: what a ball this wide fits in is the body; the rest is thin features
+# ... and, for features holding a thick piece past a thin neck only (a flame on a tail: `thin_parts`), this wide too: a
+# neck a little thicker than PROBE under a heavy end, its section lying flat, is still weak (Charmander's flame at
+# 31 mm tall: a 3.0 mm neck, 5 N, not seen at PROBE). Only those: PROBE for every feature changed how ears and fins
+# were measured and thickened.
+NECK_PROBE = 4.0
+NECK_SEEN = 0.9      # ... unless this share of the neck's voxels already lies in a PROBE feature (measured already)
+NECK_THIN = 1.5      # ... or its thin voxels outnumber the thick piece's this many times (a surface, not a neck)
 VOXEL = 0.15         # mm at print size
 STEP = 0.3           # mm at print size between sections along a feature (at least)
 MAX_SECTIONS = 40    # ... and at most this many per feature (a long tail: wider steps, then refined)
@@ -89,6 +101,7 @@ class WeakPoint:
     cells: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(0, np.int64))   # its voxels (flat)
     end: list[float] = field(default_factory=list)   # the centre of the last section past it still under GOAL N
     weak_mm: float = 0.0        # ... that far past it along the feature (0: only this section is under GOAL)
+    probe: float = PROBE        # mm: the ball the feature was found with (`strengthen.Local.probe` finds it again)
 
     def to_dict(self) -> dict[str, Any]:
         return {"part": self.part, "grade": self.grade, "force_n": round(self.force_n, 2),
@@ -97,7 +110,8 @@ class WeakPoint:
                 "length_mm": round(self.length_mm, 2), "volume_mm3": round(self.volume_mm3, 2),
                 "flat": round(self.flat, 2), "centre": [round(float(x), 4) for x in self.centre],
                 "normal": [round(float(x), 4) for x in self.normal], "face": self.face, "faces": int(len(self.faces)),
-                "end": [round(float(x), 4) for x in self.end], "weak_mm": round(self.weak_mm, 2)}
+                "end": [round(float(x), 4) for x in self.end], "weak_mm": round(self.weak_mm, 2),
+                "probe_mm": self.probe}
 
 
 def grade(force: float, width: float) -> str:
@@ -185,16 +199,52 @@ def _geodesic(mask: np.ndarray, roots: np.ndarray, h: float) -> np.ndarray:
 
 def thin_parts(grid: Voxels, probe: float) -> tuple[np.ndarray, np.ndarray]:
     """The grid's thin features (module doc, 1): labels (0 = body or outside, 1.. one per connected feature) and
-    the feature voxels touching the body (their roots). `probe` in the grid's units."""
+    the feature voxels touching the body (their roots). `probe` in the grid's units.
+
+    The body is the biggest thick piece of each separate solid. A smaller thick piece held on by thin necks only (a
+    flame on a thin tail, a paw on a thin arm) belongs to the feature that holds it: it breaks off with the neck, and
+    its far end is the lever. Taken as a body of its own, a neck between it and the body was a short piece with a
+    ~1 mm lever (Charmander's flame neck: graded A at every probe, and it snapped in print)."""
+    labels, roots, _, _ = _thin_labels(grid, probe)
+    return labels, roots
+
+
+def _thin_labels(grid: Voxels, probe: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """`thin_parts`, the labels of the features that hold a thick piece (sorted) and those pieces' voxels."""
     inside = grid.inside
     radius = probe / 2 / grid.h                                    # in voxels
     eroded = ndimage.distance_transform_edt(inside) > radius
     if not eroded.any():                                           # nothing is thick: no body to break off from
-        return np.zeros(inside.shape, np.int32), np.zeros(inside.shape, bool)
-    body = inside & (ndimage.distance_transform_edt(~eroded) <= radius)
-    thin = inside & ~body
-    labels, _ = ndimage.label(thin, _CUBE)
-    return labels, ndimage.binary_dilation(body, _CUBE) & thin
+        none = np.zeros(inside.shape, bool)
+        return np.zeros(inside.shape, np.int32), none, np.zeros(0, np.int64), none
+    thick = inside & (ndimage.distance_transform_edt(~eroded) <= radius)
+    body = _main_bodies(inside, thick)
+    labels, _ = ndimage.label(inside & ~body, _CUBE)
+    hanging = thick & ~body
+    heavy = np.unique(labels[hanging])
+    return labels, ndimage.binary_dilation(body, _CUBE) & (labels > 0), heavy[heavy > 0], hanging
+
+
+def _main_bodies(inside: np.ndarray, thick: np.ndarray) -> np.ndarray:
+    """Of the thick voxels, the biggest connected piece in each connected solid of `inside` (`thin_parts`)."""
+    pieces, n = ndimage.label(thick, _CUBE)
+    if n <= 1:
+        return thick
+    solids, _ = ndimage.label(inside, _CUBE)
+    sizes = np.bincount(pieces.ravel(), minlength=n + 1)
+    sizes[0] = 0
+    # Per piece, its solid (any of its voxels: a piece lies in one solid); per solid, its biggest piece.
+    first = np.zeros(n + 1, np.int64)
+    flat = pieces.ravel()
+    at = np.flatnonzero(flat)
+    first[flat[at[::-1]]] = at[::-1]                               # some voxel of each piece
+    solid_of = solids.ravel()[first]
+    keep = np.zeros(n + 1, bool)
+    for s in np.unique(solid_of[1:]):
+        ids = np.flatnonzero(solid_of == s)
+        ids = ids[ids > 0]
+        keep[ids[np.argmax(sizes[ids])]] = True
+    return keep[pieces]
 
 
 def _grown(sl: tuple[slice, ...], shape: tuple[int, ...]) -> tuple[slice, ...]:
@@ -247,6 +297,21 @@ def feature_along(grid: Voxels, probe: float, face: tuple[np.ndarray, np.ndarray
     return out
 
 
+def thick_within(grid: Voxels, probe: float, along: np.ndarray) -> bool:
+    """Whether the feature `feature_along` returned (its finite cells) holds a thick piece: a cell a ball `probe`
+    across (grid units) fits round. Such a piece hangs on a thin neck (`thin_parts`): a flame on a tail."""
+    cells = np.argwhere(np.isfinite(along))
+    if not len(cells):
+        return False
+    radius = probe / 2 / grid.h
+    pad = int(np.ceil(radius)) + 2                                  # distances measured past the crop's own edge
+    lo = np.maximum(cells.min(axis=0) - pad, 0)
+    hi = np.minimum(cells.max(axis=0) + pad + 1, along.shape)
+    sl = tuple(slice(int(a), int(b)) for a, b in zip(lo, hi))
+    edt = ndimage.distance_transform_edt(grid.inside[sl])
+    return bool((edt[np.isfinite(along[sl])] > radius).any())
+
+
 def weak_points(parts: list[Part], scale: float, probe: float = PROBE) -> list[WeakPoint]:
     """The weakest section of each thin feature of the solid `parts` (figure frame, scale 1) printed at `scale`,
     weakest first (module doc). Empty when nothing is thinner than `probe` mm."""
@@ -259,19 +324,41 @@ def _graded(parts: list[Part], scale: float, probe: float) -> tuple[Voxels | Non
     if scale <= 0 or not solid:
         return None, []
     grid = voxels([parts[i].vertices * scale for i in solid], [parts[i].faces for i in solid], VOXEL)
-    labels, roots = thin_parts(grid, probe)
     cands: list[tuple[tuple[int, float], dict[str, Any]]] = []
-    for lab, sl in enumerate(ndimage.find_objects(labels), start=1):
-        if sl is None:
+    # Every feature at `probe`; then, with a wider ball, the features holding a thick piece only (NECK_PROBE). A neck
+    # both find is listed once: the later one overlaps it (below), unless its piece is NEST x bigger.
+    seen = np.zeros(grid.inside.shape, bool)                      # the first pass's features
+    for pr, only_heavy in ((probe, False), (NECK_PROBE, True)):
+        if only_heavy and pr <= probe:
             continue
-        sl = _grown(sl, labels.shape)
-        mask = labels[sl] == lab
-        root = roots[sl] & mask
-        if not root.any():
-            continue                                                 # loose: the islands check's business
-        for key, cand in _feature(grid, sl, mask, _geodesic(mask, root, grid.h)):
-            cand["feature"] = lab
-            cands.append((key, cand))
+        labels, roots, heavy, hanging = _thin_labels(grid, pr)
+        if not only_heavy:
+            seen = labels > 0
+        for lab, sl in enumerate(ndimage.find_objects(labels), start=1):
+            if sl is None or (only_heavy and lab not in heavy):
+                continue
+            sl = _grown(sl, labels.shape)
+            mask = labels[sl] == lab
+            root = roots[sl] & mask
+            if not root.any():
+                continue                                             # loose: the islands check's business
+            dist = _geodesic(mask, root, grid.h)
+            # The wider pass is for the neck: its sections stop where the thick piece starts (the piece and what grows
+            # out of it are the first pass's; measuring them again took Leafeon's grading from 10 to 20 s).
+            held = hanging[sl] & mask & np.isfinite(dist)
+            upto = float(dist[held].min()) + 2 * STEP if only_heavy and held.any() else None
+            # ... and only for a neck the first pass did not measure (thicker than PROBE somewhere along it: "body"
+            # there): Leafeon's tail, thin all the way at PROBE, took 7 s more for the same sections.
+            if upto is not None and seen[sl][mask & (dist <= upto)].mean() > NECK_SEEN:
+                continue
+            # A neck holds a piece bigger than itself; at the wider ball a figure's thin surface can join into one
+            # feature round a thick lump (Leafeon: 198k voxels round 27k): not a neck, and slow to measure.
+            if only_heavy and (mask & ~hanging[sl]).sum() > NECK_THIN * held.sum():
+                continue
+            for key, cand in _feature(grid, sl, mask, dist, upto):
+                cand["feature"] = (pr, lab)
+                cand["probe"] = pr
+                cands.append((key, cand))
     cands.sort(key=lambda t: t[0])
     found: list[dict[str, Any]] = []
     for _, c in cands:
@@ -300,13 +387,16 @@ def _weak_stretch(c: dict[str, Any], same: list[dict[str, Any]]) -> dict[str, An
     return end
 
 
-def _feature(grid: Voxels, sl: tuple[slice, ...], mask: np.ndarray, dist: np.ndarray) -> list[tuple[Any, dict]]:
+def _feature(grid: Voxels, sl: tuple[slice, ...], mask: np.ndarray, dist: np.ndarray,
+             upto: float | None = None) -> list[tuple[Any, dict]]:
     """Every section of one feature (a crop `sl` of the grid, its voxels `mask`, their distance from its root) with
-    its strength and the piece beyond it."""
+    its strength and the piece beyond it; with `upto`, only the sections that near the root (the pieces beyond them
+    still reach the far end)."""
     h = grid.h
     reach = float(dist[mask & np.isfinite(dist)].max(initial=0.0))
     if reach < MIN_LENGTH:
         return []
+    last = reach - MIN_LENGTH / 2 if upto is None else min(reach - MIN_LENGTH / 2, upto)
     offset = np.array([s.start for s in sl])
     slab_w = STEP                                                    # each section's slab is STEP thick
 
@@ -349,14 +439,14 @@ def _feature(grid: Voxels, sl: tuple[slice, ...], mask: np.ndarray, dist: np.nda
     # Coarse (at most MAX_SECTIONS levels), then every STEP round the REFINE weakest coarse levels.
     step = max(STEP, reach / MAX_SECTIONS)
     out: list[tuple[Any, dict]] = []
-    for s in np.arange(step, reach - MIN_LENGTH / 2, step):
+    for s in np.arange(step, last, step):
         out.extend(sections(float(s)))
     if step > STEP:
         done = {round(c["s"], 6) for _, c in out}
         weakest = sorted({c["s"] for _, c in sorted(out, key=lambda t: t[0])[:REFINE]})
         for s0 in weakest:
             for s in np.arange(s0 - step + STEP, s0 + step - STEP / 2, STEP):
-                if STEP <= s < reach - MIN_LENGTH / 2 and round(float(s), 6) not in done:
+                if STEP <= s < last and round(float(s), 6) not in done:
                     done.add(round(float(s), 6))
                     out.extend(sections(float(s)))
     return out
@@ -381,7 +471,7 @@ def _with_faces(found: list[dict[str, Any]], parts: list[Part], solid: list[int]
         out.append(WeakPoint(part, c["grade"], c["force"], sec.width, sec.depth, sec.area, c["lever"], c["length"],
                              c["volume"], c["flat"], [float(x) for x in sec.centre / scale],
                              [float(x) for x in sec.normal], int(pf[0]) if len(pf) else -1, pf, c["cells"],
-                             [float(x) for x in end.centre / scale], float(c["end"]["s"] - c["s"])))
+                             [float(x) for x in end.centre / scale], float(c["end"]["s"] - c["s"]), c["probe"]))
     return out
 
 

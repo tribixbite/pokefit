@@ -181,7 +181,8 @@ class Params:
         return self.strengthen > 0 or bool(self.strengthen_at)
 
     def local_strengthen(self) -> list[Local]:
-        return [Local(q["part"], q["face"], q["mm"], q.get("root", -1)) for q in self.strengthen_at or []]
+        return [Local(q["part"], q["face"], q["mm"], q.get("root", -1), q.get("probe", 0.0))
+                for q in self.strengthen_at or []]
 
     def __post_init__(self) -> None:
         # Older clients send magnets as a switch: on = the default two pockets.
@@ -232,9 +233,12 @@ class Params:
             raise ValueError("strengthen must be 0..5 mm (0 = off)")
         if self.strengthen_at:
             at = [{"part": int(q["part"]), "face": int(q["face"]), "mm": round(float(q["mm"]), 3),
-                   "root": int(q.get("root", -1))} for q in self.strengthen_at]
+                   "root": int(q.get("root", -1)), **({"probe": float(q["probe"])} if q.get("probe") else {})}
+                  for q in self.strengthen_at]
             if any(not 0 < q["mm"] <= 5 or q["part"] < 0 or q["face"] < 0 for q in at):
                 raise ValueError("strengthen_at: each needs part >= 0, face >= 0 and 0 < mm <= 5")
+            if any(not 1 <= q.get("probe", 3.0) <= 10 for q in at):
+                raise ValueError("strengthen_at: probe must be 1..10 mm (the weak point's probe_mm)")
             self.strengthen_at = at
         if self.figure_height is not None:
             self.figure_height = float(self.figure_height)

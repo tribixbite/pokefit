@@ -111,7 +111,7 @@ export class WeakPanel {
 
   private thicken(w: WeakPoint, mm: number): void {
     const p = this.host.params();
-    const at: StrengthenAt = { part: w.part, face: w.face, root: w.root, mm };
+    const at: StrengthenAt = { part: w.part, face: w.face, root: w.root, mm, probe: w.probe_mm };
     // The same weak section thickened again replaces its earlier thickness.
     p.strengthen_at = [...(p.strengthen_at ?? []).filter((q) => !(q.part === at.part && q.root === at.root)), at];
     this.host.toast(`Thickening it to ${mm} mm where it is weak (about a minute on a large figure in the browser).`);

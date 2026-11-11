@@ -117,6 +117,19 @@ STRETCH_SHEET = 0.5  # a feature is a sheet where its second thin direction is u
 STRETCH_RIM = 0.5    # a sheet vertex whose move is over this share sideways is on its rim (`_even_sheet`)
 STRETCH_CURVE = (0.05, 0.2)  # targets / bend radius: a sheet thickened half each side .. all on its convex side
 OVERLAP_POWER = 4    # overlapping features' moves weigh in by their length to this power (`_stretched`)
+# A neck holding a thick piece (`_widen_neck`): its centre line from bands NECK_BAND targets apart (at least 2 voxels)
+# of at least NECK_RING_MIN voxels, carried on NECK_BACK targets behind the feature's start; each ring's width from a
+# flat cut of the solid within NECK_REACH targets of the line, the narrowest over NECK_DIRS directions; grown to a soft
+# maximum (NECK_SOFT targets soft) of its width and the target, eased in over the line's first NECK_EASE targets,
+# smoothed over NECK_SMOOTH targets (the stretch's 0.5 flattened the neck's peak).
+NECK_BAND = 0.08
+NECK_RING_MIN = 6
+NECK_BACK = 1.0
+NECK_REACH = 1.0
+NECK_DIRS = 36
+NECK_SOFT = 0.1
+NECK_EASE = 0.25
+NECK_SMOOTH = 0.15
 COT_FLOOR = 0.01    # `_Graph`'s smallest edge weight (a cotangent weight under it, from an obtuse sliver, is raised)
 STRETCH_STEPS = 3   # the final smoothing of the moves in this many heat steps (one step's kernel has a cusp: a jump in
 #                      the moves, e.g. where the thickness is first measured, came out as a 0.05 mm crease on a forehead)
@@ -721,6 +734,8 @@ class _Profile:
     weight: np.ndarray
     along: np.ndarray | None = None
     length: float = 0.0
+    heavy: bool = False      # the feature holds a thick piece past a thin neck (`joints.thick_within`): `_widen_neck`
+    cells: np.ndarray | None = None   # with a root section: per voxel of the grid, `along` (NaN off the feature)
 
 
 def _local_profile(g: _Graph, part: Part, q: Local, thick: Any, t_unit: float, grid: Voxels,
@@ -736,11 +751,12 @@ def _local_profile(g: _Graph, part: Part, q: Local, thick: Any, t_unit: float, g
     lying beside the legs), so the first is preferred: those are separate thin features there."""
     from scipy.sparse.csgraph import connected_components, dijkstra
 
-    from .joints import PROBE, cell_under, feature_along
+    from .joints import PROBE, cell_under, feature_along, thick_within
 
     corners = part.faces[q.face]
     if 0 <= q.root < len(part.faces):
-        along = feature_along(grid, PROBE / scale, _triangle(part, q.face), _triangle(part, q.root), t_unit)
+        probe = (q.probe or PROBE) / scale
+        along = feature_along(grid, probe, _triangle(part, q.face), _triangle(part, q.root), t_unit)
         if along is not None:
             cells = cell_under(grid, g.pos, g.normals, np.isfinite(along))
             d = np.full(g.n, np.nan)
@@ -757,7 +773,7 @@ def _local_profile(g: _Graph, part: Part, q: Local, thick: Any, t_unit: float, g
             # Eased out over about half a target onto the body round the feature's join (its cells stop at the
             # body: cut off there, the change's fillet into the body would end in a step).
             w = np.clip(np.maximum(w, 2.0 * g.smooth(w, t_unit / 2, g.plain_lap())), 0.0, 1.0)
-            return _Profile(np.asarray(w), d, float(np.nanmax(along)))
+            return _Profile(np.asarray(w), d, float(np.nanmax(along)), thick_within(grid, probe, along), along)
     thin = thick() < t_unit
     seeds = np.unique(g.ids[corners])
     seeds = seeds[thin[seeds]]
@@ -835,6 +851,139 @@ def _stretch(g: _Graph, part: Part, q: Local, prof: _Profile, t_q: float, grid: 
     move = _even_sheet(move, on, vec[:, :, 2], rel[:, 1], d, bow, t_q, GAP_SHARE * clear, sub, lap)
     # The shape: smoothed with the surface's own Laplacian (`cot_lap`), in steps (no cusp).
     move = sub.smooth(move, STRETCH_SMOOTH * t_q, sub.cot_lap(), STRETCH_STEPS, area=True)
+    move[np.linalg.norm(move, axis=1) < STRETCH_MIN * t_q] = 0.0
+    return move
+
+
+def _widen_neck(g: _Graph, part: Part, prof: _Profile, t_q: float, grid: Voxels) -> np.ndarray:
+    """Per merged vertex, the move (figure units) that widens a neck holding a thick piece (`_Profile.heavy`: a flame
+    on a thin tail) to `t_q` across, about its own centre line; zero off it.
+
+    `_stretch` measures a feature's thickness as chords averaged over a target of surface. A neck about one target
+    long between a thin stalk and a thick piece read as thick as the piece (Charmander's 2.3 mm flame neck: +0.02 mm
+    at a 3.8 mm target). Here:
+
+    - The centre line: the centroids of the feature's voxels in bands of equal distance along it (`prof.cells`,
+      NECK_BAND targets apart; voxels are dense and even, a sculpt's few vertices round a neck are not), carried on
+      straight NECK_BACK targets behind where the thin feature starts (the stalk below a neck is often a little
+      thicker than the probe, so "body", and needs widening too), each ring there re-centred on its own cut.
+    - Each ring's narrowest width: a flat cut across the line through the ring's centre, of the whole solid
+      (`grid.inside`) within NECK_REACH targets of the line. A band of equal distance curves like a cap in a narrowing
+      neck: its projection read the neck as wide as the flame above it. Where the line runs into the body, the cut is
+      wide and nothing grows: the widening fades out by itself.
+    - Each vertex takes the ring at its nearest point on the line and moves out from the line by a soft maximum
+      (NECK_SOFT targets) of the ring's width and what it needs (the target, falling as sqrt(length left) like
+      `_stretch`) over that width: rings already wider (the thick piece's round underside) keep their shape; a hard
+      factor carried along the line turned a flame's underside into a straight wall."""
+    from scipy.spatial import cKDTree
+
+    move = np.zeros((g.n, 3))
+    if prof.along is None or prof.cells is None:
+        return move
+    idx = np.nonzero(np.isfinite(prof.cells))
+    if len(idx[0]) < 8:
+        return move
+    h = grid.h
+    ca = prof.cells[idx].astype(np.float64)
+    cp = grid.centres(idx)
+    band = max(2.0 * h, NECK_BAND * t_q)
+    k = np.floor((ca - ca.min()) / band).astype(np.int64)
+    nb = int(k.max()) + 1
+    count = np.bincount(k, minlength=nb)
+    sums = np.stack([np.bincount(k, weights=cp[:, j], minlength=nb) for j in range(3)], axis=1)
+    mean_a = np.bincount(k, weights=ca, minlength=nb) / np.maximum(count, 1)
+    rings = np.flatnonzero(count >= NECK_RING_MIN)
+    if len(rings) < 3:
+        return move
+    cent, at = sums[rings] / count[rings, None], mean_a[rings]
+    # Behind the feature's start: straight on along its first rings' direction (over a quarter target), every band.
+    run = np.cumsum(np.linalg.norm(np.diff(cent, axis=0), axis=1))
+    first = min(int(np.searchsorted(run, t_q / 4)) + 1, len(cent) - 1)
+    back_dir = cent[0] - cent[first]
+    back_dir /= max(float(np.linalg.norm(back_dir)), 1e-12)
+    steps = np.arange(int(np.ceil(NECK_BACK * t_q / band)), 0, -1) * band
+    cent = np.vstack([cent[0] + steps[:, None] * back_dir, cent])
+    at = np.r_[at[0] - steps, at]
+    inside = np.argwhere(grid.inside)
+    tree = cKDTree(grid.centres(tuple(inside.T)))
+    reach = NECK_REACH * t_q
+    dirs = np.linspace(0.0, np.pi, NECK_DIRS, endpoint=False)
+
+    def axis_of(c: np.ndarray) -> np.ndarray:
+        ax = np.gradient(c, at, axis=0)
+        ax = np.stack([np.convolve(np.pad(ax[:, j], 1, mode="edge"), [0.25, 0.5, 0.25], "valid") for j in range(3)], 1)
+        return np.asarray(ax / np.maximum(np.linalg.norm(ax, axis=1, keepdims=True), 1e-12))
+
+    def cut(c: np.ndarray, ax: np.ndarray) -> np.ndarray:
+        """The solid's voxels (positions) in a flat cut through `c` across `ax`, within `reach` of `c`."""
+        near = tree.query_ball_point(c, reach)
+        q = grid.centres(tuple(inside[near].T)) if len(near) else np.zeros((0, 3))
+        return np.asarray(q[np.abs((q - c) @ ax) <= 0.75 * h])
+
+    axis = axis_of(cent)
+    for j in range(len(steps)):                             # re-centred on their own cut (the stalk may curve)
+        q = cut(cent[j], axis[j])
+        if len(q) >= NECK_RING_MIN:
+            cent[j] = q.mean(axis=0)
+    axis = axis_of(cent)
+    width = np.full(len(cent), np.inf)
+    for j in range(len(cent)):
+        q = cut(cent[j], axis[j]) - cent[j]
+        if len(q) < NECK_RING_MIN:
+            continue
+        u = np.cross(axis[j], [1.0, 0.0, 0.0] if abs(axis[j][0]) < 0.9 else [0.0, 1.0, 0.0])
+        u /= np.linalg.norm(u)
+        w = np.cross(axis[j], u)
+        xy = np.unique(np.round(np.c_[q @ u, q @ w] / h), axis=0) * h
+        width[j] = min(float(np.ptp(xy @ np.array([np.cos(t), np.sin(t)]))) for t in dirs) + h
+    # Each vertex near the line: its nearest point on the line (between ring centres) and the ring there.
+    cand = np.union1d(np.flatnonzero(prof.weight > STRETCH_MIN), np.flatnonzero(cKDTree(cent).query(g.pos)[0] <= reach))
+    p = g.pos[cand]
+    seg = cent[1:] - cent[:-1]
+    ll = np.maximum((seg * seg).sum(axis=1), 1e-12)
+    best = np.full(len(p), np.inf)
+    s_at = np.zeros(len(p))
+    foot = np.zeros_like(p)
+    for i in range(len(seg)):
+        tt = np.clip(((p - cent[i]) @ seg[i]) / ll[i], 0.0, 1.0)
+        f = cent[i] + tt[:, None] * seg[i]
+        dist = np.linalg.norm(p - f, axis=1)
+        closer = dist < best
+        best[closer], foot[closer], s_at[closer] = dist[closer], f[closer], i + tt[closer]
+    lo = np.floor(s_at).astype(np.int64).clip(0, len(cent) - 1)
+    hi = np.minimum(lo + 1, len(cent) - 1)
+    fr = s_at - lo
+    a = at[lo] * (1 - fr) + at[hi] * fr
+    known = np.isfinite(width[lo]) & np.isfinite(width[hi])
+    w_at = np.where(known, np.where(known, width[lo], 0.0) * (1 - fr) + np.where(known, width[hi], 0.0) * fr, np.inf)
+    ax_at = axis[lo] * (1 - fr)[:, None] + axis[hi] * fr[:, None]
+    ax_at /= np.maximum(np.linalg.norm(ax_at, axis=1, keepdims=True), 1e-12)
+    need = np.full(len(a), t_q)
+    if prof.length > 0:
+        need *= np.sqrt(np.clip((prof.length - a) / prof.length, 0.0, 1.0))
+    soft = NECK_SOFT * t_q
+    w_fin = np.where(known, w_at, need)
+    want = 0.5 * (w_fin + need + np.sqrt((w_fin - need) ** 2 + soft * soft))
+    grow = np.where(known, want / np.maximum(w_fin, h) - 1.0, 0.0)
+    # Only the surface round the line (a vertex much farther out than its ring's half width is something else: the
+    # body beside the stalk); eased out past the last weak section by the profile's weight, and in over the line's
+    # first NECK_EASE targets.
+    grow[best > 0.75 * w_fin + h] = 0.0
+    past = a > 0
+    grow[past] *= prof.weight[cand][past]
+    x = np.clip((a - at[0]) / (NECK_EASE * t_q), 0.0, 1.0)
+    grow *= x * x * (3.0 - 2.0 * x)
+    r = p - foot
+    r -= np.einsum("vi,vi->v", r, ax_at)[:, None] * ax_at
+    move[cand] = r * grow[:, None]
+    # TODO: not capped by the open space in front (`_stretch`'s GAP_SHARE x clear): a neck close beside the body could
+    # widen into it; the necks seen so far stand free.
+    moved = np.linalg.norm(move, axis=1) > 0
+    if not moved.any():
+        return move
+    near = g.smooth(moved.astype(np.float64), t_q, g.plain_lap()) > STRETCH_MIN
+    sub = _Graph(part.vertices, part.faces[near[g.ids[part.faces]].all(axis=1)])
+    move = sub.smooth(move, NECK_SMOOTH * t_q, sub.cot_lap(), STRETCH_STEPS, area=True)
     move[np.linalg.norm(move, axis=1) < STRETCH_MIN * t_q] = 0.0
     return move
 
@@ -926,11 +1075,13 @@ class Thickening:
 class Local:
     """A thin feature thickened to its own minimum: the one holding triangle `face` of part `part`, to `mm`. With a
     `root` triangle (on the section where it would break: joints.py), only that feature from the section outward
-    (and one target back toward the body) is stretched (`_local_profile`, `_stretch`)."""
+    (and one target back toward the body) is stretched (`_local_profile`, `_stretch`). `probe`: the ball (mm at print
+    size) `joints.weak_points` found it with (its `probe`); 0 = joints.PROBE."""
     part: int
     face: int
     mm: float
     root: int = -1
+    probe: float = 0.0
 
 
 def thicken(parts: list[Part], scale: float, target: float, local: list[Local] | None = None) -> Thickening:
@@ -960,8 +1111,8 @@ def thicken(parts: list[Part], scale: float, target: float, local: list[Local] |
 
 def _stretched(parts: list[Part], solid: list[int], local: list[Local], scale: float,
                vox: float) -> tuple[list[np.ndarray | None], float]:
-    """Per part, its vertices' moves for the `local` features on it (`_stretch`; where two overlap, the longer
-    move), and the longest move (figure units)."""
+    """Per part, its vertices' moves for the `local` features on it (`_stretch`, or `_widen_neck` for a neck under a
+    thick piece; where two overlap, blended by length: OVERLAP_POWER), and the longest move (figure units)."""
     moves: list[np.ndarray | None] = [None] * len(parts)
     grid = voxels([parts[i].vertices for i in solid], [parts[i].faces for i in solid], vox)
     longest = 0.0
@@ -986,7 +1137,9 @@ def _stretched(parts: list[Part], solid: list[int], local: list[Local], scale: f
         num, den = np.zeros((g.n, 3)), np.zeros(g.n)
         for q in qs:
             t_q = q.mm / scale
-            m = _stretch(g, parts[i], q, _local_profile(g, parts[i], q, thick, t_q, grid, scale), t_q, grid, nrm)
+            prof = _local_profile(g, parts[i], q, thick, t_q, grid, scale)
+            m = (_widen_neck(g, parts[i], prof, t_q, grid) if prof.heavy else
+                 _stretch(g, parts[i], q, prof, t_q, grid, nrm))
             w = (np.linalg.norm(m, axis=1) * scale) ** OVERLAP_POWER       # print mm: only the ratios count
             num += m * w[:, None]
             den += w
