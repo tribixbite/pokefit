@@ -156,8 +156,12 @@
   figure colour's slot (the user's project slots, or the printer's AMS trays locally) in a dropdown with colour
   swatches, closest colour first with its ΔE (with the AMS read: which nozzle each spool feeds, and "No spool"
   when nothing loaded is close); the palette swatches carry the slot they print from. "Paint depth"
-  sets how far colours reach into the figure (Bambu's segmented-region width; inside is the main filament): it
-  changes how much of each colour is used, not the print time or the colour changes.
+  sets how far colours reach into the figure (Bambu's segmented-region width); "Inside prints in" picks the
+  filament past that depth (default the figure's own; the surface keeps its colours). The inside is on every
+  layer, so an inside colour that is not on a layer's surface costs a change there: Charmander at 31 mm, 1.6 mm deep,
+  sliced 118 colour changes / 6.0 h with its red inside and 58 / 3.9 h with orange (paint all the way in: 58 / 3.9 h).
+  A thin part that changes colour along its length (a flame on a tail) is stronger with one filament running
+  through it.
 - Export: the Bambu 3MF (and its import variant), the bottom shell STL with the floor for the steel, a JSON report, and a coloured STL: the
   figure and its flat base joined into one closed solid (every edge on two triangles, vertices matched exactly),
   soft paint edges written as their sub-triangles, each triangle's colour in the STL attribute word (VisCAM /

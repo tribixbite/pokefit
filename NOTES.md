@@ -43,8 +43,15 @@ exist only on the original Windows machine (ask the user for the files).
    side where reflections were replaced. Side-view naming confirmed on a second figure (Mew). In-browser TRELLIS.2: only
    after the user switches Chrome to the high-performance GPU. llama-server is stopped (restart command in memory
    `local-installs`).
-5. **Paint depth**: `mmu_segmented_region_interlocking_depth` 0 / 0.4 / 0.8 mm (max width 1.6) = 666.6 / 664.6 /
-   665.8 min, 284 changes each (8-colour Charmander): no time effect; strength needs a physical test. Not exposed.
+5. **Paint depth / inside filament** (UI "Paint depth", "Inside prints in" = `Params.core_filament`, CLI `--core N`;
+   `pipeline.cored`: unpainted triangles painted the filament they showed, then the parts' filament = the core;
+   export and slices only, the coloured STL is surface only). Cost depends on the inside colour: Charmander at the
+   app's 31 mm (`printed/charmander.3mf`, bundled reference, verify_export): paint all the way in 58 changes 3.93 h
+   58.0 g; 1.6 mm with the file's red inside 118 / 6.04 h / 87.5 g; 1.6 mm, inside orange (4) 58 / 3.90 h / 57.8 g.
+   Not checked in G-code for this export (the hand-made `printed/charmander_tail3.8mm_core.3mf` with the same
+   structure was: orange core in the flame). Open: suggest the inside filament (the colour on most layers' surface;
+   `toolchange` could score it) instead of leaving the user to pick; `mmu_segmented_region_interlocking_depth`
+   (0 / 0.4 / 0.8 mm: no time effect on an 8-colour figure) is still not exposed; strength needs a physical test.
 6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only;
    waste = beambam `waste_g`, purge + prime tower: `flush_volume_g` alone read 0 g with a tower).
 7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
@@ -321,8 +328,10 @@ exist only on the original Windows machine (ask the user for the files).
    `review_charmander_tail_layers.png` (top: original, bottom: core): orange core in the flame at 10-14 mm (~1.2 mm
    wide just above the neck, ~2.5 mm in the bulb). The original neck already printed solid (walls + solid infill: it is
    thin), so the modifier adds little there. Open: the user prints and reports; belly cream is now 1.6 mm over an
-   orange core (should be opaque in PLA; unverified); paint depth is not in the UI (`Params.paint_depth` only); the app
-   cannot set the object's core filament; `_widen_neck` is not capped by open space (TODO in code).
+   orange core (should be opaque in PLA; unverified); the app's version of the core: item 5; `_widen_neck` is not
+   capped by open space (TODO in code). Browser engine (Pyodide in Node, 2026-11-11): load 6.3 s, weak points 7.9 s
+   (C 5.1 N probe 4, C 6.2, A 48.8), thicken the weakest to 4 mm 9.3 s, then C 6.2 / B 13.2 / A 48.8 (the neck gone).
+   The file's status is "fail" before and after: it carries pockets from an earlier export that miss the steel.
 20. User's call: Cloudflare "Always Use HTTPS" (dashboard → pokefit.party → SSL/TLS → Edge Certificates). Off now: an
    `http://` visit gets the page over HTTP and redirects itself with a script. Explained 2026-10-19; their account.
 

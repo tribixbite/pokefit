@@ -261,3 +261,55 @@ def test_exports_from_a_file_of_several_figures_are_named_after_the_figure(tmp_p
     out = export(s, Params(object_id=jolt, magnets=0), tmp_path / "out")
     assert Path(out["figure_3mf"]).name.startswith("jolteon_pokefit_")
     assert Path(out["report"]).name.startswith("jolteon_pokefit_")
+
+
+def test_core_filament_keeps_the_surface_and_prints_the_inside_in_it() -> None:
+    from pokefit.model3mf import Part
+    from pokefit.paint import decode_weights, encode_tree
+    from pokefit.pipeline import cored, face_colours
+
+    v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float)
+    f = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]])
+    split = encode_tree((1, 0, [1, 0]))  # a split triangle: one half filament 1, the other unpainted (state 0)
+    assert decode_weights(split).get(0, 0) > 0
+    part = Part("body", 0, v, f, {1: 'paint_color="8"', 2: f'paint_supports="4" paint_color="{split}"',
+                                  3: 'paint_supports="4"'})
+    mod = Part("solid", 0, v, f, {}, "modifier_part", {"wall_loops": "6"})
+    out, ext = cored([part, mod], 3, 4)
+    assert ext == 4 and out[0].extruder == 4 and out[1] is mod
+    # Every triangle is painted now, the colour it showed (face 0 and 3 were the object's 3).
+    assert len(out[0].tri_extra) == 4 and all('paint_color="' in a for a in out[0].tri_extra.values())
+    # (face 2 is half and half: its majority is a tie, so compare its pieces below)
+    assert face_colours(out[0], [], 4)[[0, 1, 3]].tolist() == face_colours(part, [], 3)[[0, 1, 3]].tolist() == [3, 2, 3]
+    assert 'paint_supports="4"' in out[0].tri_extra[2] and 'paint_supports="4"' in out[0].tri_extra[3]
+    old, new = decode_weights(split), decode_weights(out[0].tri_extra[2].split('paint_color="')[1].split('"')[0])
+    assert 0 not in new and new[3] == pytest.approx(old[0]) and new[1] == pytest.approx(old[1])
+    # Nothing to do: no core, or the core is what everything already inherits.
+    assert cored([part], 3, None) == ([part], 3) and cored([part], 3, 3) == ([part], 3)
+    for bad in (0, 65):
+        with pytest.raises(ValueError):
+            Params(core_filament=bad)
+
+
+def test_core_filament_reaches_the_export(critter: Path, tmp_path: Path) -> None:
+    import re
+
+    from pokefit.pipeline import BUNDLED_REFERENCE
+
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+
+    def written(**kw: object) -> tuple[list[str], list[str]]:
+        """The exported figure's triangles' paint (raw XML: reading it back strips the pockets) and filaments."""
+        out = export(s, Params(steel="US1/4x1", paint_depth=1.6, **kw), tmp_path / f"out{len(kw)}")
+        with zipfile.ZipFile(out["figure_3mf"]) as z:
+            model = "".join(z.read(n).decode() for n in z.namelist() if n.endswith(".model"))
+            cfg = z.read("Metadata/model_settings.config").decode()
+        tris = re.findall(r"<triangle [^>]*/>", model)
+        return ([m.group(1) if (m := re.search(r'paint_color="([0-9A-F]*)"', tri)) else "" for tri in tris],
+                re.findall(r'key="extruder" value="(\d+)"', cfg))
+    plain, plain_ext = written()
+    core, core_ext = written(core_filament=2)
+    assert set(plain_ext) == {"1"} and set(core_ext) == {"2"}
+    assert len(core) == len(plain) and "" in plain and "" not in core
+    # The surface is the same: what was unpainted (filament 1, inherited) is now painted 1 ("4").
+    assert [c or "4" for c in plain] == core

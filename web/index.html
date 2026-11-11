@@ -383,7 +383,7 @@
           <span id="paintInfo" class="muted" aria-live="polite"></span>
         </div>
         <p class="hint keys">Keys: 1–9 colour, 0 erase, P paint, M mirror, L cover the engraved line, I pick colour, , . wand smaller / larger, [ ] brush or angle, + − grow the last step, Ctrl+Z / Ctrl+Shift+Z undo / redo, Esc stop.</p>
-        <label class="row seat-row" title="How far painted colours reach into the figure (Bambu “maximum width of a segmented region”); deeper inside is the figure's main filament. Print time and colour changes stay about the same — the colours still appear on the same layers — but less of each colour is used and the inside is one material."><span class="muted">Paint depth</span>
+        <label class="row seat-row" title="How far painted colours reach into the figure (Bambu “maximum width of a segmented region”); deeper inside prints in one filament (“Inside prints in” below). Less of each colour is used; the inside is on every layer, so pick an inside colour that is on most layers' surface, or the colour changes go up (a Charmander: 58 with orange inside, 118 with red)."><span class="muted">Paint depth</span>
           <select id="paintDepth">
             <option value="">Project's setting</option>
             <option value="0">All the way in</option>
@@ -393,6 +393,9 @@
             <option value="2">2 mm</option>
             <option value="3">3 mm</option>
           </select>
+        </label>
+        <label class="row seat-row" title="The filament the inside prints in, past the paint depth (set one above: with paint all the way in, paint fills the inside). The surface keeps its colours. Pick the colour of a thin part that changes colour along its length (a red flame on an orange tail), so one filament runs through it: a part that switches colour across its whole section on one layer is weaker there. A colour that is not on a layer's surface adds a colour change on that layer."><span class="muted">Inside prints in</span>
+          <select id="coreSelect"><option value="">The figure's own filament</option></select>
         </label>
         <label class="row seat-row" title="A painted patch smaller than this at the print size takes the colour around it: a sliver left over from painting over a colour would otherwise cost a filament change on every layer it spans. 0.5 mm² is a dot about 0.8 mm across, two nozzle lines. A patch you painted in one step (an eye's small oval) is kept however small."><span class="muted">Drop specks under</span>
           <select id="despeckleSelect">

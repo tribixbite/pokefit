@@ -89,7 +89,7 @@ def cmd_fit(a: argparse.Namespace) -> int:
                     figure_scale=_scale(a.scale), magnets=0 if a.no_magnets else a.magnets, object_id=a.object,
                     rotate_x=a.rotate_x, rotate_y=a.rotate_y, rotate_z=a.rotate_z, pocket_seat=a.magnet_seat,
                     texture_colours=a.texture_colours, texture_details=a.details, bend=_bend(a.bend), flat_base=a.flat_base,
-                    flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth,
+                    flat_depth=a.press, flat_fill=a.fill, paint_depth=a.paint_depth, core_filament=a.core,
                     floor_diameter=None if a.floor in (None, "auto") else float(a.floor))
     s = open_session(a.input)
     rep, _ = analyse(s, params, recommend=a.steels)
@@ -193,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--fill", type=float, default=2.5, help="fill gaps up to this under the base, mm (0 = off)")
     f.add_argument("--paint-depth", type=float, metavar="MM",
                    help="how far paint reaches into the figure (0 = unlimited; default: the project's setting)")
+    f.add_argument("--core", type=int, metavar="N",
+                   help="filament N prints the inside, past the paint depth (default: the object's own)")
     f.add_argument("--steels", "--washers", dest="steels", action="store_true",
                    help="compare every catalogue steel disc and washer (slower)")
     f.add_argument("--out", type=Path, help="write <name>_pokefit_<ball%%>.3mf, shell STL and report here")

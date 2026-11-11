@@ -81,6 +81,8 @@ export interface Params {
   reinforce?: boolean;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
+  /** Filament (palette number) the inside prints in past the paint depth; null = the object's own. */
+  core_filament: number | null;
   /** Simplify the mesh when it loads (shape within 0.1 % of its size): a share of the file's triangles (0..1, the
    *  Low / Medium / High levels) or a triangle count (>= 1,000); null = as in the file. */
   simplify: number | null;

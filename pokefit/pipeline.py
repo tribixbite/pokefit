@@ -38,7 +38,7 @@ from .magnets import (HeightField, Pocket, PocketMap, PocketSpec, choose_pockets
 from .model3mf import (FigureObject, Part, Project, digest, parts_digest, plate_size, read_project,
                        remesh_part, world_parts, write_project)
 from .gltf import MAX_DETAILS, MAX_PICK
-from .paint import attr_paint, distinct_attrs, leaves, parse_tree, remap_states
+from .paint import attr_paint, distinct_attrs, encode_tree, leaves, parse_tree, remap_states
 from .presets import PresetLibrary, PresetNote, ams_filaments
 from .printer import AmsSlot
 from .remap import SlotMatch, match_slots, remap_parts, used_filaments
@@ -69,7 +69,7 @@ _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 SHAPE_CACHE = 4             # fit / underside / printability results kept per session (recent shapes)
 # Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
 COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "colour_map",
-                         "paint_depth", "simplify_auto",
+                         "paint_depth", "core_filament", "simplify_auto",
                          "texture_colours", "texture_details", "despeckle"})
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`) ...
@@ -155,9 +155,14 @@ class Params:
     strengthen_at: list[dict[str, Any]] | None = None
     # How far painted colours reach into the figure, in mm (Bambu `mmu_segmented_region_max_width`; deeper is
     # the object's own filament). None = the project's value (0 there = unlimited: paint fills inward until it
-    # meets other paint). Measured on an 8-colour figure: time and colour changes stay the same (the colours
-    # still appear on the same layers); only how much of each colour, and of the base, is used.
+    # meets other paint). The inside (`core_filament`) is on every layer: an inside colour missing from a layer's
+    # surface costs a change there (Charmander, 1.6 mm: 118 changes with its red inside, 58 with orange = as deep).
     paint_depth: float | None = None
+    # The filament the inside prints in, past `paint_depth` (a palette number, as paint steps use; None = the
+    # object's own). The surface keeps its colours (`cored`): a figure whose thin parts change colour can keep one
+    # filament running through them (Charmander's red flame on an orange tail: the neck switched from orange to red
+    # on one layer and snapped there). Only seen with a paint depth: unlimited paint fills the inside itself.
+    core_filament: int | None = None
     # Simplify dense meshes when the file loads (simplify.py; None = as in the file): to about this many triangles
     # (>= 1,000), or to this share of the file's triangles (0 < x < 1: the UI's low / medium / high levels).
     # The shape moves by at most 0.1 % of the figure's size; fewer triangles make every later step faster.
@@ -269,6 +274,10 @@ class Params:
             self.paint_depth = float(self.paint_depth)
             if not 0 <= self.paint_depth <= 10:
                 raise ValueError("paint_depth must be 0..10 mm (0 = unlimited, or null for the project's)")
+        if self.core_filament is not None:
+            self.core_filament = int(self.core_filament)
+            if not 1 <= self.core_filament <= 64:
+                raise ValueError("core_filament must be a filament number 1-64 (or null for the object's)")
         self.despeckle = float(self.despeckle)
         if not 0 <= self.despeckle <= 20:
             raise ValueError("despeckle must be 0..20 mm² (0 = off)")
@@ -1708,6 +1717,35 @@ def remap_filaments(parts: list[Part], colour_map: list[int], default_extruder: 
     return out
 
 
+def cored(parts: list[Part], default_extruder: int, core: int | None) -> tuple[list[Part], int]:
+    """`parts` (and the object's filament) printing their inside in filament `core`, the surface unchanged: every
+    unpainted triangle, and every unpainted piece of a split one, is painted the filament it showed (its part's, else
+    the object's), then each part's own filament becomes `core`. Bambu prints a part's filament past the paint depth
+    (`mmu_segmented_region_max_width`). Modifier volumes are kept as they are (a filament there recolours the solid
+    inside them). Unchanged when `core` is None or already the filament everything inherits."""
+    if core is None or all(p.subtype == "modifier_part" or (p.extruder or default_extruder) == core for p in parts):
+        return parts, default_extruder if core is None else core
+    out = []
+    for p in parts:
+        base = p.extruder or default_extruder
+        if p.subtype == "modifier_part" or base == core:
+            out.append(p)
+            continue
+        whole = f'paint_color="{encode_tree(base)}"'
+        extra: dict[int, str] = {}
+        done: dict[str, str] = {}
+        for i, attrs in p.tri_extra.items():
+            if attrs not in done:
+                fp = attr_paint(attrs)
+                done[attrs] = (f"{attrs} {whole}".strip() if fp is None else attrs.replace(
+                    f'paint_color="{fp.code}"', f'paint_color="{remap_states(fp.code, {}, base)}"'))
+            extra[i] = done[attrs]
+        for i in np.setdiff1d(np.arange(len(p.faces)), np.fromiter(p.tri_extra, np.int64, len(p.tri_extra))):
+            extra[int(i)] = whole
+        out.append(Part(p.name, core, p.vertices, p.faces, extra, p.subtype, dict(p.settings)))
+    return out, core
+
+
 def painted_mesh(part: Part, default_extruder: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """(vertices, faces, extruder per face, source triangle per face) with split paint drawn as its sub-triangles,
     so the preview shows brush strokes and texture-derived colour edges as the slicer will print them. The drawn
@@ -2224,7 +2262,8 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     # Weak features printed solid (joints.reinforcements): Bambu modifier volumes, written to the 3MFs only.
     settings = export_settings(session, params)
     mods, held = reinforced(final, settings) if params.reinforce else ([], [])
-    f3 = write_project(session.project, obj.name, session.extruder(params), final + mods,
+    written, ext = cored(final + mods, session.extruder(params), params.core_filament)
+    f3 = write_project(session.project, obj.name, ext, written,
                        out_dir / f"{stem}_pokefit_{pct}.3mf", settings=settings, made=made_with(params))
     shell_path = out_dir / f"shell_floor{session.cavity(params).seat_diameter:.1f}mm_{pct}.stl"
     shell_note = ""
@@ -2238,7 +2277,7 @@ def export(session: Session, params: Params, out_dir: str | Path, ball_model: Pa
     imp = None
     matches = [m for m in session.slot_matches(params) if m.used]
     if matches and session.reference:
-        parts, ext = remap_parts(final + mods, session.extruder(params), matches)
+        parts, ext = remap_parts(written, ext, matches)
         imp = write_project(session.project, obj.name, ext, parts, out_dir / f"{stem}_pokefit_{pct}_import.3mf",
                             settings=session.reference, made=made_with(params))
     # The same figure as one STL with a colour per triangle, for tools that take STL (Bambu Studio ignores it).
@@ -2285,8 +2324,9 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     root.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {}
     stem = export_stem(session, params)
+    written, ext = cored(final, session.extruder(params), params.core_filament)
     for name, sup in (("off", False), ("auto", True)):
-        f = write_project(session.project, obj.name, session.extruder(params), final, root / f"{name}.3mf",
+        f = write_project(session.project, obj.name, ext, written, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))
         out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{name}.gcode.3mf").to_dict()
     needs = out["auto"].get("support_seconds", 0) > 0
@@ -2306,7 +2346,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
         if pos is None:
             out["x10"] = SliceResult(False, error="10 copies do not fit on one plate", copies=10).to_dict()
         else:
-            f = write_project(session.project, obj.name, session.extruder(params), final, root / "x10.3mf",
+            f = write_project(session.project, obj.name, ext, written, root / "x10.3mf",
                               positions=pos, settings=st)
             out["x10"] = slice_3mf(f, copies=10, work_dir=root / "x10").to_dict()
     return out

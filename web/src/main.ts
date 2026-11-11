@@ -42,7 +42,7 @@ let defaults: Params = {
   rotate_x: 0, rotate_y: 0, rotate_z: 0, magnets: 2,
   pockets: null, pocket_diameter: 4.18, pocket_depth: 2.2, pocket_wall: 0.8, pocket_ceiling: 0.6,
   pocket_grip: 1.2, pocket_max_seat: 2.0, pocket_seat: "steel", object_id: null, slot: null, settings_source: "reference",
-  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null,
+  process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null, core_filament: null,
   filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5, strengthen_at: null, reinforce: false,
 };
@@ -528,6 +528,7 @@ function syncControls(): void {
   $<HTMLInputElement>("flatDepth").value = String(p.flat_depth);
   $<HTMLInputElement>("flatFill").value = String(p.flat_fill);
   $<HTMLSelectElement>("paintDepth").value = p.paint_depth === null ? "" : String(p.paint_depth);
+  syncCore();
   $<HTMLSelectElement>("strengthenSelect").value = String(p.strengthen);
   showSimplify(p.simplify);
   $<HTMLInputElement>("simplifyAuto").checked = p.simplify_auto;
@@ -935,6 +936,20 @@ function slotDetail(type: string, name: string): string {
 }
 
 /** Label and colour of the slot figure filament `n` prints from, per the last analysis (Colours palette dots). */
+/** "Inside prints in": one option per palette filament (number and colour, as the swatches), the chosen one kept
+ * while it is still in the palette (Remove colour can drop it). */
+function syncCore(): void {
+  const sel = $<HTMLSelectElement>("coreSelect");
+  const cols = colorize.palette();
+  if (state.params.core_filament !== null && state.params.core_filament > cols.length) state.params.core_filament = null;
+  sel.replaceChildren(new Option("The figure's own filament", ""), ...cols.map((c, i) => {
+    const o = new Option(`${i + 1} · ${c.toUpperCase()}`, String(i + 1));
+    o.style.color = c;
+    return o;
+  }));
+  sel.value = state.params.core_filament === null ? "" : String(state.params.core_filament);
+}
+
 function slotOf(n: number): { label: string; colour: string | null } | null {
   const m = state.report?.import_map.find((x) => x.source === n);
   if (!m) return null;
@@ -1371,6 +1386,10 @@ function bind(): void {
     state.params.paint_depth = v === "" ? null : +v;
     remember();
   });
+  // The inside's filament: export/slice settings only, like the paint depth. Its list follows the palette.
+  const core = $<HTMLSelectElement>("coreSelect");
+  for (const ev of ["focus", "pointerdown"]) core.addEventListener(ev, () => syncCore());
+  core.addEventListener("change", () => { state.params.core_filament = core.value === "" ? null : +core.value; });
   // Strengthen thin parts: reshapes the figure (like the conform step), so size and pockets are found again.
   $<HTMLSelectElement>("strengthenSelect").addEventListener("change", (e) => {
     state.params.strengthen = +(e.target as HTMLSelectElement).value;

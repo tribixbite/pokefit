@@ -117,8 +117,9 @@ def _leaf_nibbles(state: int) -> list[int]:
     return out + [n]
 
 
-def remap_states(code: str, mapping: dict[int, int]) -> str:
-    """The same paint with each painted state k replaced by mapping.get(k, k); splits are kept exactly."""
+def remap_states(code: str, mapping: dict[int, int], unpainted: int = 0) -> str:
+    """The same paint with each painted state k replaced by mapping.get(k, k); splits are kept exactly. Unpainted
+    leaves (state 0: the part's own filament) become `unpainted` (0 keeps them unpainted)."""
     nib = _nibbles(code)
     out: list[int] = []
     pos = 0
@@ -139,7 +140,7 @@ def remap_states(code: str, mapping: dict[int, int]) -> str:
                     pos += 1
                 state += nib[pos] if pos < len(nib) else 0
                 pos += 1
-            out.extend(_leaf_nibbles(mapping.get(state, state) if state else 0))
+            out.extend(_leaf_nibbles(mapping.get(state, state) if state else unpainted))
             return
         out.append(d)
         for _ in range(split + 1):
