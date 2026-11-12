@@ -48,8 +48,10 @@ exist only on the original Windows machine (ask the user for the files).
    export and slices only, the coloured STL is surface only). Cost depends on the inside colour: Charmander at the
    app's 31 mm (`printed/charmander.3mf`, bundled reference, verify_export): paint all the way in 58 changes 3.93 h
    58.0 g; 1.6 mm with the file's red inside 118 / 6.04 h / 87.5 g; 1.6 mm, inside orange (4) 58 / 3.90 h / 57.8 g.
-   Not checked in G-code for this export (the hand-made `printed/charmander_tail3.8mm_core.3mf` with the same
-   structure was: orange core in the flame). Open: suggest the inside filament (the colour on most layers' surface;
+   Local UI checked (Playwright, 2026-11-12): 19 palette options, 1.6 mm (option added) + inside 4 sent in
+   `/api/export`; the file: every part filament 4, max width 1.6, 13,118 triangles all painted. Not checked in
+   G-code for this export (the hand-made `printed/charmander_tail3.8mm_core.3mf` with the same structure was: orange
+   core in the flame). Open: suggest the inside filament (the colour on most layers' surface;
    `toolchange` could score it) instead of leaving the user to pick; `mmu_segmented_region_interlocking_depth`
    (0 / 0.4 / 0.8 mm: no time effect on an 8-colour figure) is still not exposed; strength needs a physical test.
 6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only;

@@ -13,6 +13,11 @@ import { versioned } from "./version";
 
 export type Mode = "local" | "browser";
 let mode: Mode = "browser";
+/** Settles once `getConfig` has chosen the back end. The file input works from the first paint, before
+ * /api/config answers: a figure opened then must not load in the worker while every later call goes to the
+ * server (which has never seen that session: "Unknown session" and no figure). */
+let decide: () => void = () => {};
+const decided = new Promise<void>((resolve) => { decide = resolve; });
 
 // ------------------------------------------------------------------ local server (HTTP)
 
@@ -100,12 +105,14 @@ export async function getConfig(): Promise<Config> {
     const res = await fetch("/api/config", { headers: { Accept: "application/json" } });
     if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) {
       mode = "local";
+      decide();
       return (await res.json()) as Config;
     }
   } catch {
     /* no server: static hosting */
   }
   mode = "browser";
+  decide();
   startWorker();                     // warm the engine up while the user picks a file
   // The same config the engine would return, generated at build time (build.ts), so the
   // page is usable at once instead of after the ~30 MB engine download.
@@ -117,6 +124,7 @@ export async function getConfig(): Promise<Config> {
  * printability checks come from a second `analyse` (the report says `printing_pending`).
  */
 export async function loadFile(file: File, params: Params): Promise<LoadResponse> {
+  await decided;
   if (mode === "local") {
     const res = await check(
       await fetch("/api/load", {
@@ -133,6 +141,7 @@ export async function loadFile(file: File, params: Params): Promise<LoadResponse
 
 /** Load a file already on the server's disk (local engine only); quick, as `loadFile`. */
 export async function loadPath(path: string, params: Params): Promise<LoadResponse> {
+  await decided;
   if (mode !== "local") throw new Error("Opening a path needs the local version; drop the file instead.");
   return postJson<LoadResponse>("/api/load_path", { path, params, quick: true });
 }
