@@ -358,8 +358,10 @@ export async function printPlan(file: string, slots: number[]): Promise<PrintPla
 
 /** Upload the print file and START THE PRINT (the user's explicit "Start print"). Returns beambam's output. */
 export async function startPrint(file: string, slots: number[], onTick?: (seconds: number, progress: string) => void,
+  acceptWarnings = false,
 ): Promise<string> {
   if (mode !== "local") throw new Error("Printing needs the local version with beambam.");
-  const { job } = await postJson<{ job: string }>("/api/printer/print", { file, slots, confirm: true });
+  const { job } = await postJson<{ job: string }>("/api/printer/print",
+    { file, slots, confirm: true, accept_warnings: acceptWarnings });
   return (await waitJob<{ output: string }>(job, 1500, onTick, "the print did not start")).output;
 }

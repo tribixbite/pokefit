@@ -25,7 +25,7 @@ API (all JSON unless noted):
   POST /api/printer     {clear?}                                   -> config (AMS read through beambam)
   POST /api/printer/status {}                                      -> {progress} (read-only)
   POST /api/printer/camera {on}                                    -> {url | null} (beambam camera child)
-  POST /api/printer/print {file, slots, confirm?}                  -> preview, or with confirm {job} (starts a print)
+  POST /api/printer/print {file, slots, confirm?, accept_warnings?} -> preview (+ beambam mapping), or with confirm {job} (starts a print)
 """
 from __future__ import annotations
 
@@ -49,7 +49,8 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
                        slice_variants, steel_table)
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
-from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, print_file_check,
+from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, beambam_url,
+                      print_file_check, print_plan,
                       print_file_summary,
                       print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe
@@ -135,7 +136,7 @@ def _config() -> dict[str, Any]:
     exe = find_exe()
     from .imageto3d import Comfy
     return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets, _ams), "engine": "local",
-            "photos": Comfy(COMFY_URL).alive(timeout=1.5), "printer_link": beambam_command() is not None,
+            "photos": Comfy(COMFY_URL).alive(timeout=1.5), "printer_link": beambam_command() is not None or beambam_url() is not None,
             "track_switch": _track_switch}
 
 
@@ -401,18 +402,27 @@ class Handler(BaseHTTPRequestHandler):
             fil["slot"] = slot
             fil["spool"] = a.to_dict() if a else None
         if not body.get("confirm"):
-            # beambam's reading of the G-code (reads the file only): shown before "Start print".
+            # beambam's reading of the G-code (reads the file only) and its filament -> tray check against the
+            # live AMS (reads the printer, changes nothing): both shown before "Start print".
             try:
                 check: dict[str, Any] | None = print_file_check(f)
                 check_error = ""
             except PrinterError as exc:
                 check, check_error = None, str(exc)
+            try:
+                mapping: dict[str, Any] | None = print_plan(f, slots)
+                mapping_error = ""
+            except PrinterError as exc:
+                mapping, mapping_error = None, str(exc)
             self._json({**summary, "file": body.get("file"), "name": f.name, "check": check,
-                        "check_error": check_error})
+                        "check_error": check_error, "mapping": mapping, "mapping_error": mapping_error})
             return
+        # `accept_warnings`: the page showed beambam's mapping warnings and the user still pressed Start print.
+        accept = body.get("accept_warnings") is True
         jid = uuid.uuid4().hex[:10]
         _jobs[jid] = {"state": "running", "progress": "uploading to the printer and starting"}
-        self._json({"job": _start_job(lambda: {"output": send_print(f, slots), **summary}, jid)})
+        self._json({"job": _start_job(lambda: {"output": send_print(f, slots, accept_warnings=accept), **summary},
+                                      jid)})
 
     def post_load_path(self, q: dict[str, str]) -> None:
         body = self._json_body()

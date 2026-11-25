@@ -10,6 +10,13 @@ exist only on the original Windows machine (ask the user for the files).
    key in `~/.x2d`, never in a repo). "Start print" has never been pressed. **The first real print needs the user's OK in
    chat, every later one their click.** It also settles whether a dual-nozzle start still fails (beambam notes disagree,
    err 84033544). Then: AMS load/unload. `beambam print --dry-run` (purge check only, touches no printer) is safe to use.
+   2026-11-25: the confirm panel now shows beambam's own spool check (`printer.print_plan`: `ams map --json`, or the
+   daemon's `/print/plan`): errors disable "Start print", warnings are shown and the click accepts them
+   (`accept_warnings` → `--yes`). Before this, any colour/profile difference made `beambam print` refuse with no
+   terminal to confirm on (e.g. rumi_frame on D2: profile GFA05 vs GFL96, ΔE 38). Optional daemon mode:
+   `beambam daemon --http 127.0.0.1:8765` + `POKEFIT_BEAMBAM_URL=http://127.0.0.1:8765` (live X2D: state 0.06 s,
+   plan 0.006 s vs 2.3 s per CLI call). The live print itself is still unverified: the signing key's cert expired
+   2026-08-22 (`beambam key` on the phone first).
 2. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
    changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
    auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its

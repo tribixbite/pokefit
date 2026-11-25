@@ -1131,25 +1131,43 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
       start.disabled = true;
       status.textContent = "Uploading to the printer and starting…";
       try {
+        // The warnings above were on screen when the user pressed Start print: that is their OK.
         const output = await api.startPrint(file, slots, (s, what) => {
           status.textContent = `${what || "Sending"}… ${Math.round(s)} s`;
-        });
+        }, (plan.mapping?.warnings.length ?? 0) > 0);
         status.textContent = `Started. ${output.split("\n").filter(Boolean).slice(-1)[0] ?? ""}`;
       } catch (e) {
         status.textContent = (e as Error).message;
         start.disabled = false;
       }
     });
+    // beambam refuses a plan with errors whatever the user says: don't offer the button.
+    if (!plan.mapping || plan.mapping.errors.length) start.disabled = true;
     box.replaceChildren(
       h("div", { cls: "print-plan" },
         h("div", { textContent: `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C):` }),
         h("table", { cls: "tbl" }, h("tbody", {}, ...rows)),
+        printMappingView(plan),
         printCheckView(plan),
         h("div", { cls: "muted", textContent: "Check the plate is clean and the spools are right: this starts the printer." }),
         h("div", { cls: "row" }, start, cancel), status));
   } catch (e) {
     box.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   }
+}
+
+/** beambam's check of each filament's spool against the live AMS: errors block "Start print", warnings are the user's call. */
+function printMappingView(plan: PrintPlan): HTMLElement {
+  const m = plan.mapping;
+  if (!m) return h("div", { cls: "err", textContent: `Spool check unavailable: ${plan.mapping_error}` });
+  const lines = [
+    ...m.errors.map((e) => h("div", { cls: "err", textContent: `✗ ${e}` })),
+    ...m.warnings.map((w) => h("div", { cls: "warn-text", textContent: `⚠ ${w}` })),
+    ...m.notes.map((n) => h("div", { cls: "muted", textContent: n })),
+  ];
+  const verdict = m.errors.length ? "beambam will not start this print:"
+    : m.warnings.length ? "Spool check (beambam): Start print accepts these differences." : "Spool check (beambam): every spool matches.";
+  return h("div", { cls: "print-check" }, h("div", { textContent: verdict }), ...lines);
 }
 
 /** beambam's check of the G-code before "Start print": time, weight, waste (purge + prime tower), nozzle swaps, its warnings. */

@@ -11,6 +11,19 @@ The loaded trays, in order — AMS A slots 1–4, B 1–4, … then the external
 Studio's "sync AMS" makes a project's filament list, so they serve as the slots the figure's colours
 are matched to (`remap.match_slots`), and their colours can replace the figure's palette.
 
+Two ways to reach beambam (both local-only):
+
+* its CLI as a child process (default; `POKEFIT_BEAMBAM` or `beambam` on PATH): every call opens its own
+  printer connection (`beambam status` ≈ 2.6 s);
+* a running beambam daemon (`beambam daemon --http 127.0.0.1:8765`), when `POKEFIT_BEAMBAM_URL` is set
+  (`POKEFIT_BEAMBAM_TOKEN` for its `--auth-token`): one long-lived connection, `/state` answers from its
+  cache in milliseconds, and printing goes through `POST /print/plan` + `POST /print`. The daemon must run on
+  this machine, or files are first sent with `POST /print/upload`.
+
+Printing is two steps either way: `print_plan` (beambam's filament -> tray check, touches nothing) is shown
+to the user, and `send_print(..., accept_warnings=True)` only after they press "Start print" having seen its
+warnings — beambam refuses a plan with warnings otherwise, and hard errors always.
+
 Dual-nozzle printers (H2D, X2D): each AMS unit's `info` hex word holds, in bits 8-11, the nozzle it is
 wired to (0 right, 1 left), or 0xE when a Filament Track Switch is installed and routes any unit to either
 nozzle (`device.fila_switch` is then present; bambuddy's reading, matching the user's X2D: 4 units, all 0xE).
@@ -25,11 +38,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from dataclasses import asdict, dataclass
 from typing import Any
 
 TIMEOUT_S = 30.0
+POLL_S = 1.0                # daemon print-job poll interval
 
 
 @dataclass
@@ -62,8 +77,69 @@ def beambam_command() -> list[str] | None:
     return [found] if found else None
 
 
+def beambam_url() -> str | None:
+    """The beambam daemon's HTTP address (`POKEFIT_BEAMBAM_URL`, e.g. http://127.0.0.1:8765), if set."""
+    url = (os.environ.get("POKEFIT_BEAMBAM_URL") or "").strip().rstrip("/")
+    return url or None
+
+
+def _daemon(method: str, path: str, body: Any = None, *, timeout: float = TIMEOUT_S,
+            raw: bytes | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    """One request to the beambam daemon; its JSON reply. A 4xx/5xx with a JSON `error` raises PrinterError
+    with that message (the daemon's refusals are written for the user)."""
+    import urllib.error
+    import urllib.request
+    url = beambam_url()
+    if url is None:
+        raise PrinterError("POKEFIT_BEAMBAM_URL is not set")
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    req = urllib.request.Request(url + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json" if raw is None
+                                          else "application/octet-stream", **(headers or {})})
+    token = os.environ.get("POKEFIT_BEAMBAM_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            reply = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            reply = json.loads(exc.read() or b"{}")
+        except ValueError:
+            reply = {}
+        if isinstance(reply, dict) and exc.code in (409, 422) and "filaments" in reply:
+            return reply                              # a plan with errors is still an answer
+        msg = reply.get("error") if isinstance(reply, dict) else None
+        raise PrinterError(f"beambam daemon: {msg or exc}") from exc
+    except (OSError, ValueError) as exc:
+        raise PrinterError(f"beambam daemon at {url} not reachable ({exc}): start it with "
+                           "`beambam daemon --http 127.0.0.1:8765`, or unset POKEFIT_BEAMBAM_URL") from exc
+    if not isinstance(reply, dict):
+        raise PrinterError(f"beambam daemon sent no JSON object for {path}")
+    return reply
+
+
+def _daemon_is_local() -> bool:
+    from urllib.parse import urlparse
+    return (urlparse(beambam_url() or "").hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+
+def _daemon_file(path: Path) -> str:
+    """The file path the daemon should read: this one when it runs here, else an uploaded copy."""
+    if _daemon_is_local():
+        return str(path.resolve())
+    up = _daemon("POST", "/print/upload", raw=path.read_bytes(), timeout=PRINT_TIMEOUT_S,
+                 headers={"X-Filename": path.name})
+    return str(up["file"])
+
+
 def read_state(timeout: float = TIMEOUT_S) -> dict[str, Any]:
-    """The printer's state report (`beambam status`)."""
+    """The printer's state report (the daemon's `/state`, else `beambam status`)."""
+    if beambam_url():
+        cached = _daemon("GET", "/state", timeout=timeout)
+        if not cached.get("print"):
+            raise PrinterError("the beambam daemon has no printer state yet (just started, or the printer is off)")
+        return cached
     cmd = beambam_command()
     if cmd is None:
         raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
@@ -312,17 +388,79 @@ def print_file_check(path: Path, timeout: float = ANALYZE_TIMEOUT_S) -> dict[str
             "warnings": [str(w) for w in d.get("warnings") or []], "hints": [str(h) for h in d.get("hints") or []]}
 
 
-def send_print(path: Path, slots: list[int], timeout: float = PRINT_TIMEOUT_S) -> str:
-    """Upload `path` (a sliced .gcode.3mf) to the printer and start it, filament i from AMS slot slots[i]:
-    `beambam print <file> --slot a,b,...`. CHANGES THE PRINTER: call only on the user's explicit action.
-    beambam re-checks each slot's spool against the file (empty slot / wrong material refuse to start)."""
+def _check_slots(slots: list[int]) -> None:
+    if not slots or any(not 0 <= s <= 15 for s in slots):
+        raise PrinterError(f"AMS slots must be 0..15, one per filament: {slots}")
+
+
+def print_plan(path: Path, slots: list[int], timeout: float = TIMEOUT_S) -> dict[str, Any]:
+    """beambam's filament -> tray plan for printing `path` with `slots` against the live AMS (`ams map --json`
+    or the daemon's `/print/plan`). Reads the printer, changes nothing. The dict has `filaments` (each with
+    its `tray`, `errors`, `warnings`), flat `errors` / `warnings` and `notes`: errors refuse the print,
+    warnings need the user's OK (`send_print(accept_warnings=True)`)."""
+    _check_slots(slots)
+    if beambam_url():
+        plan = _daemon("POST", "/print/plan", {"file": _daemon_file(path), "slot": slots}, timeout=timeout)
+    else:
+        cmd = beambam_command()
+        if cmd is None:
+            raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
+        try:
+            out = subprocess.run([*cmd, "ams", "map", str(path), "--slot", ",".join(map(str, slots)), "--json"],
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=timeout, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PrinterError(f"beambam ams map failed: {exc}") from exc
+        # Exit 0 clean, 2 warnings, 1 errors — all with the JSON plan, unless the file or printer failed.
+        start = out.stdout.find("{")
+        try:
+            parsed: Any = json.loads(out.stdout[start:]) if start >= 0 else None
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            raise PrinterError(f"beambam ams map failed ({out.returncode}): "
+                               f"{(out.stderr or out.stdout).strip()[-400:]}")
+        plan = parsed
+    if "errors" not in plan:          # beambam before 1.6.1 has only per-filament lists
+        plan["errors"] = [f"filament {f.get('filament')}: {e}" for f in plan.get("filaments") or []
+                          for e in f.get("errors") or []]
+        plan["warnings"] = [f"filament {f.get('filament')}: {w}" for f in plan.get("filaments") or []
+                            for w in f.get("warnings") or []]
+    return plan
+
+
+def send_print(path: Path, slots: list[int], timeout: float = PRINT_TIMEOUT_S, *,
+               accept_warnings: bool = False) -> str:
+    """Upload `path` (a sliced .gcode.3mf) to the printer and start it, filament i from AMS slot slots[i]
+    (`beambam print <file> --slot a,b,...`, or the daemon's `POST /print`). CHANGES THE PRINTER: call only on
+    the user's explicit action. beambam re-checks each slot's spool against the file: errors (empty slot,
+    wrong material) always refuse; warnings (colour, brand, profile) refuse unless `accept_warnings` — pass
+    it only when the user was shown `print_plan`'s warnings before pressing "Start print"."""
+    _check_slots(slots)
+    if beambam_url():
+        reply = _daemon("POST", "/print", {"file": _daemon_file(path), "slot": slots, "confirm": True,
+                                           "accept_warnings": accept_warnings}, timeout=TIMEOUT_S)
+        poll = str(reply.get("poll") or "")
+        deadline = time.monotonic() + timeout
+        while poll:
+            job = _daemon("GET", poll)
+            if job.get("done"):
+                if job.get("state") in ("accepted", "sent"):
+                    return str(job.get("message") or job.get("state"))
+                raise PrinterError(f"beambam print {job.get('state')}: {job.get('message')}")
+            if time.monotonic() > deadline:
+                raise PrinterError(f"beambam print still {job.get('state')} after {timeout:.0f} s: check the printer")
+            time.sleep(POLL_S)
+        raise PrinterError(f"beambam daemon did not start a print job: {reply}")
     cmd = beambam_command()
     if cmd is None:
         raise PrinterError("beambam not found: install it (pip install -e <beambam>) or set POKEFIT_BEAMBAM")
-    if not slots or any(not 0 <= s <= 15 for s in slots):
-        raise PrinterError(f"AMS slots must be 0..15, one per filament: {slots}")
+    argv = [*cmd, "print", str(path), "--slot", ",".join(map(str, slots))]
+    if accept_warnings:
+        argv.append("--yes")          # the user saw beambam's plan and pressed Start print
     try:
-        out = subprocess.run([*cmd, "print", str(path), "--slot", ",".join(map(str, slots))], capture_output=True,
+        out = subprocess.run(argv, capture_output=True,
                              text=True, encoding="utf-8", errors="replace", timeout=timeout,
                              env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

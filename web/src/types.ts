@@ -467,6 +467,20 @@ export interface PrintPlan {
   /** beambam's reading of the G-code (`beambam analyze`, file only); null with `check_error` when it failed. */
   check: PrintCheck | null;
   check_error: string;
+  /** beambam's filament -> tray check against the live AMS (reads the printer); null with `mapping_error`. */
+  mapping: PrintMapping | null;
+  mapping_error: string;
+}
+
+/** `printer.print_plan` (beambam `ams map --json` / daemon `/print/plan`). Errors refuse the print; warnings need
+ * the user's OK, which "Start print" gives (`accept_warnings`). */
+export interface PrintMapping {
+  filaments: { filament: number; type: string; colour: string; nozzle: string;
+    tray: { tray_id: number; label: string; type: string; colour: string } | null;
+    errors: string[]; warnings: string[] }[];
+  errors: string[];
+  warnings: string[];
+  notes: string[];
 }
 
 /** `printer.print_file_check`: what the sliced G-code does, as beambam reads it. */

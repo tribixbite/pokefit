@@ -12,7 +12,7 @@ Investigated 2026-10-19 (pokefit `main`, beambam `1c040c9`, craftmatic `9eda695f
 | 3. Colour | Texture/vertex colour → filaments, palette size, tap-to-paint, Bambu split paint | pokefit `gltf`, `colorize`, `paint` | ✔ |
 | 4. Plan | Materials (presets), nozzle split and colour-change cost on the X2D, slice | pokefit `presets`, `toolchange`, `slicer` | ✔ estimates + Bambu CLI slices |
 | 5. Map | Figure colours → filaments loaded in the 4 AMS units | pokefit `printer.py` (reads via beambam) + `remap.match_slots` | ✔ read + match + recolour; verified on the user's X2D (16 spools, track switch) |
-| 6. Print | Upload, start with the AMS mapping, watch live, change filaments | beambam (`ftps`, `print_job`, `cam`, `ams`) | ✔ watch (Printer card: camera + progress); ✗ send / filament control (below) |
+| 6. Print | Upload, start with the AMS mapping, watch live, change filaments | beambam (`ftps`, `print_job`, `cam`, `ams`) | ✔ watch (Printer card: camera + progress); ✔ send with beambam's spool check (CLI or daemon, below; no real print yet); ✗ filament control |
 
 ## Boundaries (why not one codebase)
 
@@ -56,6 +56,23 @@ Measured with the Bambu CLI on the user's X2D project (PETG, 0.16 mm, prime towe
   CLI slice (7 colours: 10.19 h / 145.7 g / 425 changes / same nozzle split with 0 and 1), so exports leave
   the project's value alone. Without a switch each unit feeds one nozzle; pokefit shows (R)/(L) per spool
   but does not yet constrain the planner (`printer.py` TODO).
+
+## Control path: CLI or daemon (2026-11-25)
+
+pokefit's local server talks to beambam one of two ways (`pokefit/printer.py`):
+
+| | CLI (default) | Daemon (`POKEFIT_BEAMBAM_URL`) |
+|---|---|---|
+| Start | nothing to run | `beambam daemon --http 127.0.0.1:8765` (keep it running) |
+| State | `beambam status`, new MQTT login each time (≈ 2.6 s) | `GET /state` from the daemon's cache (0.06 s on the X2D) |
+| Spool check | `beambam ams map FILE --slot … --json` | `POST /print/plan {file, slot}` |
+| Start print | `beambam print FILE --slot … [--yes]` | `POST /print {file, slot, confirm, accept_warnings}` → poll `/print/jobs/<id>` |
+| Daemon elsewhere | — | files go up with `POST /print/upload` first; set `POKEFIT_BEAMBAM_TOKEN` |
+
+Either way the page shows beambam's plan before "Start print"; errors (empty slot, other material, a tray that
+cannot reach the nozzle) disable it and warnings are accepted by the click. The browser never talks to beambam
+directly; if a page ever should, start the daemon with `--cors-origin <origin>` — beambam refuses POSTs from any
+other web origin, so a web page cannot drive the printer through a loopback daemon.
 
 ## Next steps (need the user / the printer)
 
