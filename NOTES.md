@@ -5,8 +5,11 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **First real print** — "Start print" has never been pressed. **The first real print needs the user's OK in chat,
-   every later one their click.** Everything before it is built and checked:
+1. **First real print** — pressed once, with the user's OK in chat (2026-11-25, from https://pokefit.party): jolteon
+   (2 h 44 min, 4 filaments, all on the left nozzle) uploaded and the X2D went PREPARE → RUNNING in 8 s; stopped by
+   plan 2 s later (`POST /control/stop`: err 0), bed still 25 °C, nozzles 27 °C, so nothing extruded (print_error
+   0x0300400C = cancelled). So the dual-nozzle `project_file` does start. **Every later print needs the user's click.**
+   Not yet seen: a full print, or one that uses the right nozzle. Everything before it is built and checked:
    - Local: Slice → "Send to printer…" → the confirm panel → `beambam print <file> --slot … [--yes]`, or the daemon's
      `POST /print` with `POKEFIT_BEAMBAM_URL` (live X2D: state 0.06 s, plan 0.006 s vs ≈ 2.3 s per CLI call).
    - The confirm panel (`web/src/printconfirm.ts`, local and site): a spool picker per filament with beambam's verdict
@@ -25,8 +28,12 @@ exist only on the original Windows machine (ask the user for the files).
      beambam and planned against the live X2D; the whole flow in Chrome on the phone against a local copy of the
      page served on 127.0.0.1:8770 (16 spools read, jolteon sliced 2 h 44 min / 31.7 g, picker re-plan, a PLA spool
      for a PETG filament disabling Start print). The live site serves the code and the daemon answers its preflight.
-   - Not verified: https://pokefit.party itself in a browser — Chrome's Local Network Access prompt needs the
-     user's tap (the phone was locked and Android kept killing the browser); and the new row layout on a phone.
+   - Verified 2026-11-25: https://pokefit.party itself, in headless Chromium 138 on the phone (412 px wide): open
+     jolteon.3mf → Connect (16 spools) → Slice → confirm panel → Start print (stopped before heating, item 1).
+     Found there: the spool list stayed put while its button scrolled away (the page scrolls on a phone, not
+     `.panel`), covering other rows and Start print; fixed by listening for scroll in the capture phase.
+   - Not verified: Chrome's Local Network Access prompt (the headless run turned the check off; it needs the
+     user's tap on the phone, which was locked).
    - The daemon has no camera route: the Printer card shows status only on the site.
    - The daemon runs from a shell on the phone and dies with Termux under memory pressure: it needs a service
      entry (operad / boot script) before the site can rely on it.

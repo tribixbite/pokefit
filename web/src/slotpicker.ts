@@ -147,7 +147,7 @@ export function slotPicker(o: SlotPickerOptions): HTMLButtonElement {
       btn.setAttribute("aria-expanded", "false");
       document.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("resize", close);
-      document.querySelector(".panel")?.removeEventListener("scroll", place);
+      document.removeEventListener("scroll", place, true);
       open = null;
       btn.focus({ preventScroll: true });
     }
@@ -160,7 +160,9 @@ export function slotPicker(o: SlotPickerOptions): HTMLButtonElement {
     btn.setAttribute("aria-expanded", "true");
     document.addEventListener("pointerdown", outside, true);
     window.addEventListener("resize", close);
-    document.querySelector(".panel")?.addEventListener("scroll", place, { passive: true });
+    // Capture catches every scroller: the side panel on wide screens, the page itself on a phone,
+    // where the fixed list would otherwise stay put while its button scrolls away.
+    document.addEventListener("scroll", place, { passive: true, capture: true });
     list.addEventListener("keydown", key);
     list.focus({ preventScroll: true });
     open = { close };
