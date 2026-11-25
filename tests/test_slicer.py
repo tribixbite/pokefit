@@ -7,7 +7,7 @@ import trimesh
 
 from conftest import write_inline_3mf
 from pokefit.model3mf import Part, read_project, write_project
-from pokefit.slicer import (adapt_settings, default_slot, find_exe, grid_positions, read_result, reference_settings,
+from pokefit.slicer import (adapt_settings, cli_kept_settings, default_slot, find_exe, grid_positions, read_result, reference_settings,
                             slice_3mf)
 
 REF = Path(__file__).resolve().parent.parent / "pokeball60goodPrinted.3mf"
@@ -141,3 +141,15 @@ def test_slice_writes_a_print_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert res.ok, res.error
     names = zipfile.ZipFile(res.print_file).namelist()
     assert {"Metadata/plate_1.gcode", "Metadata/plate_1.gcode.md5", "Metadata/plate_1.png"} <= set(names)
+
+
+def test_cli_keeps_the_projects_track_switch(tmp_path: Path) -> None:
+    # The Bambu CLI resets these to false unless passed as options; a project that has them on passes them on.
+    import zipfile
+    f = tmp_path / "p.3mf"
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("Metadata/project_settings.config",
+                   json.dumps({"has_filament_switcher": "1", "enable_filament_dynamic_map": "0"}))
+    assert cli_kept_settings(f) == ["--has-filament-switcher=1"]
+    assert cli_kept_settings(tmp_path / "missing.3mf") == []
+

@@ -119,7 +119,7 @@ button, select, input { font: inherit; color: inherit; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
 label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
-select, input[type="number"], input[type="text"] {
+select, input[type="number"], input[type="text"], input[type="url"] {
   min-height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: #0f151e; color: var(--text); width: 100%;
 }
 .unit { display: flex; align-items: center; gap: 6px; color: var(--muted); }
@@ -421,6 +421,24 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
   border: 1px solid rgba(255, 255, 255, 0.25); }
 .print-check { font-size: 13px; display: grid; gap: 4px; }
 .print-check .warn-text { color: var(--warn); }
+/* The live spool confirm (printconfirm.ts): one row per filament, beambam's verdict at the end. */
+.pc-rows { display: grid; gap: 6px; }
+.pc-item { display: grid; gap: 2px; }
+.pc-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.pc-row .slot-picker { grid-column: 1 / -1; min-width: 0; }
+.pc-fil { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.pc-verdict { width: 1.5em; text-align: center; font-weight: 700; color: var(--ok); align-self: center; }
+.pc-row.warn .pc-verdict { color: var(--warn); }
+.pc-row.bad .pc-verdict { color: var(--fail); }
+.pc-row.bad .slot-picker { border-color: var(--fail); }
+.pc-lines { display: grid; gap: 2px; font-size: 12px; padding-left: 4px; }
+.pc-lines .warn-text { color: var(--warn); }
+.pc-sync { font-size: 12px; }
+/* Print card on the site: the link to beambam on this device. */
+.beambam-row { display: grid; gap: 6px; margin-bottom: 8px; }
+.beambam-row .row input { flex: 1 1 200px; min-width: 0; }
+.cmd { display: block; padding: 6px 8px; border-radius: 8px; background: #0f151e; border: 1px solid var(--line);
+  font-size: 12px; overflow-wrap: anywhere; user-select: all; }
 .linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 /* Colorize stamp: the box being dragged, its ellipse shown inside. */
 .stamp-box { position: absolute; pointer-events: none; border: 2px dashed #6aa8ff; border-radius: 50%; background: rgba(106, 168, 255, .12); z-index: 5; }

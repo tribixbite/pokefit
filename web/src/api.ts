@@ -3,13 +3,17 @@
  *   - "local":   the Python server (`python -m pokefit serve`), with Bambu slicing;
  *   - "browser": the same Python engine in a Web Worker (Pyodide), as on pokefit.party.
  * The local server is used whenever the page is served by it (/api/config answers JSON).
+ * In the browser, the printer calls (read the AMS, slice, print) go to a beambam daemon on the user's own
+ * device once they connect to it (`connectBeambam`, ./beambam.ts).
  * Every call rejects with the engine's error text.
  */
 import type {
   WeakReport,
-  ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintPlan, PrintProgress, RegionView, Report, LimbRegion, SliceVariants, SteelRow,
+  ColourPiece, Config, ExportResponse, Job, LoadResponse, Params, PickRequest, PickResult, PrepareResult, PreviewFaces, PrintMapping, PrintPlan, PrintProgress, RegionView, Report, LimbRegion, SliceVariants, SteelRow,
 } from "./types";
 import { versioned } from "./version";
+import * as bb from "./beambam";
+import { browserStore } from "./prefs";
 
 export type Mode = "local" | "browser";
 let mode: Mode = "browser";
@@ -97,6 +101,71 @@ const json = <T>(s: unknown): T => JSON.parse(s as string) as T;
 
 export function engineMode(): Mode {
   return mode;
+}
+
+// ------------------------------------------------------------------ beambam daemon link (browser engine)
+
+let link: bb.Link = bb.readLink(browserStore());
+
+/** Where the beambam daemon is and whether the user connected to it (remembered in this browser). */
+export function beambamLink(): bb.Link {
+  return { ...link };
+}
+
+/** Printer calls go to the beambam daemon (the site, connected), not the local server. */
+export function viaDaemon(): boolean {
+  return mode === "browser" && link.enabled;
+}
+
+const linked = (cfg: Config): Config => ({ ...cfg, printer_link: true, beambam: link.url });
+
+/** Connect to the beambam daemon at `url`: read the printer's spools and match colours to them. */
+export async function connectBeambam(url: string): Promise<Config> {
+  if (mode !== "browser") throw new Error("The local version reaches beambam itself.");
+  const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true };
+  const st = await bb.readState(next);
+  const cfg = json<Config>(await call("setPrinter", [JSON.stringify(st)]));
+  link = next;
+  bb.writeLink(browserStore(), link);
+  return linked(cfg);
+}
+
+/** Stop using the daemon (and the spools read from it). */
+export async function disconnectBeambam(): Promise<Config> {
+  link = { ...link, enabled: false };
+  bb.writeLink(browserStore(), link);
+  return json<Config>(await call("setPrinter", [""]));
+}
+
+/** The figure sliced by the daemon's Bambu Studio, ready for `daemonPlan` / `daemonPrint`. */
+export interface DaemonSliceResult extends bb.DaemonSlice {
+  /** The print file's name. */
+  name: string;
+  /** The AMS slot each filament was matched to (null: some colour has no loaded spool near it). */
+  ams_slots: number[] | null;
+}
+
+/** Build the print project in the engine and have the daemon slice it. */
+export async function sliceOnPrinter(session: string, params: Params,
+  onTick?: (seconds: number, what: string) => void): Promise<DaemonSliceResult> {
+  if (!viaDaemon()) throw new Error("Connect to beambam first.");
+  const [resJson, files] = await call<[string, [string, Uint8Array][]]>("printProject", [session, JSON.stringify(params)]);
+  const res = JSON.parse(resJson) as { name: string; ams_slots: number[] | null };
+  const [name, bytes] = files[0];
+  onTick?.(0, "sending to beambam");
+  const sliced = await bb.slice(link, name, bytes, onTick);
+  return { ...sliced, name: sliced.file.split("/").pop() ?? name, ams_slots: res.ams_slots };
+}
+
+/** beambam's filament -> tray plan of a daemon-side print file (`slots` null: beambam chooses). */
+export function daemonPlan(file: string, slots: number[] | null): Promise<PrintMapping> {
+  return bb.plan(link, file, slots);
+}
+
+/** START THE PRINT through the daemon (the user's explicit "Start print"). */
+export function daemonPrint(file: string, slots: number[], acceptWarnings: boolean,
+  onTick?: (seconds: number, what: string) => void): Promise<string> {
+  return bb.print(link, file, slots, acceptWarnings, onTick);
 }
 
 /** Engine configuration: steels, filament slots, slicer availability. Decides local vs browser. */
@@ -252,19 +321,25 @@ export async function exportFiles(session: string, params: Params): Promise<Expo
 
 /** Read (or with `clear`, forget) the printer's loaded AMS filaments through beambam (local only). */
 export async function readPrinter(clear = false): Promise<Config> {
-  if (mode !== "local") throw new Error("Reading the printer needs the local version with beambam.");
+  if (viaDaemon()) {
+    const st = clear ? "" : JSON.stringify(await bb.readState(link));
+    return linked(json<Config>(await call("setPrinter", [st])));
+  }
+  if (mode !== "local") throw new Error("Reading the printer needs beambam: connect to it under Print.");
   return postJson<Config>("/api/printer", { clear });
 }
 
 /** What the printer is doing (read-only, local only). */
 export async function printerStatus(): Promise<PrintProgress> {
-  if (mode !== "local") throw new Error("Watching the printer needs the local version with beambam.");
+  if (viaDaemon()) return json<PrintProgress>(await call("printProgress", [JSON.stringify(await bb.readState(link))]));
+  if (mode !== "local") throw new Error("Watching the printer needs beambam: connect to it under Print.");
   return (await postJson<{ progress: PrintProgress }>("/api/printer/status", {})).progress;
 }
 
 /** Start (`on`) or stop the printer's live view; returns its MJPEG URL when on. */
 export async function printerCamera(on: boolean): Promise<string | null> {
-  if (mode !== "local") throw new Error("Watching the printer needs the local version with beambam.");
+  if (viaDaemon()) return null;          // the live view is the local version's (beambam camera child)
+  if (mode !== "local") throw new Error("Watching the printer needs beambam: connect to it under Print.");
   return (await postJson<{ url: string | null }>("/api/printer/camera", { on })).url;
 }
 

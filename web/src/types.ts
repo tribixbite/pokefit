@@ -481,6 +481,9 @@ export interface PrintMapping {
   errors: string[];
   warnings: string[];
   notes: string[];
+  /** The daemon's verdict (`/print/plan`): no errors, and whether warnings need the user's OK. */
+  ok?: boolean;
+  needs_confirmation?: boolean;
 }
 
 /** `printer.print_file_check`: what the sliced G-code does, as beambam reads it. */
@@ -530,6 +533,8 @@ export interface Config {
   photos?: boolean;
   /** Local engine with beambam installed: the printer's loaded filaments can be read. */
   printer_link?: boolean;
+  /** The beambam daemon the site is connected to (browser engine): it slices and prints. */
+  beambam?: string;
   /** The printer has a Filament Track Switch: any AMS spool can feed either nozzle. */
   track_switch?: boolean;
   /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */

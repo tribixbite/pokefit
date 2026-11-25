@@ -113,7 +113,7 @@ def _load(path: Path, params: Params | None = None, quick: bool = False) -> dict
     if _reference is not None:
         s.reference = _reference
     s.presets = _presets
-    s.ams = _ams
+    s.ams, s.track_switch = _ams, _track_switch
     _register(s)
     params = reopened(s, auto_simplify(s, params))
     with _locks[s.id]:
@@ -358,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
             _ams, _track_switch = slots, track_switch(state)
         with _registry_lock:
             for s in _sessions.values():
-                s.ams = _ams
+                s.ams, s.track_switch = _ams, _track_switch
         self._json(_config())
 
     def post_printer_status(self, q: dict[str, str]) -> None:

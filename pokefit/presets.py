@@ -552,15 +552,18 @@ def ams_filaments(ref: dict[str, Any], system: SystemProfiles | None, spools: li
     """Settings that hold a preset for each of `spools` ((Bambu filament id, material) of the AMS spools the
     figure's filaments map to), and for each the slot index to copy: (settings, src, preset names). The
     spool's own system preset for this printer, else the Generic preset of its material; one already a
-    slot of the project is reused, others are added. With neither, slot `fallback` (the export's material)."""
+    slot of the project is reused, others are added. With neither (no system profiles: the browser engine),
+    a project slot made for the spool's filament id, else of its material (`_project_slot`); else slot
+    `fallback` (the export's material)."""
     out = ref
     src: list[int] = []
     names: list[str] = []
     for fid, material in spools:
         found = preset_for_filament_id(system, fid, out) or generic_preset(system, material, out)
         if found is None:
-            src.append(fallback)
-            names.append(str(out["filament_settings_id"][fallback]))
+            k = _project_slot(out, fid, material)
+            src.append(fallback if k is None else k)
+            names.append(str(out["filament_settings_id"][src[-1]]))
             continue
         name, values = found
         ids = list(out["filament_settings_id"])
@@ -571,6 +574,16 @@ def ams_filaments(ref: dict[str, Any], system: SystemProfiles | None, spools: li
         src.append(ids.index(name))
         names.append(name)
     return out, src, names
+
+
+def _project_slot(ref: dict[str, Any], filament_id: str, material: str) -> int | None:
+    """The project slot already set up for a spool, without system profiles to look its preset up: the first
+    with the spool's Bambu filament id (GFL99 = Generic PLA), else the first of its material, else None."""
+    ids = [str(x) for x in ref.get("filament_ids", [])]
+    if filament_id and filament_id in ids:
+        return ids.index(filament_id)
+    types = [str(t) for t in ref.get("filament_type", [])]
+    return types.index(material) if material and material in types else None
 
 
 def _base_slot(ref: dict[str, Any], inherits: str, material: str) -> int:

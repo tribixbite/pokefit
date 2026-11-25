@@ -43,6 +43,12 @@ export interface WebApi {
   limb(sid: string, params: string, req: string): string;
   weak(sid: string, params: string): string;
   run_export(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
+  /** The printer's state report from the beambam daemon ("" forgets it) -> the config with its `ams`. */
+  set_printer(state: string): string;
+  /** What the printer is doing (PrintProgress JSON) from the daemon's state report. */
+  print_progress(state: string): string;
+  /** The project for beambam to slice and print: [{name, ams_slots} JSON, [[name, bytes]]]. */
+  print_project(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
 }
 
 export interface BootOptions {

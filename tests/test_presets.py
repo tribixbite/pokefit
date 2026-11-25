@@ -229,3 +229,15 @@ def test_export_slices_each_filament_as_its_spool(tmp_path: Path) -> None:
     # A colour no loaded spool is close to: that filament keeps the project's material.
     s.ams = s.ams[:1]
     assert s.ams_spools(p)[1] is None and export_settings(s, p)["filament_type"] == ["ABS", "PETG"]
+
+
+def test_ams_spools_without_system_profiles_use_the_projects_slots() -> None:
+    # The browser engine has no system profiles: a spool prints with the project's slot made for its filament
+    # id, else one of its material, else the fallback (the bundled reference: PETG slots 0-3, PLA from 4,
+    # PLA Silk GFL96 at 8).
+    ref = json.loads(BUNDLED_REFERENCE.read_text(encoding="utf-8"))
+    out, src, names = ams_filaments(ref, None, [("GFL99", "PLA"), ("GFL96", "PLA"), ("GFL03", "PLA"),
+                                                ("", "TPU"), ("", "")], fallback=0)
+    assert out is ref and src == [4, 8, 4, 0, 0]
+    assert names[:3] == ["Generic PLA @BBL X2D 0.4 nozzle", "Generic PLA Silk @BBL X2D 0.4 nozzle",
+                         "Generic PLA @BBL X2D 0.4 nozzle"]

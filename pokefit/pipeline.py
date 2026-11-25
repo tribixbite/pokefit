@@ -325,6 +325,8 @@ class Session:
     # Filaments loaded in the user's printer (printer.py, via beambam): when set, the figure's colours are
     # matched to these slots instead of the reference project's.
     ams: list[AmsSlot] | None = None
+    # ... and whether that printer has a Filament Track Switch (any spool to either nozzle).
+    track_switch: bool = False
     input_checks: dict[str, list[Check]] = field(default_factory=dict)   # object id -> checks
     _frames: dict[tuple, list[Part]] = field(default_factory=dict)           # orientation + conform -> parts
     _oriented: dict[tuple, list[Part]] = field(default_factory=dict)         # orientation only
@@ -2335,9 +2337,7 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     chosen = out["auto"] if needs else out["off"]
     out["print_file"] = chosen.get("print_file") or None
     # The AMS slot each filament of the print file is sliced for (send-to-printer passes them on).
-    spools = session.ams_spools(params)
-    loaded = [a for a in spools if a is not None]
-    out["ams_slots"] = [a.slot for a in loaded] if spools and len(loaded) == len(spools) else None
+    out["ams_slots"] = print_ams_slots(session, params)
     if x10:
         v = np.vstack([p.vertices for p in final])
         ext = np.ptp(v, axis=0)
@@ -2352,12 +2352,42 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     return out
 
 
+def print_ams_slots(session: Session, params: Params) -> list[int] | None:
+    """The AMS slot each filament of the print file prints from (the printer's AMS read and every filament
+    matched to a loaded spool), else None."""
+    spools = session.ams_spools(params)
+    loaded = [a for a in spools if a is not None]
+    return [a.slot for a in loaded] if spools and len(loaded) == len(spools) else None
+
+
+def print_project(session: Session, params: Params, out_dir: str | Path) -> dict[str, Any]:
+    """The project a slicer elsewhere turns into the print file — the beambam daemon's `POST /slice` on the
+    phone or computer beside the printer, for the site, which cannot slice. It is the local Slice's "auto
+    supports" variant: Bambu adds supports only where the figure needs them, so when it needs none this is
+    the "no supports" print. {"file": path, "ams_slots": print_ams_slots}."""
+    session.use_simplify(params.simplify)
+    _, final = analyse(session, params)
+    obj = session.obj(params)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written, ext = cored(final, session.extruder(params), params.core_filament)
+    f = write_project(session.project, obj.name, ext, written, out / f"{export_stem(session, params)}.3mf",
+                      settings=_slice_settings(session, params, True))
+    return {"file": f, "ams_slots": print_ams_slots(session, params)}
+
+
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:
     built = session.print_settings(params, supports)
     if built is not None:
-        return with_paint_depth(built[0], params)
-    st = dict(export_settings(session, params) or {})
-    if st:
-        st["enable_support"] = "1" if supports else "0"
+        st = dict(with_paint_depth(built[0], params) or {})
+    else:
+        st = dict(export_settings(session, params) or {})
+        if st:
+            st["enable_support"] = "1" if supports else "0"
+    # Sliced for the printer just read: say whether it has a track switch, as Bambu Studio does after syncing
+    # with the printer. The slice is the same either way (NOTES: 7 colours, identical with 0 and 1); beambam
+    # notes a mismatch with the printer before printing.
+    if st and session.ams and "has_filament_switcher" in st:
+        st["has_filament_switcher"] = "1" if session.track_switch else "0"
     return st or None
 

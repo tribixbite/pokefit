@@ -28,7 +28,9 @@ Dual-nozzle printers (H2D, X2D): each AMS unit's `info` hex word holds, in bits 
 wired to (0 right, 1 left), or 0xE when a Filament Track Switch is installed and routes any unit to either
 nozzle (`device.fila_switch` is then present; bambuddy's reading, matching the user's X2D: 4 units, all 0xE).
 With the switch the filament-to-nozzle split is free, which is what `toolchange.plan` assumes; the CLI slice
-is identical with `has_filament_switcher` 0 or 1 (Manex Squirtle, 7 colours: 10.19 h / 145.7 g both).
+measured identical with `has_filament_switcher` 0 or 1 (Manex Squirtle, 7 colours: 10.19 h / 145.7 g both),
+but the CLI resets that setting to 0 unless passed as `--has-filament-switcher=1`, so both were probably sliced
+without the switch. TODO: re-measure with the option.
 """
 from __future__ import annotations
 

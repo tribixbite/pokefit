@@ -15,8 +15,14 @@ exist only on the original Windows machine (ask the user for the files).
    (`accept_warnings` → `--yes`). Before this, any colour/profile difference made `beambam print` refuse with no
    terminal to confirm on (e.g. rumi_frame on D2: profile GFA05 vs GFL96, ΔE 38). Optional daemon mode:
    `beambam daemon --http 127.0.0.1:8765` + `POKEFIT_BEAMBAM_URL=http://127.0.0.1:8765` (live X2D: state 0.06 s,
-   plan 0.006 s vs 2.3 s per CLI call). The live print itself is still unverified: the signing key's cert expired
-   2026-08-22 (`beambam key` on the phone first).
+   plan 0.006 s vs 2.3 s per CLI call). The signing cert was renewed (valid to 2028-01-25; a signed command now
+   passes the signature + cert checks, err 84033544 = stage 4). The live print itself is still unverified.
+   **The site prints too** (2026-11-25, docs/integration.md "The site"): Print → "Connect to beambam" (daemon on the
+   same device with `--cors-origin https://pokefit.party`, beambam ≥ 1.6.1) → Slice (`POST /slice`, the phone's
+   headless Bambu Studio: critter 2 s, jolteon 18 s) → the live confirm panel (`printconfirm.ts`, also local) →
+   Start print. Verified: engine smoke under Node (set_printer, print_project), that project sliced by beambam's
+   slice_service and planned against the live X2D AMS. Not verified: the page in a real browser against the
+   daemon (Chrome's Local Network Access prompt), and a real print.
 2. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
    changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
    auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its
@@ -472,7 +478,7 @@ Spec `docs/superpowers/specs/2026-10-16-pokefit-design.md`, plan `docs/superpowe
 - Auto palette = best value (`toolchange.best_value_count`, decided at the fit limit; the user chose this
   2026-10-19). Manex Squirtle with today's palettes, Bambu slices: 1/2/3/4 colours = 0.67/1.76/5.32/6.35 h,
   0/0/120/151 changes; estimate 0/0/120/161 changes, +46/+255/+327 min vs sliced +65/+279/+341 -> auto 2.
-  `has_filament_switcher` 0 vs 1: identical slice (7 colours 10.19 h / 145.7 g / 425 changes).
+  `has_filament_switcher` 0 vs 1: identical slice (7 colours 10.19 h / 145.7 g / 425 changes) — but the Bambu CLI resets it to 0 unless passed as `--has-filament-switcher=1` (BambuStudio.cpp, found 2026-11-25), so both runs were probably sliced without the switch. Re-measure with the option; the switch lifts the per-nozzle AMS capacity limit in Bambu's filament grouping (ToolOrdering).
 - Toolchange model (`pokefit/toolchange.py`), Bambu CLI on the X2D project. Manex Squirtle palette sizes
   (older palettes) 1/2/3/4/7: 0.67/1.57/2.35/5.45/10.19 h, 2.8/17.3/28.9/73.8/145.7 g (fit: 104.6 s and 0.43 g per filament
   change incl. flush, 18 s per nozzle switch; predictions within 0.4 h / 12 g). Photo Squirtle, 5 colours, all

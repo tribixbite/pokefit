@@ -461,8 +461,17 @@
         <label id="processRow" hidden>Process
           <select id="processSelect"></select>
         </label>
+        <div id="beambamRow" class="beambam-row" hidden>
+          <p class="hint">To slice and print from this page, run <a href="https://github.com/tribixbite/beambam" rel="noopener">beambam</a> on this phone or computer (on the printer's network), started with:</p>
+          <code id="beambamCmd" class="cmd"></code>
+          <div class="row">
+            <input id="beambamUrl" type="url" inputmode="url" spellcheck="false" autocomplete="off" aria-label="beambam address" />
+            <button id="beambamBtn" class="btn">Connect to beambam</button>
+          </div>
+          <p id="beambamInfo" class="muted" aria-live="polite"></p>
+        </div>
         <div class="row" id="sliceRow">
-          <label class="check"><input id="x10Toggle" type="checkbox" checked /> also a plate of 10</label>
+          <label class="check" id="x10Row"><input id="x10Toggle" type="checkbox" checked /> also a plate of 10</label>
           <button id="sliceBtn" class="btn primary">Slice</button>
         </div>
         <div id="sliceOut" class="slice-out"></div>

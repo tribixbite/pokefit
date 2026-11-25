@@ -15,8 +15,9 @@ One Python engine (`pokefit/`) runs two ways:
 - **Locally**: `python -m pokefit serve` (HTTP server + the web UI), or the CLI `python -m pokefit fit …`.
 - **In the browser**: the same package zipped into Pyodide in a Web Worker (`web/src/worker.ts`,
   `web/src/engine/boot.ts`); manifold-3d WASM does the booleans (`pokefit/geom.py` → `_manifold_js.py`).
-  `web/src/api.ts` uses the local server when the page is served by it, else the worker. No slicing on
-  the site.
+  `web/src/api.ts` uses the local server when the page is served by it, else the worker. The site slices and
+  prints only through a beambam daemon on the user's own device (`web/src/beambam.ts`, docs/integration.md); the
+  site itself never slices.
 
 ## Hard rules (the user's, non-negotiable)
 
@@ -121,7 +122,9 @@ seeds for "fill" steps; a fill also takes the slivers of its colour in split tri
 | `src/api.ts`, `src/worker.ts`, `src/engine/boot.ts` | Local-server vs. Pyodide worker transport; boot fetches the wheels alongside Pyodide and unpacks them into site-packages (no micropip). |
 | `build.ts`, `pack.ts`, `src/version.ts` | Bundles, `pokefit.zip`, build-hash `?v=` stamps on every asset URL. |
 | `src/handoff.ts` | Models from other apps (craftmatic): `pokefit:load` postMessage from trusted origins, `?url=`. |
-| `src/printer.ts` | Printer card (local): "Watch the printer" = camera + status every 15 s while visible. |
+| `src/printer.ts` | Printer card: "Watch the printer" = camera (local) + status every 15 s while visible. |
+| `src/printconfirm.ts` | Send to printer: filament -> spool rows (slot pickers of the live spools), beambam's verdict, spools re-read while open and re-planned on change, "Start print". Local server or daemon (`ConfirmSource`). |
+| `src/beambam.ts` | The site's link to a beambam daemon on the user's device: `/state`, `/slice`, `/print/plan`, `/print`; opt-in, remembered. |
 | `public/` | Static files: CNAME, og.gif, icons, `llms.txt` (keep it in sync with features). |
 
 ## Gotchas that cost real time (keep them in mind)

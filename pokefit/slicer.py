@@ -173,6 +173,24 @@ def read_result(out_dir: Path, copies: int) -> SliceResult:
                        grams_per_filament=per, features=features)
 
 
+# Project settings the Bambu CLI resets to false unless they are options on its command line (BambuStudio.cpp: "In
+# CLI mode, default enable_filament_dynamic_map to false"), whatever the 3MF says. The track switch changes how
+# filaments are grouped onto nozzles (ToolOrdering), so a project that has them on passes them on.
+CLI_FORCED_OFF = ("has_filament_switcher", "enable_filament_dynamic_map")
+
+
+def cli_kept_settings(path: str | Path) -> list[str]:
+    """`--has-filament-switcher=1` etc. for the CLI_FORCED_OFF settings `path`'s project has on."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            st = json.loads(z.read("Metadata/project_settings.config"))
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return []
+    if not isinstance(st, dict):
+        return []
+    return [f"--{k.replace('_', '-')}=1" for k in CLI_FORCED_OFF if str(st.get(k, "")).lower() in ("1", "true")]
+
+
 def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, arrange: bool = False,
               work_dir: str | Path | None = None, timeout: float = TIMEOUT_S,
               export_name: str | None = None) -> SliceResult:
@@ -187,7 +205,7 @@ def slice_3mf(path: str | Path, exe: str | Path | None = None, copies: int = 1, 
     # Absolute: the CLI runs with cwd = out_dir, so a relative --outputdir would land one level deeper.
     out_dir = (Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="pokefit_slice_"))).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [str(exe_path), "--slice", "0"]
+    cmd = [str(exe_path), "--slice", "0", *cli_kept_settings(path)]
     if arrange:
         cmd += ["--arrange", "1"]
     if export_name:

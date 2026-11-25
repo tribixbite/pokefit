@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { strFromU8, unzipSync } from "fflate";
 import Module from "manifold-3d";
 import { loadPyodide } from "pyodide";
 import { bootPokefit, fetchWheels, PYODIDE_CDN } from "../src/engine/boot.ts";
@@ -83,6 +84,35 @@ if (facesPainted.signature !== facesPlain.signature || legFaces !== leg.faces) {
 console.log(`[${secs()} s] colorize: region ${side.faces} faces, piece ${leg.faces} faces; ` +
   `painted ${rep3.object.parts.map((x: { painted: number }) => x.painted).join("+")} faces; regions preview ${regionBytes} B`);
 const [paintedJson] = api.run_export(loaded.session, painted).toJs({ create_proxies: false });
+
+// The site printing through beambam: the daemon's state report in (two loaded spools near the two colours,
+// a track switch), the print project out — the file the daemon's POST /slice turns into the print file.
+const printerState = { print: { device: { fila_switch: { in: [0, 1] } }, ams: { ams: [{ id: "0", info: "10001E03", tray: [
+  { id: "0", tray_type: "PLA", tray_color: "E3522AFF", tray_info_idx: "GFL99", state: 11 },
+  { id: "1", tray_type: "PLA", tray_color: "1A1A1AFF", tray_info_idx: "GFL99", state: 11 },
+  { id: "2", state: 0 }] }] } } };
+const linkedCfg = JSON.parse(api.set_printer(JSON.stringify(printerState)));
+const pp = api.print_project(loaded.session, painted);
+const [ppJson, ppFiles] = pp.toJs({ create_proxies: false });
+pp.destroy();
+const ppRes = JSON.parse(ppJson);
+if (linkedCfg.ams.length !== 2 || !linkedCfg.track_switch || ppRes.ams_slots?.join() !== "0,1" || ppFiles.length !== 1
+  || !ppFiles[0][0].endsWith(".3mf") || ppFiles[0][1][0] !== 0x50) {
+  throw new Error(`print project: ams ${linkedCfg.ams.length}, switch ${linkedCfg.track_switch}, ${ppJson}`);
+}
+// Read with a track switch: the project says so (as Bambu Studio's printer sync does), so beambam does not ask
+// for a re-slice.
+const ppSettings = JSON.parse(strFromU8(unzipSync(ppFiles[0][1])["Metadata/project_settings.config"]));
+if (ppSettings.has_filament_switcher !== "1") throw new Error(`has_filament_switcher ${ppSettings.has_filament_switcher}`);
+const progress = JSON.parse(api.print_progress(JSON.stringify({ print: { gcode_state: "IDLE", bed_temper: 25 } })));
+// POKEFIT_SMOKE_OUT=<dir>: keep the print project, e.g. to slice it with beambam's slice_service.
+if (process.env.POKEFIT_SMOKE_OUT) {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(process.env.POKEFIT_SMOKE_OUT, ppFiles[0][0]), ppFiles[0][1]);
+}
+console.log(`[${secs()} s] beambam link: ${linkedCfg.ams.length} spools, print project ${ppFiles[0][0]} ` +
+  `(${ppFiles[0][1].length} B) for trays ${ppRes.ams_slots}; printer ${progress.state}`);
+JSON.parse(api.set_printer(""));
 
 // Brush stroke along the leg's side (a path of triangles, joined), a fill that stops at the painted leg,
 // the tap structures prepared up front, and thin parts strengthened (voxels + distance transform + dijkstra).

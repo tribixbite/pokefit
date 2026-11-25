@@ -53,8 +53,9 @@ Measured with the Bambu CLI on the user's X2D project (PETG, 0.16 mm, prime towe
 - Track switch: the user's X2D has it (`device.fila_switch` in the status report; every AMS unit's `info`
   reads 0xE in bits 8-11 = routed by the switch, not wired to one nozzle), so any spool can feed either
   nozzle — what pokefit's planner assumes. Bambu's `has_filament_switcher` setting made no difference to the
-  CLI slice (7 colours: 10.19 h / 145.7 g / 425 changes / same nozzle split with 0 and 1), so exports leave
-  the project's value alone. Without a switch each unit feeds one nozzle; pokefit shows (R)/(L) per spool
+  CLI slice (7 colours: 10.19 h / 145.7 g / 425 changes / same nozzle split with 0 and 1) — but the Bambu CLI resets it to 0 unless passed as `--has-filament-switcher=1` (BambuStudio.cpp, found 2026-11-25), so both runs were probably sliced without the switch
+  (TODO: re-measure). Exports leave the project's value alone; a print project made after reading the
+  printer records the printer's switch (`pipeline._slice_settings`), and beambam's slicer passes it on. Without a switch each unit feeds one nozzle; pokefit shows (R)/(L) per spool
   but does not yet constrain the planner (`printer.py` TODO).
 
 ## Control path: CLI or daemon (2026-11-25)
@@ -70,9 +71,28 @@ pokefit's local server talks to beambam one of two ways (`pokefit/printer.py`):
 | Daemon elsewhere | — | files go up with `POST /print/upload` first; set `POKEFIT_BEAMBAM_TOKEN` |
 
 Either way the page shows beambam's plan before "Start print"; errors (empty slot, other material, a tray that
-cannot reach the nozzle) disable it and warnings are accepted by the click. The browser never talks to beambam
-directly; if a page ever should, start the daemon with `--cors-origin <origin>` — beambam refuses POSTs from any
-other web origin, so a web page cannot drive the printer through a loopback daemon.
+cannot reach the nozzle) disable it and warnings are accepted by the click.
+
+### The site (pokefit.party) on a device that runs beambam
+
+The site cannot slice or reach the printer, so in the browser engine the page itself talks to a beambam daemon on
+the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beambam", remembered in the browser):
+
+1. `beambam daemon --http 127.0.0.1:8765 --cors-origin https://pokefit.party` (beambam ≥ 1.6.1). beambam refuses
+   POSTs from any web origin not named there, so other pages cannot drive the printer. The site calls
+   `http://127.0.0.1` from https without a mixed-content block (loopback counts as secure); Chrome asks once to
+   let it reach apps on the device, and the daemon answers the Private Network Access preflight.
+2. Connect: `GET /state` → the engine (`webapi.set_printer`) reads the spools, as "Use my printer's AMS" does
+   locally, so the colours match the loaded spools. Without system profiles in the browser each spool prints with
+   the reference project's slot of its filament id, else of its material (`presets._project_slot`).
+3. Slice: the engine writes the print project (`pipeline.print_project`: the local Slice's auto-supports variant)
+   and the page sends it to `POST /slice`; the daemon's headless Bambu Studio slices it on the device.
+4. Send to printer: the confirm panel (`web/src/printconfirm.ts`, shared with the local version) shows each
+   filament → spool with beambam's `/print/plan` verdict, reads the spools every 4 s (6 s locally) and checks again
+   when they change; "Start print" → `POST /print` → poll `/print/jobs/<id>`.
+
+The site probes nothing until the user connects: probing 127.0.0.1 for every visitor would show them Chrome's
+prompt. The daemon has no camera route, so the Printer card shows status only there.
 
 ## Next steps (need the user / the printer)
 

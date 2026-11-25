@@ -3,8 +3,11 @@
 Mirrors the local server's JSON API (server.py) without HTTP: the worker
 passes JSON strings and file bytes in, and gets JSON strings and bytes back.
 Sessions live in memory; files are written to Pyodide's in-memory filesystem.
-Bambu slicing needs the desktop slicer and is only available in the local
-version (`python -m pokefit serve`).
+Bambu slicing needs a slicer: the local version (`python -m pokefit serve`)
+runs Bambu Studio; the site hands `print_project`'s file to a beambam daemon
+on the user's own machine (`web/src/beambam.ts`), which slices and prints it.
+The page reads the printer from that daemon too and passes its state report
+in (`set_printer`), so colours match the loaded spools as in the local version.
 """
 from __future__ import annotations
 
@@ -14,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from .pipeline import (Params, Session, analyse, app_config, auto_simplify, export, limb_region, open_session, pick, pieces_of_colour, weak_points,
-                       reopened,
+                       print_project as _print_project, reopened,
                        prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
+from .printer import AmsSlot, ams_slots, print_progress as _print_progress, track_switch
 
 WORK = Path("/tmp/pokefit")
 _sessions: dict[str, Session] = {}
@@ -24,6 +28,8 @@ _reference: dict | None = None          # the user's own Bambu project settings,
 _reference_name = ""
 _presets = PresetLibrary()              # imported Bambu presets (no system profiles in the browser)
 _ball_model: Path | None = None         # the user's copy of the ball model (for the steel seat shell)
+_ams: list[AmsSlot] | None = None       # the printer's loaded filaments, read by the page from beambam
+_track_switch = False                   # ... and whether a Filament Track Switch feeds either nozzle
 
 
 def _dump(o: Any) -> str:
@@ -53,7 +59,25 @@ def _session(sid: str) -> Session:
 
 
 def config() -> str:
-    return _dump({**app_config(None, _reference, _reference_name, _presets), "engine": "browser"})
+    return _dump({**app_config(None, _reference, _reference_name, _presets, _ams), "engine": "browser",
+                  "track_switch": _track_switch})
+
+
+def set_printer(state_json: str) -> str:
+    """Match colours to the printer's loaded spools: `state_json` is its state report as the beambam daemon
+    sends it (`GET /state`); "" forgets them (back to the project's slots). The config, with `ams`."""
+    global _ams, _track_switch
+    if not state_json:
+        _ams, _track_switch = None, False
+    else:
+        state = json.loads(state_json)
+        slots = ams_slots(state)
+        if not slots:
+            raise ValueError("The printer reports no loaded filament.")
+        _ams, _track_switch = slots, track_switch(state)
+    for s in _sessions.values():
+        s.ams, s.track_switch = _ams, _track_switch
+    return config()
 
 
 def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> str:
@@ -68,6 +92,7 @@ def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> 
     if _reference is not None:
         s.reference = _reference
     s.presets = _presets
+    s.ams, s.track_switch = _ams, _track_switch
     _sessions[s.id] = s
     params = reopened(s, auto_simplify(s, params))
     rep, _ = analyse(s, params, printing=not quick)
@@ -170,3 +195,17 @@ def run_export(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]
     res = export(s, Params.from_dict(json.loads(params_json)), out, ball_model=_ball_model)
     files = [Path(p) for p in (res["figure_3mf"], res["import_3mf"], res["colour_stl"], res["shell_stl"], res["report"]) if p]
     return _dump(res), [(f.name, f.read_bytes()) for f in files]
+
+
+def print_progress(state_json: str) -> str:
+    """What the printer is doing (`printer.print_progress`) from the daemon's state report."""
+    return _dump(_print_progress(json.loads(state_json)).to_dict())
+
+
+def print_project(sid: str, params_json: str) -> tuple[str, list[tuple[str, bytes]]]:
+    """The project for beambam to slice and print (`pipeline.print_project`): ({"name", "ams_slots"} JSON,
+    [(file name, bytes)])."""
+    s = _session(sid)
+    res = _print_project(s, Params.from_dict(json.loads(params_json)), WORK / "print" / uuid.uuid4().hex[:8])
+    f = Path(res["file"])
+    return _dump({"name": f.name, "ams_slots": res["ams_slots"]}), [(f.name, f.read_bytes())]

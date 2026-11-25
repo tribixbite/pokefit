@@ -15,6 +15,8 @@ import {
   budgetCount, budgetShare, countBudget, LEVELS, levelName, shareToSlider, SLIDER_MAX, sliderBudget,
 } from "./simplify";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
+import { openPrintConfirm, type ConfirmSource } from "./printconfirm";
+import { startCommand } from "./beambam";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
 } from "./types";
@@ -218,6 +220,9 @@ async function init(): Promise<void> {
   syncControls();
   renderSlots(cfg);
   renderPrinter(cfg);
+  // The site, connected to beambam on an earlier visit: connect again (the browser already allowed it).
+  $<HTMLInputElement>("beambamUrl").value = api.beambamLink().url;
+  if (cfg.engine === "browser" && api.beambamLink().enabled) void linkBeambam(true, true);
 
   const query = new URLSearchParams(location.search);
   const path = query.get("path");
@@ -297,16 +302,27 @@ function renderSlots(cfg: Config): void {
 
 /** Print card: Bambu slicing needs the desktop slicer, so it only exists in the local version. */
 function renderPrinter(cfg: Config): void {
-  $("printerInfo").textContent = cfg.engine === "browser"
-    ? "Print time and filament come from Bambu Studio itself, which only runs on your computer: install pokefit " +
-      "locally (see About) to slice. Everything else runs here in your browser."
-    : cfg.slicer
-      ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
-      : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
-  ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer;
-  // Slicing controls only where a slicer exists (the local version).
+  // The site slices and prints through a beambam daemon on the user's device once connected to it.
+  const daemon = cfg.engine === "browser" && Boolean(cfg.beambam);
+  $("printerInfo").textContent = daemon
+    ? `Slices and prints through beambam at ${cfg.beambam}: its Bambu Studio slices with this figure's settings, ` +
+      "and you confirm the spool of every filament before the print starts."
+    : cfg.engine === "browser"
+      ? "Print time and filament come from Bambu Studio itself, which does not run in a browser: connect to " +
+        "beambam on this device (below) to slice and print, or install pokefit locally (see About). Everything " +
+        "else runs here in your browser."
+      : cfg.slicer
+        ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
+        : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
+  ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer && !daemon;
+  // Slicing controls only where a slicer exists (the local version, or beambam for the site).
   // The material picker also sets the exported 3MF's filament settings, so it shows everywhere.
-  $("sliceRow").hidden = cfg.engine === "browser";
+  $("sliceRow").hidden = cfg.engine === "browser" && !daemon;
+  $("x10Row").hidden = daemon;               // beambam slices the one print file
+  $("beambamRow").hidden = cfg.engine !== "browser";
+  $("beambamBtn").textContent = daemon ? "Disconnect" : "Connect to beambam";
+  $<HTMLInputElement>("beambamUrl").disabled = daemon;
+  $("beambamCmd").textContent = startCommand(location.origin, api.beambamLink().url);
   $("engineWhere").textContent = cfg.engine === "browser" ? "in your browser" : "local";
   // The bundled default project is a JSON profile: name it as such rather than by file name.
   $("refInfo").textContent = !cfg.reference ? "" : cfg.reference.endsWith(".json")
@@ -1053,6 +1069,10 @@ async function doSlice(): Promise<void> {
   const out = $("sliceOut");
   btn.disabled = true;
   out.replaceChildren(h("div", { cls: "muted", textContent: "Slicing with Bambu Studio…" }));
+  if (api.viaDaemon()) {
+    await sliceWithDaemon(state.session, btn, out);
+    return;
+  }
   try {
     const x10 = $<HTMLInputElement>("x10Toggle").checked;
     const res: SliceVariants = await api.slice(state.session, state.params, x10, (s) => {
@@ -1094,6 +1114,67 @@ async function doSlice(): Promise<void> {
   }
 }
 
+/** The site: the engine builds the print project, the beambam daemon on this device slices it. */
+async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement): Promise<void> {
+  try {
+    const res = await api.sliceOnPrinter(session, state.params, (s, what) => {
+      out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
+    });
+    out.replaceChildren(
+      h("div", { textContent: `Sliced by beambam: ${formatDuration(res.seconds)} and ${res.grams.toFixed(1)} g ` +
+        `(${res.grams_per_filament.map((g) => `${g.toFixed(1)} g`).join(" + ")}), supports only where Bambu finds the figure needs them.` }),
+      h("div", { cls: "row" }, h("button", { cls: "btn", textContent: "Send to printer…",
+        onclick: () => showDaemonPlan(res) })),
+      h("div", { id: "printPlan" }),
+      ...res.warnings.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
+  } catch (e) {
+    out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/** The site: connect to (or disconnect from) the beambam daemon on this device. `quiet`: the automatic
+ * reconnect on page load, which reports in the Print card instead of covering the page. */
+async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
+  const info = $("beambamInfo");
+  info.textContent = on ? "Connecting to beambam…" : "";
+  if (!quiet) busy(true, on ? "Connecting to beambam…" : "Disconnecting…");
+  try {
+    state.config = on ? await api.connectBeambam($<HTMLInputElement>("beambamUrl").value)
+      : await api.disconnectBeambam();
+    renderPrinter(state.config);
+    info.textContent = on ? `Connected: ${state.config.ams.length} spools loaded. Slice, then Send to printer.` : "";
+    state.params.filament_map = null;
+    if (state.session) await runAnalyse();
+  } catch (err) {
+    info.textContent = (err as Error).message;
+    if (state.config) renderPrinter(state.config);
+  } finally {
+    if (!quiet) busy(false);
+  }
+}
+
+/** Read the printer's spools for an open confirm panel, keeping the Print card and colour matching current. */
+async function liveTrays(): Promise<AmsSlot[]> {
+  const cfg = await api.readPrinter(false);
+  state.config = cfg;
+  renderPrinter(cfg);
+  return cfg.ams;
+}
+
+/** The site: confirm and print a file the beambam daemon sliced. */
+function showDaemonPlan(res: api.DaemonSliceResult): void {
+  const src: ConfirmSource = {
+    pollMs: 4000,                   // the daemon answers from its cache in milliseconds
+    plan: (slots) => api.daemonPlan(res.file, slots),
+    trays: liveTrays,
+    start: (slots, accept, onTick) => api.daemonPrint(res.file, slots, accept, onTick),
+  };
+  openPrintConfirm($("printPlan"), src, res.ams_slots,
+    [`${res.name}: ${formatDuration(res.seconds)}, ${res.grams.toFixed(1)} g. Each filament prints from:`]);
+}
+
 /** Why a sliced file cannot be sent: the AMS was not read, or some colour has no loaded spool near it. */
 function unmappedText(): string {
   if (!state.config?.ams.length) return "To send it to the printer, use my printer's AMS (Colours → Prints from), then slice again.";
@@ -1111,63 +1192,38 @@ function swatch(colour: string): HTMLSpanElement {
   return e;
 }
 
-/** What the print file will print, each filament from its AMS spool, with "Start print" (the only control
- * in pokefit that starts the printer; beambam re-checks every spool before it starts). */
+/** Local version: what the print file will print, each filament from its AMS spool, with "Start print" (the
+ * only control in pokefit that starts the printer; beambam re-checks every spool before it starts). */
 async function showPrintPlan(file: string, slots: number[]): Promise<void> {
   const box = $("printPlan");
   box.replaceChildren(h("div", { cls: "muted", textContent: "Reading the print file…" }));
+  let plan: PrintPlan;
   try {
-    const plan = await api.printPlan(file, slots);
-    const rows = plan.filaments.map((f) => h("tr", {},
-      h("td", {}, swatch(f.colour), ` ${f.filament} · ${f.type}`),
-      h("td", { textContent: "→" }),
-      h("td", {}, f.spool ? swatch(f.spool.colour) : "",
-        f.spool ? ` ${f.spool.label} · ${f.spool.type}` : ` slot ${f.slot} (not read)`),
-      h("td", { cls: "muted", textContent: f.preset.replace(/ @BBL.*$/, "") })));
-    const status = h("div", { cls: "muted" });
-    const start = h("button", { cls: "btn primary", textContent: "Start print" }) as HTMLButtonElement;
-    const cancel = h("button", { cls: "btn", textContent: "Cancel", onclick: () => box.replaceChildren() });
-    start.addEventListener("click", async () => {
-      start.disabled = true;
-      status.textContent = "Uploading to the printer and starting…";
-      try {
-        // The warnings above were on screen when the user pressed Start print: that is their OK.
-        const output = await api.startPrint(file, slots, (s, what) => {
-          status.textContent = `${what || "Sending"}… ${Math.round(s)} s`;
-        }, (plan.mapping?.warnings.length ?? 0) > 0);
-        status.textContent = `Started. ${output.split("\n").filter(Boolean).slice(-1)[0] ?? ""}`;
-      } catch (e) {
-        status.textContent = (e as Error).message;
-        start.disabled = false;
-      }
-    });
-    // beambam refuses a plan with errors whatever the user says: don't offer the button.
-    if (!plan.mapping || plan.mapping.errors.length) start.disabled = true;
-    box.replaceChildren(
-      h("div", { cls: "print-plan" },
-        h("div", { textContent: `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C):` }),
-        h("table", { cls: "tbl" }, h("tbody", {}, ...rows)),
-        printMappingView(plan),
-        printCheckView(plan),
-        h("div", { cls: "muted", textContent: "Check the plate is clean and the spools are right: this starts the printer." }),
-        h("div", { cls: "row" }, start, cancel), status));
+    plan = await api.printPlan(file, slots);
   } catch (e) {
     box.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+    return;
   }
-}
-
-/** beambam's check of each filament's spool against the live AMS: errors block "Start print", warnings are the user's call. */
-function printMappingView(plan: PrintPlan): HTMLElement {
-  const m = plan.mapping;
-  if (!m) return h("div", { cls: "err", textContent: `Spool check unavailable: ${plan.mapping_error}` });
-  const lines = [
-    ...m.errors.map((e) => h("div", { cls: "err", textContent: `✗ ${e}` })),
-    ...m.warnings.map((w) => h("div", { cls: "warn-text", textContent: `⚠ ${w}` })),
-    ...m.notes.map((n) => h("div", { cls: "muted", textContent: n })),
-  ];
-  const verdict = m.errors.length ? "beambam will not start this print:"
-    : m.warnings.length ? "Spool check (beambam): Start print accepts these differences." : "Spool check (beambam): every spool matches.";
-  return h("div", { cls: "print-check" }, h("div", { textContent: verdict }), ...lines);
+  let last: PrintPlan | null = plan;
+  let fresh = true;                       // the panel's first plan is the one just read
+  const src: ConfirmSource = {
+    pollMs: 6000,                         // `beambam status` alone takes ~2.6 s without its daemon
+    async plan(s) {
+      if (!(fresh && s && s.join() === slots.join())) last = await api.printPlan(file, s ?? slots);
+      fresh = false;
+      if (!last?.mapping) throw new Error(`Spool check unavailable: ${last?.mapping_error ?? "no answer"}`);
+      return last.mapping;
+    },
+    trays: liveTrays,
+    start: (s, accept, onTick) => api.startPrint(file, s, onTick, accept),
+    note: (i) => {
+      const p = last?.filaments[i]?.preset;
+      return p ? `sliced as ${p.replace(/ @BBL.*$/, "")}` : "";
+    },
+  };
+  openPrintConfirm(box, src, slots, [
+    `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C). Each filament prints from:`,
+    printCheckView(plan)]);
 }
 
 /** beambam's check of the G-code before "Start print": time, weight, waste (purge + prime tower), nozzle swaps, its warnings. */
@@ -1630,6 +1686,10 @@ function bind(): void {
   $("amsClear").addEventListener("click", () => void printer(true));
   // The same switch beside the slot map: read the AMS, or go back to the project's slots.
   $("slotSourceBtn").addEventListener("click", () => void printer(Boolean(state.config?.ams.length)));
+  $("beambamBtn").addEventListener("click", () => void linkBeambam(!state.config?.beambam, false));
+  $("beambamUrl").addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") void linkBeambam(true, false);
+  });
   // Recolour the figure with the matched filaments' colours (what will actually print).
   $("snapColours").addEventListener("click", () => {
     const rep = state.report;
