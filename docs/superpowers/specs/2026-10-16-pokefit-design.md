@@ -161,3 +161,9 @@ Decisions made while building, where the code differs from or adds to the text a
   isolated thin features); otherwise `warn`.
 - Supports verdict: geometric estimate, replaced by Bambu's auto-support result after slicing.
 - Overlapping parts are clipped in list order for the preview (as the slicers do).
+
+## Printing (added 2026-11-25)
+Sending a sliced figure to the printer was out of the original scope; it is built now and documented in
+`docs/integration.md` ("Control path" and "The site"): the local version prints through beambam's CLI or daemon,
+the site through a beambam daemon on the user's own device that also slices. Every print goes through the confirm
+panel (`web/src/printconfirm.ts`) and beambam's spool check; the site never prints by itself.

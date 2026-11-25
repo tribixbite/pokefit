@@ -78,7 +78,7 @@ cannot reach the nozzle) disable it and warnings are accepted by the click.
 The site cannot slice or reach the printer, so in the browser engine the page itself talks to a beambam daemon on
 the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beambam", remembered in the browser):
 
-1. `beambam daemon --http 127.0.0.1:8765 --cors-origin https://pokefit.party` (beambam ≥ 1.6.1). beambam refuses
+1. `beambam daemon --http 127.0.0.1:8765 --cors-origin https://pokefit.party` (beambam ≥ 1.6.2: earlier versions drop the track switch when slicing). beambam refuses
    POSTs from any web origin not named there, so other pages cannot drive the printer. The site calls
    `http://127.0.0.1` from https without a mixed-content block (loopback counts as secure); Chrome asks once to
    let it reach apps on the device, and the daemon answers the Private Network Access preflight.

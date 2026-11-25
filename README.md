@@ -59,9 +59,13 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
 - **shows what colours cost to print**: estimated filament changes, time and purge for the figure and for
   every palette size (on a two-nozzle X2D/H2D, two colours need no filament changes at all), from a model
   calibrated on Bambu slices;
-- **matches colours to your printer's AMS** (local version, through [beambam](https://github.com/tribixbite/beambam)):
+- **matches colours to your printer's AMS** (through [beambam](https://github.com/tribixbite/beambam)):
   reads the loaded filaments, maps the figure's colours to them and can recolour the figure to match;
-- **shows your printer** (local version, beambam): live camera, progress, nozzle and bed temperatures — read-only;
+- **slices and prints through beambam**: the local version slices with Bambu Studio; the website slices and prints
+  through a beambam daemon on the same phone or computer (Print → "Connect to beambam"). Before every print a
+  confirm panel shows which spool each filament prints from, kept in step with the printer, with beambam's check;
+- **shows your printer** (beambam): progress, nozzle and bed temperatures, and in the local version the live
+  camera — read-only;
 - **takes models from other apps**: a page can open pokefit and post a model to it (`pokefit:load`, see
   `web/src/handoff.ts`), or link `https://pokefit.party/?url=<model>`;
 - **reads your Bambu Studio presets**: a project 3MF, or the preset exports from *File › Export › Export Preset
@@ -70,7 +74,7 @@ pokefit takes a figure (3MF, STL, OBJ or GLB — a GLB's texture or material col
   print on your project's plate is flagged (Bambu would refuse to slice it).
 
 The website runs the whole engine **in your browser** (Python → WebAssembly via Pyodide); files are never
-uploaded. The local version adds **Bambu Studio slicing** (print time and filament for 1 and 10 copies, supports,
+uploaded, except to a beambam daemon you run yourself when you print through it. The local version adds **Bambu Studio slicing** (print time and filament for 1 and 10 copies, supports,
 and the sliced **print file** — `.gcode.3mf` with thumbnails — ready to send to the printer)
 and **photos to 3D**: photos of a toy from the front, left and back become a coloured, printable model, made on
 your own GPU by [Pixal3D](https://github.com/TencentARC/Pixal3D) in a local ComfyUI (setup in `AGENTS.md`, "Photos to

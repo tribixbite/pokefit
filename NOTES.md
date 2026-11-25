@@ -5,32 +5,40 @@ measurements decisions still need. Paths under `~/Downloads`, `%APPDATA%` or `C:
 exist only on the original Windows machine (ask the user for the files).
 
 ## To do (prioritised)
-1. **First real print** (Send to printer is built, `fffd03c`: with the AMS read, Slice -> "Send to printer…" -> confirm
-   panel (filament -> spool, plate, bed temp) -> "Start print" = `beambam print <file> --slot …`; credentials and signing
-   key in `~/.x2d`, never in a repo). "Start print" has never been pressed. **The first real print needs the user's OK in
-   chat, every later one their click.** It also settles whether a dual-nozzle start still fails (beambam notes disagree,
-   err 84033544). Then: AMS load/unload. `beambam print --dry-run` (purge check only, touches no printer) is safe to use.
-   2026-11-25: the confirm panel now shows beambam's own spool check (`printer.print_plan`: `ams map --json`, or the
-   daemon's `/print/plan`): errors disable "Start print", warnings are shown and the click accepts them
-   (`accept_warnings` → `--yes`). Before this, any colour/profile difference made `beambam print` refuse with no
-   terminal to confirm on (e.g. rumi_frame on D2: profile GFA05 vs GFL96, ΔE 38). Optional daemon mode:
-   `beambam daemon --http 127.0.0.1:8765` + `POKEFIT_BEAMBAM_URL=http://127.0.0.1:8765` (live X2D: state 0.06 s,
-   plan 0.006 s vs 2.3 s per CLI call). The signing cert was renewed (valid to 2028-01-25; a signed command now
-   passes the signature + cert checks, err 84033544 = stage 4). The live print itself is still unverified.
-   **The site prints too** (2026-11-25, docs/integration.md "The site"): Print → "Connect to beambam" (daemon on the
-   same device with `--cors-origin https://pokefit.party`, beambam ≥ 1.6.1) → Slice (`POST /slice`, the phone's
-   headless Bambu Studio: critter 2 s, jolteon 18 s) → the live confirm panel (`printconfirm.ts`, also local) →
-   Start print. Verified: engine smoke under Node (set_printer, print_project), that project sliced by beambam's
-   slice_service and planned against the live X2D AMS. Not verified: the page in a real browser against the
-   daemon (Chrome's Local Network Access prompt), and a real print.
-2. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
+1. **First real print** — "Start print" has never been pressed. **The first real print needs the user's OK in chat,
+   every later one their click.** Everything before it is built and checked:
+   - Local: Slice → "Send to printer…" → the confirm panel → `beambam print <file> --slot … [--yes]`, or the daemon's
+     `POST /print` with `POKEFIT_BEAMBAM_URL` (live X2D: state 0.06 s, plan 0.006 s vs ≈ 2.3 s per CLI call).
+   - The confirm panel (`web/src/printconfirm.ts`, local and site): a spool picker per filament with beambam's verdict
+     (`/print/plan` or `ams map --json`), spools re-read every 4 s (daemon) / 6 s (local) and re-planned on change;
+     errors disable Start print, warnings are accepted by it (`accept_warnings` → `--yes`). Without this, any
+     colour/profile difference made `beambam print` refuse with no terminal (rumi_frame on D2: GFA05 vs GFL96, ΔE 38).
+   - Signing: the Handy app cert was renewed 2026-11-25 (valid to 2028-01-25); a signed command now passes the
+     signature and certificate checks (err 84033544 = stage 4, the command itself refused).
+   - Still to learn from the first print: whether the dual-nozzle `project_file` starts (beambam notes disagree,
+     err 84033544). Then: AMS load/unload. `beambam print --dry-run` (purge check only) is always safe.
+2. **The site's print flow in the deployed page** (2026-11-25, docs/integration.md "The site"). Print → "Connect to
+   beambam" (daemon on the same device: `beambam daemon --http 127.0.0.1:8765 --cors-origin https://pokefit.party`,
+   beambam ≥ 1.6.2) → Slice (`POST /slice`, the phone's headless Bambu Studio: critter 2 s, jolteon 18 s) → confirm
+   panel → Start print.
+   - Verified: the engine smoke under Node (`set_printer`, `print_project`, the switch flag); that project sliced by
+     beambam and planned against the live X2D; the whole flow in Chrome on the phone against a local copy of the
+     page served on 127.0.0.1:8770 (16 spools read, jolteon sliced 2 h 44 min / 31.7 g, picker re-plan, a PLA spool
+     for a PETG filament disabling Start print). The live site serves the code and the daemon answers its preflight.
+   - Not verified: https://pokefit.party itself in a browser — Chrome's Local Network Access prompt needs the
+     user's tap (the phone was locked and Android kept killing the browser); and the new row layout on a phone.
+   - The daemon has no camera route: the Printer card shows status only on the site.
+   - The daemon runs from a shell on the phone and dies with Termux under memory pressure: it needs a service
+     entry (operad / boot script) before the site can rely on it.
+   - TODO: re-measure `has_filament_switcher` 0 vs 1 with `--has-filament-switcher=1` (the CLI forced 0 before).
+3. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
    changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
    auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its
    dark brown) merge into brown below 5 colours and +1 detail picks a 0.08 % beige; Squirtle at auto 2 merges belly,
    shell and eyes into one tan; Mew finds no detail. Ideas: score detail candidates by hue distance and share, not
    only ΔE to the group mean; ask the user whether "Keep details +1" should be the default (pupils on Squirtle cost
    1.98 -> 2.70 h, 20.9 -> 34.1 g).
-3. **Generated-figure batch** (2026-10-21; photos in `imageto3d/<name>/`, git-ignored, Takara Tomy MonColle studio shots
+4. **Generated-figure batch** (2026-10-21; photos in `imageto3d/<name>/`, git-ignored, Takara Tomy MonColle studio shots
    + a Jazwares Togepi; scratchpad `batch_figs.py` = generate + fit + slice, `sheet.py` = painted renders,
    results `batch3/summary.jsonl`, sheets `figures_1.png`/`figures_2.png`). Pixal3D multi-view 96-235 s each; Mew via
    `--clean` (3 photos) 231 s. Defaults, Bambu slices (auto | auto + 1 detail):
@@ -50,13 +58,13 @@ exist only on the original Windows machine (ask the user for the files).
    | Mew | 39.6 | 0: FAIL | 3 | 3.54 / 47.1 | (no detail) |
    All need supports (chins, arms). Open: Mew (thin looping tail and feet: no pocket, small bed contact; glue it or a
    stand); Bulbasaur only 22 mm (long and wide); several "magnets overhang the steel" warnings (measured with washers, before steel discs).
-4. **Photo pipeline**: Pixal3D multi-view + mirrored right is the default. `--pose` (OpenPose skeleton reference, arms
+5. **Photo pipeline**: Pixal3D multi-view + mirrored right is the default. `--pose` (OpenPose skeleton reference, arms
    down) turned the arms-up Charmander into a sitting, arms-down one: 33.8 mm vs 32.8, 2 magnets. Gloss
    (`imageto3d.gloss_free`) clears streaks on head and shell; a faint darker blotchiness remains on the Squirtle's head
    side where reflections were replaced. Side-view naming confirmed on a second figure (Mew). In-browser TRELLIS.2: only
    after the user switches Chrome to the high-performance GPU. llama-server is stopped (restart command in memory
    `local-installs`).
-5. **Paint depth / inside filament** (UI "Paint depth", "Inside prints in" = `Params.core_filament`, CLI `--core N`;
+6. **Paint depth / inside filament** (UI "Paint depth", "Inside prints in" = `Params.core_filament`, CLI `--core N`;
    `pipeline.cored`: unpainted triangles painted the filament they showed, then the parts' filament = the core;
    export and slices only, the coloured STL is surface only). Cost depends on the inside colour: Charmander at the
    app's 31 mm (`printed/charmander.3mf`, bundled reference, verify_export): paint all the way in 58 changes 3.93 h
@@ -67,18 +75,18 @@ exist only on the original Windows machine (ask the user for the files).
    core in the flame). Open: suggest the inside filament (the colour on most layers' surface;
    `toolchange` could score it) instead of leaving the user to pick; `mmu_segmented_region_interlocking_depth`
    (0 / 0.4 / 0.8 mm: no time effect on an 8-colour figure) is still not exposed; strength needs a physical test.
-6. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only;
+7. **Send to printer** now shows beambam's file check (`printer.print_file_check` = `beambam analyze --json`, file only;
    waste = beambam `waste_g`, purge + prime tower: `flush_volume_g` alone read 0 g with a tower).
-7. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
+8. **MakerWorld URLs**: not supported, by design (no public API; files need a Bambu Cloud login; Terms s.9 forbid
    automated download). The user downloads, then opens the file.
-8. **Conform limits**: designed for the largest-fit scale and the figure's floor (`Session.floor`); the flat base's walls are
+9. **Conform limits**: designed for the largest-fit scale and the figure's floor (`Session.floor`); the flat base's walls are
    vertical (a pedestal between the legs). Fill where: steel / everywhere / circle / drawn outline (`Params.fill_area`,
    `fill_shape`). Magnet pads (`Session.pads`): on the steel seat each pocket's walled disc gets the gap fill too, so
    magnets are walled from the steel up; Downloads Charmander with a 10.7 mm fill circle: both pockets now pass
    ("Sits on the washer"; before: "only 0.5-0.7 mm walled, glue it"). The raised seat lifts each pocket only as far as
    its own spot needs (one over the flat base stays on the washer): by design, explained in the seat hint. Pads stay
    within the cavity's flat floor radius; not checked against a hand-placed pocket outside it (clipped there).
-9. **Big meshes**: Simplify (`pokefit/simplify.py`, `Params.simplify`, Figure card "Simplify mesh", off by default,
+10. **Big meshes**: Simplify (`pokefit/simplify.py`, `Params.simplify`, Figure card "Simplify mesh", off by default,
    remembered; the analysis shows a "Dense mesh" hint above 300k triangles). UI: Low / Medium / High = 7 / 20 / 50 %
    of the file's triangles (`web/src/simplify.ts`; `Params.simplify` < 1 is a share), log slider 1-100 %, typed count.
    Mesh repair (`pokefit/repair.py`) runs on every load and boolean: the user's site export of MINI EEVEE at 100k had
@@ -93,7 +101,7 @@ exist only on the original Windows machine (ask the user for the files).
    Open: (a) should Simplify default to on (e.g. 200k)? The user's call - it changes face numbers, so a session's
    paint steps belong to one setting; (b) of the remaining 11.5 s, parsing the 1.45M-triangle 3MF XML is the bulk
    (not measured separately); (c) a GLB loads its texture again on every Simplify change (k-means, a few s).
-10. **Strengthen thin parts** (`pokefit/strengthen.py`, `Params.strengthen`, UI "Strengthen thin parts", off by default).
+11. **Strengthen thin parts** (`pokefit/strengthen.py`, `Params.strengthen`, UI "Strengthen thin parts", off by default).
    Charmander at 26.9 mm, 1.6 mm: 5-6 % of the surface thin (flame tips, flame/tail join, toes, claws), up to
    0.37-0.45 mm out, +2.5 s local; smooth result (scratchpad renders `char_flame_zoom.png`). Synthetic checks
    (tests/test_strengthen.py): a 0.7 mm neck between a tail and a flame ball -> ~1.6 mm all along; a 0.6 mm free
@@ -109,7 +117,7 @@ exist only on the original Windows machine (ask the user for the files).
    ray), gated through the blend. Pikachu 3 mm: ear-tip move 0.89 -> 0.26 mm, surface moved 28 -> 25 %, largest push
    1.08 -> 0.87 mm; renders scratchpad `pikachu_ears.png`, `strengthen_before_after.png`. Open: (e) a fine point
    still rises up to 0.22 mm at 4 mm (tests/test_strengthen cone); (f) the Eevee nose grows a little at 3 mm.
-11. **Paint tools** (colorize). Wand (default; `Topology.wand`, ~0.4 s a tap on 100k triangles + ~0.1 s for the soft
+12. **Paint tools** (colorize). Wand (default; `Topology.wand`, ~0.4 s a tap on 100k triangles + ~0.1 s for the soft
    edge), Stamp (drag a box: ellipse decal), Brush, Fill, Mirror, Grow/Shrink, Pick colour, Undo/Redo, "Drop specks
    under", "Shape map" view (crease shading + relief contours). Wand, brush, stamp and grown steps paint soft edges
    (`colorize.Field` -> split paint via `paint.overlay`, depth 4, a stamp on big triangles up to 8); a fill bounded
@@ -129,7 +137,7 @@ exist only on the original Windows machine (ask the user for the files).
      rotation), so a rotation after painting can change the plane on an ambiguous shape; (d) the Shape map view
      replaces the paint colours while on; (e) a soft edge's split triangles change the preview's geometry, so a wand
      tap re-sends the mesh to the view (not only colours).
-12. **Split by piece + coloured STL** (2026-10-26). Split: `colorize.colour_pieces` -> `pipeline.pieces_of_colour` ->
+13. **Split by piece + coloured STL** (2026-10-26). Split: `colorize.colour_pieces` -> `pipeline.pieces_of_colour` ->
    `POST /api/colour_pieces` / worker `colourPieces`; the UI (`colorize.ts splitColour`) appends one "fill" step per
    extra patch (shared `group`, undone/redone as one, palette restored) with the colour most unlike the palette
    (`colour.distinctColour`). A bucket fill now also takes its colour's slivers in split triangles round it
@@ -143,7 +151,7 @@ exist only on the original Windows machine (ask the user for the files).
    `stlcolour.read_coloured_stl` + trimesh only); (c) split steps are "fill" steps at a triangle: a later Simplify
    change drops them like any paint. UI: every panel card collapses (`collapse.ts`, remembered); the busy pill is
    fixed at the top on phones (desktop: in the view, which never scrolls).
-13. **Remove colour + re-opening exports** (2026-10-27). Remove colour: `Params.colour_map` (file filament n ->
+14. **Remove colour + re-opening exports** (2026-10-27). Remove colour: `Params.colour_map` (file filament n ->
    colour_map[n-1], applied in `Session.mapped_parts` before paint; `Session.extruder` = renumbered object filament
    everywhere a file is written), UI `colorize.ts removeColour` (closest by CIE76, later ones move down, paint steps
    and "Prints from" choices renumbered; Undo and Redo while nothing changed since). Old pockets:
@@ -153,24 +161,24 @@ exist only on the original Windows machine (ask the user for the files).
    would not be found; (b) a found pocket's diameter sets the pocket size for the session (the Manex export used
    2.09 mm); (c) more than 3 found pockets: the first 3 are placed. Busy pill: a child of `body`, `position: fixed`
    at every width (style.css `.busy`).
-14. **Magnet count with press + fill** (fixed 563734b; details in its commit). Open: the fill also builds up over
+15. **Magnet count with press + fill** (fixed 563734b; details in its commit). Open: the fill also builds up over
    paws inside the fill area ("fill gaps up to X" literally: the multicolour Eevee stands on a ~6 mm block at the
    default); not yet looked at in Bambu Studio on the user's figures.
-15. **Paint dock, "Prints from" fold, faster loads** (2026-10-30, bc6645b; details in its commit). Open: on a phone the
+16. **Paint dock, "Prints from" fold, faster loads** (2026-10-30, bc6645b; details in its commit). Open: on a phone the
    open dock is ~205-246 px of a 460 px view. Load hotspots (CPython, Little+Pikachu 8.7 MB, before this round's fit
    speed-up): conform 5.5 s, height fields 3.3 s, 3MF parse 3 s, mesh checks 1.7 s, pocket cut 1.5 s, pads 1.2 s;
    engine import ~4 s in the browser (networkx cannot be dropped: trimesh path traversal). Scratchpad `prof_load.py`.
-16. **Steel discs, flat floor, reshape a part, fine brush** (2026-11-04, b64a5a1; details in its commit). Thin discs
+17. **Steel discs, flat floor, reshape a part, fine brush** (2026-11-04, b64a5a1; details in its commit). Thin discs
    D20 (0.8" x 0.01", default) / D15; washers kept. Auto flat floor per figure (`Session.floor`, `fit.best_floor`);
    `conform.lift_start` = floor reach - 2.1 mm (0.2 mm off cut a bend gain from 8 % to 0.4 %). Open: (a) a reshaped
    limb is not checked for running into the body; (b) the auto floor changes the shell per figure (a user reusing a
    printed shell must type its floor); (c) thin-steel hold strength not measured; (d) `Steel` labels show 20.32 x
    0.254; (e) Bambu 2.8.2.61 "invalid config, load geometry data only" on every geometry-only import cannot be
    avoided from the file (fixed in 2.9.1); the slicer CLI was not retested on 2.9.1.
-17. **Crease noise, paint lag, export links/names** (2026-11-04, 1af978a; details in its commit). Open: a stroke with
+18. **Crease noise, paint lag, export links/names** (2026-11-04, 1af978a; details in its commit). Open: a stroke with
    soft edges re-sends the whole preview mesh and rebuilds the BVH (main-thread time not measured); the rest of a
    paint step (~1.2 s in the browser engine on the 300k Jolteon) is mostly `paint.overlay` (Python recursion).
-18. **Fill height, faster analysis, base widening, smoother thickening** (2026-11-05). Test figure: the Jolteon
+19. **Fill height, faster analysis, base widening, smoother thickening** (2026-11-05). Test figure: the Jolteon
    (`~/Downloads/Eevee+Evolutions.3mf`, simplify 300k), scripts in the session scratchpad (`jolt_fill2.py`,
    `jolt_edits.py`, `strength_probe.py`, `strength_ear.py`).
    - "Fill gaps up to" made the base taller than the gap: a cell was admitted by its lowest underside point and built
@@ -215,7 +223,7 @@ exist only on the original Windows machine (ask the user for the files).
      Shrink step 0.1 mm. Reshape's highlight showed specks on the head: it indexed the preview mesh, whose split
      paint is drawn as sub-triangles, by the part's triangle numbers; `limb_region` now answers `view_faces`
      (`PreviewMeshes.sources`), checked in the local UI on the Jolteon's ear.
-19. **Eevee evolutions batch** (2026-11-06, fourth pass; user's request: official colours, 300k, 1-2 pockets as large
+20. **Eevee evolutions batch** (2026-11-06, fourth pass; user's request: official colours, 300k, 1-2 pockets as large
    as fit, like `printed/umbreon3.3mf`; no flat feet, no gap fill / filler; paint on the model's lines; inspect each
    in pokefit.party). Source `~/Downloads/Eevee+Evolutions.3mf`; results `~/Downloads/eevee_evolutions_pokefit_300k/`
    (`<name>_pokefit_60.3mf`, `_import.3mf`, `review_<name>.png`; older versions with pads in
@@ -257,7 +265,7 @@ exist only on the original Windows machine (ask the user for the files).
    pockets without pads are walled only 0.5-1.2 mm of the 2 mm magnet on most figures; pupils/highlights not
    modelled on Leafeon/Flareon/Jolteon/Umbreon/Vaporeon (one colour per eye); Vaporeon fins under 0.4 mm in places;
    `band` is now the app's "Cover line" (item 22); straight soft cuts are not a paint mode.
-21. **Colours from a picture** (2026-11-06; user: make colouring like the Eevee batch easy in the app; test with
+22. **Colours from a picture** (2026-11-06; user: make colouring like the Eevee batch easy in the app; test with
    Ninetales). `web/src/reference.ts` (+ `reference.test.ts`), Colours card fold "Colours from a picture": official art
    by name/number via PokeAPI (species list `pokeapi.co/api/v2/pokemon-species?limit=2000`, art
    `raw.githubusercontent.com/PokeAPI/sprites/.../official-artwork/<id>.png`, both CORS *), name suggested from the
@@ -275,7 +283,7 @@ exist only on the original Windows machine (ask the user for the files).
    calls go to the local server ("Unknown session"; api.ts `mode` set after config) — seen only from automation;
    (c) live since f3cf1ec, checked on pokefit.party with `nt_ui.py live https://pokefit.party/` (same palette as
    locally; console: only the usual local-engine probes).
-22. **Cover line** (2026-11-06; user: "add the engraved lines feat"). `PaintOp.line` (wand/part/region/fill),
+23. **Cover line** (2026-11-06; user: "add the engraved lines feat"). `PaintOp.line` (wand/part/region/fill),
    UI "Cover line" button + L key on the last step (`colorize.ts lineLast`). Engine: `Topology.line_depth` (relief over
    the surface smoothed ~LINE_REACH edges, grey closings at LINE_RINGS 2/4/8/16 rings), `Topology.line_width` (depth
    profile vs straight distance from the outline; smallest scale whose peak is >= 0.75 of the next; none -> smallest
@@ -288,14 +296,14 @@ exist only on the original Windows machine (ask the user for the files).
    high ground outside the region did not help); (b) Leafeon runs ~1 edge onto the face below the eye; Espeon's narrow
    tip stops ~1 edge short (Grow/Shrink fix both); (c) live since 706b97b: `nt/line_ui.py OUT https://pokefit.party/`
    passes in the browser engine (live `pokefit.zip` has `line_width`; console: only the usual local-engine probes).
-23. **Opening an export** (2026-11-07; user: loading an Eevee evolution takes forever). Browser engine, Vaporeon export:
+24. **Opening an export** (2026-11-07; user: loading an Eevee evolution takes forever). Browser engine, Vaporeon export:
    38 s -> 14 s. It was analysed three times: with the app's defaults (incl. gap fill and pads, 6 s), again with the
    export's own base settings, again with its old pockets placed. `pipeline.reopened` applies both before the first
    analysis (UI takes the pockets from the report: `main.ts load`); old pockets are placed at the size it fits at
    (`max_scale`, as manual pockets are analysed; the UI used the auto-placement's scale). Fixed on the way:
    `Session.old_pockets` was empty until something else read the parts. Calls now: load 9.2 s, faces 0.6, full analysis
    5.9 (scratchpad `nt/str_ui.py OUT FILE [URL]`: load + strengthen timings per worker call, live or local).
-24. **Weak points, per-feature thickening, reinforcement, Changes to your model** (2026-11-09; user: Leafeon's ears and
+25. **Weak points, per-feature thickening, reinforcement, Changes to your model** (2026-11-09; user: Leafeon's ears and
    tail look brittle; a tool grading thin connections; thicken tail + ears; more walls/infill inside; flag settings
    that reshape the model). `pokefit/joints.py` (module doc), `Params.strengthen_at` / `reinforce`, UI `web/src/weak.ts`,
    `web/src/changes.ts`. Measured: rod 1.5 x 10 mm 1.34 N vs 1.33 N beam formula (tests/test_joints.py). Leafeon
@@ -321,11 +329,11 @@ exist only on the original Windows machine (ask the user for the files).
    Open: (c) the stalk's join behind the weak section (probe 6: 2.2 N): reach the stretch back into the join?; (d) the
    panel keeps ~4 % less than the original (exact cancellation left a 0.1 mm ripple); (e) the user picks a Leafeon
    variant (current / v2 / v3); (f) no test yet for overlapping features' blend (verified on Leafeon only).
-25. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
+26. **beambam / phone printing**: audit (76 findings, 7 P0) + design + phased task list in
    `C:\git\beambam\docs\plan-2026-11\` (TASKS.md first). Not committed there: security findings in a public repo, a
    personal git identity in that clone, and someone's uncommitted edits (`beambam/ams.py`, `doctor.py`, 3 tests).
    Next: Phase 0 there (S6 runner, port 8780, one AMS parser), then pokefit task 0.4 (`printer.py` reads it).
-26. **Neck under a heavy end** (2026-11-11; user: Charmander's tail flame snaps off, PLA, "printed a bunch"; then "make
+27. **Neck under a heavy end** (2026-11-11; user: Charmander's tail flame snaps off, PLA, "printed a bunch"; then "make
    it print both colors ... the tail color keeps printing in the middle of the tip"). `printed/charmander.3mf` (Bambu-
    resaved, 6892 tris, prints 24 mm tall, PLA 0.20 HQ, 15 % infill, 2 walls, object filament 16 = red, paint depth
    unlimited): hourglass neck under the flame, 2.31 x 2.64 mm at 9 mm up, 2.9 N at the tip by hand.

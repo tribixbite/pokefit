@@ -79,6 +79,12 @@ End-to-end checks worth doing for engine changes (see `.claude/skills/pokefit-ve
 open a real file in the local UI, export, and `python scripts/verify_export.py <export.3mf>` (paint
 summary + Bambu slice: time, grams, colour changes, purge).
 
+On a machine where the native packages do not install (Termux on the user's phone: no manifold3d/trimesh wheels),
+the engine still runs under Node: `node scripts/engine-smoke.ts` works there and covers the Python engine, and
+`python -m mypy pokefit/<files> --ignore-missing-imports` checks types. `bun run build` then stops at
+`config.json` (it imports pokefit natively); CI builds it. Run bun as `env -u BUN_BINARY_PATH bun …` inside a
+Claude Code session (else `bun` re-runs Claude Code).
+
 ## Architecture map
 
 | Python (`pokefit/`) | Role |
@@ -256,7 +262,9 @@ appears when the local server reaches ComfyUI at `POKEFIT_COMFY`, default http:/
 
 Plan and boundaries: `docs/integration.md`. beambam (printer control; AGPL-3.0-or-later like
 pokefit) is used as a subprocess (`POKEFIT_BEAMBAM`, default `beambam` on PATH; a venv is at `C:/git/beambam/.venv`
-on the original machine). craftmatic (TS) hands models over as files (`web/src/handoff.ts`; its side is
+on the original machine), or as a running daemon over HTTP: from the local server with `POKEFIT_BEAMBAM_URL`, and
+from the site's page itself once the user connects (`web/src/beambam.ts`; needs beambam ≥ 1.6.2 started with
+`--cors-origin https://pokefit.party`). craftmatic (TS) hands models over as files (`web/src/handoff.ts`; its side is
 `web/src/viewer/pokefit-handoff.ts`, "Fit in a Pokéball").
 
 ## Testing the UI with a browser agent
@@ -272,6 +280,12 @@ PointerEvents on the canvas from JS (the tool's drags do not stroke; a stroke th
 OrbitControls, whose `setPointerCapture` then throws for the fake pointer id). Time engine calls by wrapping
 `Worker.prototype.postMessage` and matching reply ids. Long scripts: start them without awaiting and read results
 from `window` later (the JS tool times out at 45 s).
+
+The site's print flow against a beambam daemon (no browser tool needed): serve `web/dist` on 127.0.0.1:8770, start
+`beambam daemon --http 127.0.0.1:8765 --cors-origin http://127.0.0.1:8770`, open the page in Chrome on the phone and
+drive it over DevTools (`adb forward tcp:9222 localabstract:chrome_devtools_remote`, then `Runtime.evaluate` on the
+page's websocket). Android freezes a backgrounded browser's renderer: `cmd activity unfreeze --sticky <pid>`. Never
+press Start print without the user's OK.
 
 ## Where things stand
 
