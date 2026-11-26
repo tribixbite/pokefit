@@ -461,6 +461,28 @@
         <label id="processRow" hidden>Process
           <select id="processSelect"></select>
         </label>
+        <details id="printSettings" class="print-settings">
+          <summary>Print settings <span id="printSettingsSum" class="muted"></span></summary>
+          <div class="grid2">
+            <label title="Where needed: Bambu adds supports only under the parts that need them (none when nothing overhangs). From the plate only: never on the figure itself.">Supports
+              <select id="supportSelect"><option value="auto">where needed</option><option value="plate">from the plate only</option><option value="off">off</option></select>
+            </label>
+            <label>Layer height
+              <select id="layerSelect"><option value="">project's</option><option value="0.08">0.08 mm</option><option value="0.12">0.12 mm</option><option value="0.16">0.16 mm</option><option value="0.20">0.20 mm</option><option value="0.24">0.24 mm</option><option value="0.28">0.28 mm</option></select>
+            </label>
+            <label>Walls
+              <select id="wallSelect"><option value="">project's</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select>
+            </label>
+            <label>Infill
+              <select id="infillSelect"><option value="">project's</option><option value="0">0 %</option><option value="5">5 %</option><option value="10">10 %</option><option value="15">15 %</option><option value="20">20 %</option><option value="25">25 %</option><option value="30">30 %</option><option value="40">40 %</option><option value="50">50 %</option><option value="75">75 %</option><option value="100">100 %</option></select>
+            </label>
+            <label>Brim
+              <select id="brimSelect"><option value="">project's</option><option value="auto_brim">auto</option><option value="outer_only">outside only</option><option value="no_brim">none</option></select>
+            </label>
+          </div>
+          <p id="layerNote" class="hint" hidden></p>
+          <p class="hint">Used by the next Slice and in exported files. Which nozzle prints each filament is chosen after slicing, under Send to printer.</p>
+        </details>
         <div id="beambamRow" class="beambam-row" hidden>
           <p class="hint">To slice and print from this page, run <a href="https://github.com/tribixbite/beambam" rel="noopener">beambam</a> on this phone or computer (on the printer's network), started with:</p>
           <code id="beambamCmd" class="cmd"></code>

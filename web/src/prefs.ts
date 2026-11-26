@@ -19,6 +19,8 @@ const REMEMBERED = {
   pocket_seat: "string", settings_source: "string", bend: "number|null", flat_base: "number|null",
   flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null",
   simplify: "number|null", simplify_auto: "boolean", despeckle: "number", reinforce: "boolean",
+  supports: "string", layer_height: "number|null", wall_loops: "number|null", infill: "number|null",
+  brim: "string|null",
 } as const satisfies Partial<Record<keyof Params, string>>;
 
 export type RememberedKey = keyof typeof REMEMBERED;
@@ -43,9 +45,21 @@ export function browserStore(): PrefStore | null {
   }
 }
 
+/** Remembered print settings the engine refuses outside these values (pipeline `_check_print_settings`): a stored
+ * value it would refuse is dropped, so it cannot break every later call. */
+const ALLOWED: Partial<Record<RememberedKey, (v: unknown) => boolean>> = {
+  supports: (v) => v === "auto" || v === "plate" || v === "off",
+  brim: (v) => v === "auto_brim" || v === "outer_only" || v === "no_brim",
+  layer_height: (v) => typeof v === "number" && v >= 0.08 && v <= 0.28,
+  wall_loops: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10,
+  infill: (v) => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 100,
+};
+
 function valid(key: RememberedKey, v: unknown): boolean {
   const want = REMEMBERED[key];
   if (v === null) return want.endsWith("|null");
+  const allowed = ALLOWED[key];
+  if (allowed && !allowed(v)) return false;
   if (want === "boolean") return typeof v === "boolean";
   if (want.startsWith("number")) return typeof v === "number" && Number.isFinite(v);
   return typeof v === "string" && v.length > 0 && v.length < 64;

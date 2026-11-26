@@ -70,7 +70,12 @@ SHAPE_CACHE = 4             # fit / underside / printability results kept per se
 # Params that change only colours, never the figure's shape, fit or pockets: editing them reuses those results.
 COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "colour_map",
                          "paint_depth", "core_filament", "simplify_auto",
-                         "texture_colours", "texture_details", "despeckle"})
+                         "texture_colours", "texture_details", "despeckle",
+                         "supports", "layer_height", "wall_loops", "infill", "brim", "nozzles"})
+SUPPORT_MODES = ("auto", "plate", "off")
+BRIM_TYPES = ("auto_brim", "outer_only", "no_brim")
+LAYER_HEIGHTS = (0.08, 0.28)   # mm: Bambu's range for a 0.4 mm nozzle
+LINE_MARGIN = 0.02             # mm a line widened for a tall layer stays wider than the layer
 MIN_SCALE_FOR_MAGNETS = 0.6   # never shrink a figure below this fraction of its fit size for the magnets
 DENSE_FACES = 300_000         # more triangles than this: suggest Simplify (`_dense_hint`) ...
 AUTO_SIMPLIFY = 200_000       # ... or, with `Params.simplify_auto`, load it simplified to this many (`auto_simplify`)
@@ -158,6 +163,18 @@ class Params:
     # meets other paint). The inside (`core_filament`) is on every layer: an inside colour missing from a layer's
     # surface costs a change there (Charmander, 1.6 mm: 118 changes with its red inside, 58 with orange = as deep).
     paint_depth: float | None = None
+    # Print settings for the slice (`print_overrides`; None = the reference project's own). `supports`: "auto"
+    # (Bambu adds supports only where the figure needs them), "plate" (the same, but only standing on the build
+    # plate) or "off". `infill` is the sparse infill density in %, `brim` Bambu's `brim_type`.
+    supports: str = "auto"
+    layer_height: float | None = None
+    wall_loops: int | None = None
+    infill: int | None = None
+    brim: str | None = None
+    # The nozzle each filament prints with on a two-nozzle printer (index 0 = filament 1; 1 = left, 2 = right):
+    # Bambu's "Manual" filament grouping. None = Bambu chooses ("Auto For Flush": fewest swaps and purge). With the
+    # printer's track switch any AMS spool reaches either nozzle; without it beambam refuses a spool that cannot.
+    nozzles: list[int] | None = None
     # The filament the inside prints in, past `paint_depth` (a palette number, as paint steps use; None = the
     # object's own). The surface keeps its colours (`cored`): a figure whose thin parts change colour can keep one
     # filament running through them (Charmander's red flame on an orange tail: the neck switched from orange to red
@@ -274,6 +291,7 @@ class Params:
             self.paint_depth = float(self.paint_depth)
             if not 0 <= self.paint_depth <= 10:
                 raise ValueError("paint_depth must be 0..10 mm (0 = unlimited, or null for the project's)")
+        self._check_print_settings()
         if self.core_filament is not None:
             self.core_filament = int(self.core_filament)
             if not 1 <= self.core_filament <= 64:
@@ -292,6 +310,31 @@ class Params:
             else:
                 raise ValueError("simplify must be a share of the file's triangles (0..1), 1,000..10,000,000 "
                                  "triangles, or null for the file's own")
+
+    def _check_print_settings(self) -> None:
+        if self.supports not in SUPPORT_MODES:
+            raise ValueError(f"supports must be one of {', '.join(SUPPORT_MODES)}")
+        if self.layer_height is not None:
+            self.layer_height = round(float(self.layer_height), 3)
+            if not LAYER_HEIGHTS[0] <= self.layer_height <= LAYER_HEIGHTS[1]:
+                raise ValueError(f"layer_height must be {LAYER_HEIGHTS[0]}..{LAYER_HEIGHTS[1]} mm (0.4 mm nozzle)")
+        if self.wall_loops is not None:
+            self.wall_loops = int(self.wall_loops)
+            if not 1 <= self.wall_loops <= 10:
+                raise ValueError("wall_loops must be 1..10")
+        if self.infill is not None:
+            self.infill = int(self.infill)
+            if not 0 <= self.infill <= 100:
+                raise ValueError("infill must be 0..100 %")
+        if self.brim is not None and self.brim not in BRIM_TYPES:
+            raise ValueError(f"brim must be one of {', '.join(BRIM_TYPES)} (or null for the project's)")
+        if self.nozzles is not None:
+            try:
+                self.nozzles = [int(n) for n in self.nozzles]
+            except (TypeError, ValueError) as exc:
+                raise ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament") from exc
+            if not self.nozzles or any(n not in (1, 2) for n in self.nozzles) or len(self.nozzles) > 64:
+                raise ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament")
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -953,8 +996,45 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         "ams": [a.to_dict() for a in ams or []],
         "printer": (ref or {}).get("printer_settings_id", ""),
         "process": (ref or {}).get("print_settings_id", ""),
+        "print_defaults": print_defaults(ref),
         "slicer": slicer,
     }
+
+
+def _line_widths(st: dict) -> dict[str, float]:
+    """The explicit line widths of a process (mm; 0 = automatic, left out)."""
+    out = {}
+    for key, v in st.items():
+        if key.endswith("line_width") and isinstance(v, str) and not v.endswith("%"):
+            try:
+                w = float(v)
+            except ValueError:
+                continue
+            if w > 0:
+                out[key] = w
+    return out
+
+
+def thin_lines(st: dict, layer_height: float) -> dict[str, float]:
+    """The line widths a `layer_height` layer is too tall for, each with the width it prints at instead."""
+    return {k: round(layer_height + LINE_MARGIN, 3) for k, w in _line_widths(st).items() if w <= layer_height}
+
+
+def print_defaults(ref: dict | None) -> dict[str, Any]:
+    """The project's own values of the settings the Print card can change (shown as "project's (…)")."""
+    ref = ref or {}
+
+    def num(key: str) -> float | None:
+        try:
+            return float(str(ref.get(key, "")).rstrip("%"))
+        except ValueError:
+            return None
+    walls, infill = num("wall_loops"), num("sparse_infill_density")
+    widths = _line_widths(ref)
+    return {"layer_height": num("layer_height"), "wall_loops": int(walls) if walls is not None else None,
+            "infill": int(infill) if infill is not None else None, "brim": ref.get("brim_type") or None,
+            # The narrowest line: a layer this tall or taller widens it (`thin_lines`).
+            "min_line_width": min(widths.values()) if widths else None}
 
 
 def input_checks(session: Session, params: Params, printing: bool = True) -> list[Check]:
@@ -1413,15 +1493,23 @@ def analyse(session: Session, params: Params, recommend: bool = False,
     return rep, final
 
 
-def _tc_estimate(parts: list[Part], object_extruder: int, colours: list[str], settings: dict) -> dict[str, Any]:
+def _tc_estimate(parts: list[Part], object_extruder: int, colours: list[str], settings: dict,
+                 pinned: list[int] | None = None) -> dict[str, Any]:
     """Colour changes for these (final-mm) parts: the best nozzle split (what Bambu's Auto For Flush
-    finds, within the model's error) and, on a two-nozzle printer, everything on one nozzle."""
+    finds, within the model's error) and, on a two-nozzle printer, everything on one nozzle. `pinned`: the
+    nozzle the user gave each filament (`Params.nozzles`), which the estimate then keeps."""
     n = max(1, len(colours))
     lh = float(settings.get("layer_height", 0.2) or 0.2)
     first = float(settings.get("initial_layer_print_height", lh) or lh)
     use = tc.layer_use(parts, object_extruder, n, lh, first)
     nozzles = tc.nozzle_count(settings)
-    best, single = tc.plan(use, tc.flush_matrix(settings, n), n_nozzles=nozzles)
+    allowed = None
+    if pinned and nozzles >= 2:
+        allowed = [{pinned[f]} if f < len(pinned) else set(range(1, nozzles + 1)) for f in range(n)]
+    flush = tc.flush_matrix(settings, n)
+    best, single = tc.plan(use, flush, n_nozzles=nozzles, allowed=allowed)
+    if allowed:      # the comparison stays "everything on one nozzle", not the pinned split's own floor
+        single = tc.simulate(use, [1] * n, flush, nozzles, tc.layer_lists(use))
     return {"filaments": int(use.any(axis=0).sum()), "nozzles": nozzles, "changes": best.changes,
             "switches": best.switches, "purge_g": round(tc.grams(best), 1),
             "minutes": round(best.seconds / 60), "nozzle_of": best.nozzle_of,
@@ -1437,7 +1525,7 @@ def toolchange_info(session: Session, params: Params, final: list[Part], scale: 
     if len(colours) < 2 or scale <= 0:
         return {}
     obj = session.obj(params)
-    info = _tc_estimate(final, session.extruder(params), colours, st)
+    info = _tc_estimate(final, session.extruder(params), colours, st, params.nozzles)
     rows = colour_rows(session, params, scale)
     if rows:
         info["by_count"] = rows
@@ -2210,6 +2298,13 @@ def with_paint_depth(settings: dict | None, params: Params) -> dict | None:
 
 
 def export_settings(session: Session, params: Params, supports: bool = False) -> dict | None:
+    """The settings an export (and the checks that read the process: islands, colour changes) uses, with the
+    user's print settings (`print_overrides`)."""
+    st = _export_base(session, params, supports)
+    return print_overrides(st, params) if st else st
+
+
+def _export_base(session: Session, params: Params, supports: bool) -> dict | None:
     if params.settings_source == "reference":
         built = session.print_settings(params, supports)
         if built is not None:
@@ -2327,10 +2422,13 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     out: dict[str, Any] = {}
     stem = export_stem(session, params)
     written, ext = cored(final, session.extruder(params), params.core_filament)
-    for name, sup in (("off", False), ("auto", True)):
+    # Supports chosen by the user ("off" / "plate"): one slice, shown as both variants.
+    variants = (("off", False), ("auto", True)) if params.supports == "auto" else (("auto", True),)
+    for name, sup in variants:
         f = write_project(session.project, obj.name, ext, written, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))
         out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{name}.gcode.3mf").to_dict()
+    out.setdefault("off", out["auto"])
     needs = out["auto"].get("support_seconds", 0) > 0
     out["supports_needed"] = needs if out["auto"].get("ok") else None
     # The print file of the variant the slicer says to print (supports only if it generated any).
@@ -2370,9 +2468,12 @@ def print_project(session: Session, params: Params, out_dir: str | Path) -> dict
     obj = session.obj(params)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    written, ext = cored(final, session.extruder(params), params.core_filament)
+    settings = _slice_settings(session, params, True)
+    # "Print weak parts solid" reaches the printer as it reaches the export: modifier volumes in the project.
+    mods, _ = reinforced(final, settings) if params.reinforce else ([], [])
+    written, ext = cored(final + mods, session.extruder(params), params.core_filament)
     f = write_project(session.project, obj.name, ext, written, out / f"{export_stem(session, params)}.3mf",
-                      settings=_slice_settings(session, params, True))
+                      settings=settings)
     return {"file": f, "ams_slots": print_ams_slots(session, params)}
 
 
@@ -2389,5 +2490,39 @@ def _slice_settings(session: Session, params: Params, supports: bool) -> dict | 
     # notes a mismatch with the printer before printing.
     if st and session.ams and "has_filament_switcher" in st:
         st["has_filament_switcher"] = "1" if session.track_switch else "0"
-    return st or None
+    return print_overrides(st, params) if st else None
+
+
+def print_overrides(st: dict, params: Params) -> dict:
+    """`st` with the user's print settings (`Params.supports` … `nozzles`), a copy. `supports` "off" and
+    "plate" override the slice variant's own; "auto" keeps it (the local Slice tries both)."""
+    out = dict(st)
+    if params.supports == "off":
+        out["enable_support"] = "0"
+    elif params.supports == "plate":
+        out["enable_support"] = "1"
+        out["support_on_build_plate_only"] = "1"
+        if not str(out.get("support_type", "")).endswith("(auto)"):
+            out["support_type"] = "tree(auto)"
+    if params.layer_height is not None:
+        out["layer_height"] = f"{params.layer_height:g}"
+        # Bambu refuses a line no wider than the layer ("Too small line width", Print.cpp validate: code -51), and
+        # a project may print fine outer walls (0.2 mm): at a taller layer those lines widen just enough.
+        for key, w in thin_lines(out, params.layer_height).items():
+            out[key] = f"{w:g}"
+    if params.wall_loops is not None:
+        out["wall_loops"] = str(params.wall_loops)
+    if params.infill is not None:
+        out["sparse_infill_density"] = f"{params.infill}%"
+    if params.brim is not None:
+        out["brim_type"] = params.brim
+    if params.nozzles is not None:
+        n = len(out.get("filament_settings_id") or []) or len(params.nozzles)
+        # Bambu Studio's manual grouping: the CLI reads `filament_map` (1-based extruder per filament) when the
+        # mode is "Manual" (BambuStudio.cpp, the non-auto branch) and writes the same map into the print file.
+        # Filaments past the list (unused ones the print file does not show) print on the left, Bambu's default;
+        # entries past the palette (a colour removed since) are dropped.
+        out["filament_map_mode"] = "Manual"
+        out["filament_map"] = ([str(x) for x in params.nozzles] + ["1"] * n)[:n]
+    return out
 

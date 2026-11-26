@@ -81,6 +81,17 @@ export interface Params {
   reinforce?: boolean;
   /** How far paint reaches into the figure, mm (Bambu mmu_segmented_region_max_width); null = the project's, 0 = unlimited. */
   paint_depth: number | null;
+  /** Supports in the print: "auto" (only where Bambu finds the figure needs them), "plate" (the same, standing on
+   *  the build plate only), "off". */
+  supports?: SupportMode;
+  /** Print settings for the slice; null = the project's own. */
+  layer_height?: number | null;
+  wall_loops?: number | null;
+  /** Sparse infill density, %. */
+  infill?: number | null;
+  brim?: BrimType | null;
+  /** The nozzle each filament prints with (index 0 = filament 1; 1 = left, 2 = right); null = Bambu's choice. */
+  nozzles?: number[] | null;
   /** Filament (palette number) the inside prints in past the paint depth; null = the object's own. */
   core_filament: number | null;
   /** Simplify the mesh when it loads (shape within 0.1 % of its size): a share of the file's triangles (0..1, the
@@ -474,6 +485,9 @@ export interface PrintPlan {
 
 /** `printer.print_plan` (beambam `ams map --json` / daemon `/print/plan`). Errors refuse the print; warnings need
  * the user's OK, which "Start print" gives (`accept_warnings`). */
+export type SupportMode = "auto" | "plate" | "off";
+export type BrimType = "auto_brim" | "outer_only" | "no_brim";
+
 export interface PrintMapping {
   filaments: { filament: number; type: string; colour: string; nozzle: string;
     tray: { tray_id: number; label: string; type: string; colour: string } | null;
@@ -535,6 +549,10 @@ export interface Config {
   printer_link?: boolean;
   /** The beambam daemon the site is connected to (browser engine): it slices and prints. */
   beambam?: string;
+  /** The project's own layer height, walls, infill % and brim (the Print settings' "project's" choice). */
+  print_defaults?: { layer_height: number | null; wall_loops: number | null; infill: number | null; brim: string | null;
+    /** The project's narrowest line (mm): a layer this tall or taller prints those lines a little wider. */
+    min_line_width?: number | null };
   /** The printer has a Filament Track Switch: any AMS spool can feed either nozzle. */
   track_switch?: boolean;
   /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */

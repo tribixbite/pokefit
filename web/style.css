@@ -433,6 +433,13 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .pc-row.bad .slot-picker { border-color: var(--fail); }
 .pc-lines { display: grid; gap: 2px; font-size: 12px; padding-left: 4px; }
 .pc-lines .warn-text { color: var(--warn); }
+.pc-nozzle { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; }
+.pc-nozzle .seg button { min-height: 40px; min-width: 64px; }
+.pc-nozzles { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.print-settings { margin: 6px 0 10px; }
+.print-settings > summary { cursor: pointer; padding: 6px 0; min-height: 32px; }
+.print-settings .grid2 { margin-top: 6px; }
+.print-settings select { width: 100%; }
 .pc-sync { font-size: 12px; }
 /* Print card on the site: the link to beambam on this device. */
 .beambam-row { display: grid; gap: 6px; margin-bottom: 8px; }

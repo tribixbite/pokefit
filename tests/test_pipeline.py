@@ -313,3 +313,51 @@ def test_core_filament_reaches_the_export(critter: Path, tmp_path: Path) -> None
     assert len(core) == len(plain) and "" in plain and "" not in core
     # The surface is the same: what was unpainted (filament 1, inherited) is now painted 1 ("4").
     assert [c or "4" for c in plain] == core
+
+
+def test_print_overrides_apply_the_print_cards_settings():
+    from pokefit.pipeline import print_overrides
+
+    st = {"filament_settings_id": ["a", "b", "c"], "enable_support": "1", "support_type": "tree(auto)",
+          "layer_height": "0.16", "wall_loops": "2", "sparse_infill_density": "15%", "brim_type": "auto_brim",
+          "filament_map_mode": "Auto For Flush", "filament_map": ["1", "1", "1"]}
+    assert print_overrides(st, Params()) == st                       # nothing chosen: the project's own
+    out = print_overrides(st, Params(supports="off", layer_height=0.2, wall_loops=3, infill=25, brim="no_brim"))
+    assert (out["enable_support"], out["layer_height"], out["wall_loops"], out["sparse_infill_density"],
+            out["brim_type"]) == ("0", "0.2", "3", "25%", "no_brim")
+    assert st["enable_support"] == "1"                               # a copy
+    plate = print_overrides({**st, "enable_support": "0", "support_type": "normal"}, Params(supports="plate"))
+    assert (plate["enable_support"], plate["support_on_build_plate_only"], plate["support_type"]) == ("1", "1", "tree(auto)")
+    # Nozzles: Bambu's manual grouping, padded with the left nozzle for filaments past the list, cut to the palette.
+    nz = print_overrides(st, Params(nozzles=[2, 1]))
+    assert nz["filament_map_mode"] == "Manual" and nz["filament_map"] == ["2", "1", "1"]
+    assert print_overrides(st, Params(nozzles=[1, 2, 2, 2]))["filament_map"] == ["1", "2", "2"]
+
+
+@pytest.mark.parametrize("bad", [{"supports": "always"}, {"layer_height": 0.5}, {"wall_loops": 0}, {"infill": 101},
+                                 {"brim": "mouse_ear"}, {"nozzles": [1, 3]}, {"nozzles": []}, {"nozzles": "left"}])
+def test_print_settings_out_of_range_are_refused(bad):
+    with pytest.raises(ValueError):
+        Params(**bad)
+
+
+def test_print_defaults_read_the_project():
+    from pokefit.pipeline import print_defaults
+
+    assert print_defaults({"layer_height": "0.16", "wall_loops": "2", "sparse_infill_density": "15%",
+                           "brim_type": "no_brim"}) == {"layer_height": 0.16, "wall_loops": 2, "infill": 15,
+                                                        "brim": "no_brim", "min_line_width": None}
+    assert print_defaults(None) == {"layer_height": None, "wall_loops": None, "infill": None, "brim": None,
+                                    "min_line_width": None}
+    assert print_defaults({"line_width": "0.42", "outer_wall_line_width": "0.2", "support_line_width": "0",
+                           "top_surface_line_width": "100%"})["min_line_width"] == 0.2
+
+
+def test_a_tall_layer_widens_only_the_lines_it_is_too_tall_for():
+    from pokefit.pipeline import print_overrides
+
+    st = {"filament_settings_id": ["a"], "line_width": "0.42", "outer_wall_line_width": "0.2",
+          "support_line_width": "0", "layer_height": "0.16"}
+    assert print_overrides(st, Params(layer_height=0.16))["outer_wall_line_width"] == "0.2"
+    out = print_overrides(st, Params(layer_height=0.24))
+    assert (out["outer_wall_line_width"], out["line_width"], out["support_line_width"]) == ("0.26", "0.42", "0")

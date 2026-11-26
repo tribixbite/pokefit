@@ -569,6 +569,18 @@ _MODEL_RELS = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+def _plate_filament_map(settings: dict | None) -> str:
+    """The plate's nozzle grouping when the settings pin one ("Manual": pipeline `print_overrides`). Bambu Studio
+    keeps a chosen grouping on the plate (model_settings.config `filament_map_mode` / `filament_maps`) and its CLI
+    reads the plate's mode before the project's: with only project_settings saying "Manual", the slice was still
+    "Auto For Flush" (same groups and time for every map, checked 2026-11-25 on the X2D's bundled CLI)."""
+    if not settings or settings.get("filament_map_mode") != "Manual" or not settings.get("filament_map"):
+        return ""
+    maps = " ".join(str(int(x)) for x in settings["filament_map"])
+    return (f'    <metadata key="filament_map_mode" value="Manual"/>\n'
+            f'    <metadata key="filament_maps" value="{maps}"/>\n')
+
+
 def write_project(src: Project, name: str, extruder: int, parts: list[Part], out_path: str | Path,
                   positions: list[tuple[float, float]] | None = None,
                   settings: dict | None = None, made: dict | None = None) -> Path:
@@ -627,7 +639,7 @@ def write_project(src: Project, name: str, extruder: int, parts: list[Part], out
                  f'    <metadata key="extruder" value="{extruder}"/>\n{part_cfg}\n  </object>\n'
                  f'  <plate>\n    <metadata key="plater_id" value="1"/>\n'
                  f'    <metadata key="plater_name" value=""/>\n    <metadata key="locked" value="false"/>\n'
-                 f'{instances}\n  </plate>\n</config>\n')
+                 f'{_plate_filament_map(settings)}{instances}\n  </plate>\n</config>\n')
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:

@@ -16,6 +16,7 @@ import {
 } from "./simplify";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import { openPrintConfirm, type ConfirmSource } from "./printconfirm";
+import { bindPrintSettings, showPrintSettings } from "./printsettings";
 import { startCommand } from "./beambam";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
@@ -47,6 +48,7 @@ let defaults: Params = {
   process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null, core_filament: null,
   filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5, strengthen_at: null, reinforce: false,
+  supports: "auto", layer_height: null, wall_loops: null, infill: null, brim: null, nozzles: null,
 };
 /** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
 const prefStore = browserStore();
@@ -370,7 +372,7 @@ async function load(fn: (params: Params) => Promise<import("./types").LoadRespon
   // A reopened export's own base settings were the last figure's, not the user's: start from the user's again.
   const fresh: Params = { ...state.params, ...madeBefore, figure_scale: null, pockets: null, rotate_x: 0, rotate_y: 0, rotate_z: 0,
     object_id: null, filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0,
-    limbs: null, strengthen: 0, strengthen_at: null,
+    limbs: null, strengthen: 0, strengthen_at: null, nozzles: null,
     // A circle or outline belongs to the last figure; filling everywhere is a preference.
     fill_circle: null, fill_shape: null, fill_area: state.params.fill_area === "all" ? "all" : "steel" };
   try {
@@ -556,6 +558,7 @@ function syncControls(): void {
   for (const [id, key] of POCKET_INPUTS) $<HTMLInputElement>(id).value = String(p[key]);
   syncFillCircle();
   weak.sync();
+  showPrintSettings(p, state.config);
 }
 
 const ORIGIN_TEXT: Record<string, string> = {
@@ -1063,6 +1066,13 @@ function sliceLine(label: string, r: SliceResult | undefined): HTMLElement {
     h("td", { cls: "muted", textContent: extra }));
 }
 
+/** A slice (and any confirm panel under it) made with settings that changed since: replace it with `why`, so
+ * Start print cannot send a print file that no longer matches what the page shows. */
+function sliceStale(why: string): void {
+  const out = $("sliceOut");
+  if (out.childElementCount) out.replaceChildren(h("div", { cls: "muted", textContent: why }));
+}
+
 async function doSlice(): Promise<void> {
   if (!state.session) return;
   const btn = $<HTMLButtonElement>("sliceBtn");
@@ -1121,10 +1131,9 @@ async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTM
       out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
     });
     out.replaceChildren(
-      h("div", { textContent: `Sliced by beambam: ${formatDuration(res.seconds)} and ${res.grams.toFixed(1)} g ` +
-        `(${res.grams_per_filament.map((g) => `${g.toFixed(1)} g`).join(" + ")}), supports only where Bambu finds the figure needs them.` }),
+      h("div", { id: "sliceSummary", textContent: daemonSummary(res) }),
       h("div", { cls: "row" }, h("button", { cls: "btn", textContent: "Send to printer…",
-        onclick: () => showDaemonPlan(res) })),
+        onclick: () => showDaemonPlan(session, res) })),
       h("div", { id: "printPlan" }),
       ...res.warnings.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
@@ -1132,6 +1141,23 @@ async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTM
   } finally {
     btn.disabled = false;
   }
+}
+
+/** "Sliced by beambam: 2h 44m and 31.7 g (19.2 g + …), supports where needed, filament 2 on the right nozzle." */
+function daemonSummary(res: api.DaemonSliceResult): string {
+  const sup = { auto: "supports only where Bambu finds the figure needs them", plate: "supports from the plate only",
+    off: "no supports" }[state.params.supports ?? "auto"];
+  return `Sliced by beambam: ${formatDuration(res.seconds)} and ${res.grams.toFixed(1)} g ` +
+    `(${res.grams_per_filament.map((g) => `${g.toFixed(1)} g`).join(" + ")}), ${sup}` +
+    (state.params.nozzles ? `, ${nozzleText(state.params.nozzles)}.` : ".");
+}
+
+/** "filaments 1, 4 on the left nozzle, 2, 3 on the right" */
+function nozzleText(nozzles: number[]): string {
+  const side = (n: number): string => nozzles.map((x, i) => (x === n ? i + 1 : 0)).filter(Boolean).join(", ");
+  const l = side(1), r = side(2);
+  return [l && `filament${l.includes(",") ? "s" : ""} ${l} on the left nozzle`,
+    r && `${l ? "" : "filament" + (r.includes(",") ? "s " : " ")}${r} on the right`].filter(Boolean).join(", ");
 }
 
 /** The site: connect to (or disconnect from) the beambam daemon on this device. `quiet`: the automatic
@@ -1163,16 +1189,31 @@ async function liveTrays(): Promise<AmsSlot[]> {
   return cfg.ams;
 }
 
-/** The site: confirm and print a file the beambam daemon sliced. */
-function showDaemonPlan(res: api.DaemonSliceResult): void {
+/** The site: confirm and print a file the beambam daemon sliced. Choosing other nozzles slices it again there. */
+function showDaemonPlan(session: string, first: api.DaemonSliceResult): void {
+  let res = first;
+  const head = (): string[] => [`${res.name}: ${formatDuration(res.seconds)}, ${res.grams.toFixed(1)} g. Each filament prints from:`];
   const src: ConfirmSource = {
     pollMs: 4000,                   // the daemon answers from its cache in milliseconds
     plan: (slots) => api.daemonPlan(res.file, slots),
     trays: liveTrays,
     start: (slots, accept, onTick) => api.daemonPrint(res.file, slots, accept, onTick),
+    nozzles: () => state.params.nozzles ?? null,
+    async renozzle(nozzles, onTick) {
+      const before = state.params.nozzles ?? null;
+      state.params.nozzles = nozzles;
+      try {
+        res = await api.sliceOnPrinter(session, state.params, onTick);
+      } catch (e) {
+        state.params.nozzles = before;
+        throw e;
+      }
+      const sum = document.getElementById("sliceSummary");
+      if (sum) sum.textContent = daemonSummary(res);
+      return head();
+    },
   };
-  openPrintConfirm($("printPlan"), src, res.ams_slots,
-    [`${res.name}: ${formatDuration(res.seconds)}, ${res.grams.toFixed(1)} g. Each filament prints from:`]);
+  openPrintConfirm($("printPlan"), src, res.ams_slots, head());
 }
 
 /** Why a sliced file cannot be sent: the AMS was not read, or some colour has no loaded spool near it. */
@@ -1206,8 +1247,28 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
   }
   let last: PrintPlan | null = plan;
   let fresh = true;                       // the panel's first plan is the one just read
+  const session = state.session;
   const src: ConfirmSource = {
     pollMs: 6000,                         // `beambam status` alone takes ~2.6 s without its daemon
+    nozzles: () => state.params.nozzles ?? null,
+    async renozzle(nozzles, onTick) {
+      if (!session) throw new Error("Open the figure again first.");
+      const before = state.params.nozzles ?? null;
+      state.params.nozzles = nozzles;
+      try {
+        const res = await api.slice(session, state.params, false, (sec) => onTick(sec, "slicing"));
+        if (!res.print_file) throw new Error([...res.auto.warnings, res.auto.error ?? "Bambu made no print file"].filter(Boolean).join("; "));
+        file = res.print_file.file;
+        plan = await api.printPlan(file, slots);
+      } catch (e) {
+        state.params.nozzles = before;
+        throw e;
+      }
+      last = plan;
+      fresh = true;
+      return [`${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C). Each filament prints from:`,
+        printCheckView(plan)];
+    },
     async plan(s) {
       if (!(fresh && s && s.join() === slots.join())) last = await api.printPlan(file, s ?? slots);
       fresh = false;
@@ -1662,6 +1723,15 @@ function bind(): void {
   $("autoPockets").addEventListener("click", () => { state.params.pockets = null; void runAnalyse(); });
   $<HTMLSelectElement>("slotSelect").addEventListener("change", (e) => {
     state.params.slot = +(e.target as HTMLSelectElement).value;
+  });
+  bindPrintSettings({
+    params: () => state.params,
+    config: () => state.config,
+    changed: (reanalyse) => {
+      remember();
+      sliceStale("Print settings changed: Slice again to print with them.");
+      if (reanalyse && state.session) void runAnalyse();      // layer height feeds the islands check
+    },
   });
   $<HTMLSelectElement>("processSelect").addEventListener("change", (e) => {
     state.params.process = (e.target as HTMLSelectElement).value || null;

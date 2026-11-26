@@ -57,4 +57,15 @@ describe("remembered settings", () => {
     expect(() => writePrefs(bad, { ...DEFAULTS, magnets: 1 }, DEFAULTS)).not.toThrow();
     expect(() => clearPrefs(bad)).not.toThrow();
   });
+
+  it("remembers print settings, drops values the engine would refuse, never the per-file nozzles", () => {
+    const store = memory();
+    const p = { ...DEFAULTS, supports: "off", layer_height: 0.2, wall_loops: 3, infill: 25, brim: "no_brim",
+      nozzles: [1, 2] } as Params;
+    writePrefs(store, p, DEFAULTS);
+    expect(readPrefs(store)).toEqual({ supports: "off", layer_height: 0.2, wall_loops: 3, infill: 25, brim: "no_brim" });
+    store.setItem("pokefit.prefs.v1", JSON.stringify({ supports: "always", layer_height: 0.5, wall_loops: 2.5,
+      infill: 120, brim: "mouse_ear", clearance: 1.5 }));
+    expect(readPrefs(store)).toEqual({ clearance: 1.5 });
+  });
 });

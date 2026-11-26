@@ -186,3 +186,14 @@ def test_row_ids_match_numpy_unique_rows() -> None:
         pairs = set(zip(ids.tolist(), ref.tolist()))
         assert len(pairs) == len(set(ids.tolist())) == len(set(ref.tolist()))
 
+
+
+def test_a_manual_nozzle_map_is_written_on_the_plate(tmp_path):
+    """Bambu's CLI takes the plate's grouping mode first: "Manual" only in project_settings slices as auto."""
+    from pokefit.model3mf import _plate_filament_map
+
+    assert _plate_filament_map(None) == ""
+    assert _plate_filament_map({"filament_map_mode": "Auto For Flush", "filament_map": ["1", "1"]}) == ""
+    xml = _plate_filament_map({"filament_map_mode": "Manual", "filament_map": ["1", "2", "1", "2"]})
+    assert '<metadata key="filament_map_mode" value="Manual"/>' in xml
+    assert '<metadata key="filament_maps" value="1 2 1 2"/>' in xml

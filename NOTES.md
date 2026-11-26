@@ -34,6 +34,17 @@ exist only on the original Windows machine (ask the user for the files).
      `.panel`), covering other rows and Start print; fixed by listening for scroll in the capture phase.
    - Not verified: Chrome's Local Network Access prompt (the headless run turned the check off; it needs the
      user's tap on the phone, which was locked).
+   - Added 2026-11-25: Print settings (supports where needed / from the plate only / off, layer height, walls,
+     infill, brim; `print_overrides`) and a Left | Right nozzle per filament in the confirm panel that slices again
+     and updates the time (`Params.nozzles` → Bambu "Manual" grouping, written on the plate too: the CLI reads the
+     plate's mode first). Measured on jolteon at 0.20 mm / 3 walls / 20 %: Bambu's split (yellow left, the rest
+     right) 2 h 09 min 27.3 g; brown moved left 2 h 44 min 25.9 g. Earlier, on the 0.16 mm project: auto 2 h 43 min,
+     L R L R 3 h 26 min, all left 4 h 57 min. A layer as tall as the project's 0.2 mm outer wall was refused
+     (code -51 "Too small line width"): those lines now widen to layer + 0.02 mm.
+   - Needs beambam with commit d57bf47 (not released yet): older ones label Bambu's own split all "left" (they read
+     project_settings' `filament_map`, all 1 in Auto For Flush), so the first Left/Right pick starts from that
+     wrong split. A manual map reads correctly on any version. Verified 2026-11-25 from the site: yellow + brown
+     left, white + black right started on the X2D (PREPARE → RUNNING in 8 s) and was stopped before the bed heated.
    - The daemon has no camera route: the Printer card shows status only on the site.
    - The daemon runs from a shell on the phone and dies with Termux under memory pressure: it needs a service
      entry (operad / boot script) before the site can rely on it.

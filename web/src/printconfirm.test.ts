@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { slotsFromPlan, trayChoices, traySignature } from "./printconfirm";
+import { nozzleNumber, nozzlesWith, slotsFromPlan, trayChoices, traySignature } from "./printconfirm";
 import type { AmsSlot, PrintMapping } from "./types";
 
 const tray = (slot: number, label: string, type: string, colour: string, name = ""): AmsSlot =>
@@ -32,5 +32,19 @@ describe("print confirm", () => {
     const gone = trayChoices(loaded, fil(1, 7), 7);
     expect(gone[1]).toEqual({ value: 7, label: "B4", colour: null, detail: "not loaded now" });
     expect(trayChoices(loaded, fil(1, null), undefined)[1].value).toBe(-1);
+  });
+
+  test("moving one filament to the other nozzle keeps the others where the plan has them", () => {
+    const m = mapping(4, 0, 9);
+    m.filaments[1].nozzle = "right";
+    m.filaments[2].nozzle = "both";              // the switch's dynamic mode: prints on the left once pinned
+    expect(nozzleNumber("left")).toBe(1);
+    expect(nozzleNumber("right")).toBe(2);
+    expect(nozzleNumber("-")).toBeNull();
+    expect(nozzlesWith(m, 1, 2)).toEqual([2, 2, 1]);
+    expect(nozzlesWith(m, 2, 1)).toEqual([1, 1, 1]);
+    // A plan that lists only filaments 2 and 4 (1 and 3 unused): every filament up to the highest gets a nozzle.
+    const sparse: PrintMapping = { filaments: [{ ...fil(2, 0), nozzle: "right" }, fil(4, 4)], errors: [], warnings: [], notes: [] };
+    expect(nozzlesWith(sparse, 4, 2)).toEqual([1, 2, 1, 2]);
   });
 });

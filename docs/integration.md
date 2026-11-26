@@ -85,11 +85,20 @@ the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beamba
 2. Connect: `GET /state` → the engine (`webapi.set_printer`) reads the spools, as "Use my printer's AMS" does
    locally, so the colours match the loaded spools. Without system profiles in the browser each spool prints with
    the reference project's slot of its filament id, else of its material (`presets._project_slot`).
-3. Slice: the engine writes the print project (`pipeline.print_project`: the local Slice's auto-supports variant)
-   and the page sends it to `POST /slice`; the daemon's headless Bambu Studio slices it on the device.
+3. Slice: the engine writes the print project (`pipeline.print_project`: the local Slice's auto-supports variant,
+   with the Print card's "Print settings" — supports where needed / from the plate only / off, layer height, walls,
+   infill, brim: `Params.supports` … `brim`, written by `print_overrides`, also into exports; "Print weak parts
+   solid" adds its modifier volumes as the export does) and the page sends it to `POST /slice`; the daemon's
+   headless Bambu Studio slices it on the device.
 4. Send to printer: the confirm panel (`web/src/printconfirm.ts`, shared with the local version) shows each
    filament → spool with beambam's `/print/plan` verdict, reads the spools every 4 s (6 s locally) and checks again
    when they change; "Start print" → `POST /print` → poll `/print/jobs/<id>`.
+5. Nozzles (two-nozzle printers): each filament shows the nozzle Bambu sliced it for, as Left | Right. Picking the
+   other one is a new print (tool order, purge, time), so the page slices again with `Params.nozzles` — Bambu's
+   "Manual" grouping (`filament_map_mode` = Manual, `filament_map` 1 = left / 2 = right; the CLI reads both from
+   the project) — and the panel's time, weight and spool check follow the new file. "Let Bambu choose" goes back
+   to "Auto For Flush". With a Filament Track Switch every AMS spool reaches either nozzle (beambam
+   `read_topology`); without one beambam's check refuses a spool its filament's nozzle cannot reach.
 
 The site probes nothing until the user connects: probing 127.0.0.1 for every visitor would show them Chrome's
 prompt. The daemon has no camera route, so the Printer card shows status only there.
