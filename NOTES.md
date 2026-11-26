@@ -63,6 +63,11 @@ exist only on the original Windows machine (ask the user for the files).
    - 2026-11-26: beambam now slices a project for the printer's track switch when the X2D reports one (pokefit's
      projects say 0, which drew "sliced without the Filament Track Switch" on every plan). jolteon_pokefit_60:
      1 h 42 min with 0, 1 h 46 min with 1 (`has_filament_switcher = 1` in the G-code).
+   - 2026-11-26: the reconnect on page load sat on "Connecting to beambam…" for 10-20 s. beambam answers in
+     milliseconds; the colour matching (`setPrinter`) waits for the engine to start (headless Chromium: /state at
+     0.4 s, engine ready at 9.9 s; slower in Edge on the phone). The card now says "beambam answered; the engine is
+     still starting: <stage>", and /state and /healthz are asked together. The wait itself remains: showing the
+     spools before the engine starts would need the matching outside Python.
 3. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
    changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
    auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its

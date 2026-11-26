@@ -120,14 +120,29 @@ export function viaDaemon(): boolean {
 const linked = (cfg: Config): Config => ({ ...cfg, printer_link: true, beambam: link.url });
 
 /** Connect to the beambam daemon at `url` (with its access token, for one on another machine): read the
- * printer's spools and match colours to them. */
-export async function connectBeambam(url: string, token = ""): Promise<Config> {
+ * printer's spools and match colours to them. Matching runs in the engine, so a connect made while the engine is
+ * still starting (the reconnect on page load) waits for it; `onWait` then gets the engine's start-up status, so
+ * the page can say what the wait is (beambam itself answers in milliseconds). */
+export async function connectBeambam(url: string, token = "", onWait?: (engine: string) => void): Promise<Config> {
   if (mode !== "browser") throw new Error("The local version reaches beambam itself.");
   const t = token.trim();
   const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true, ...(t ? { token: t } : {}) };
-  const st = await bb.readState(next);
-  const cfg = json<Config>(await call("setPrinter", [JSON.stringify(st)]));
-  daemonCaps = await bb.capabilities(next);
+  // Both from beambam in one round trip (`capabilities` never throws; a 401 or no report fails `readState`).
+  const [st, caps] = await Promise.all([bb.readState(next), bb.capabilities(next)]);
+  const waiting = (s: string): void => {
+    if (s !== "ready" && !s.startsWith("failed")) onWait?.(s);
+  };
+  if (onWait && lastStatus !== "ready") {
+    statusListeners.add(waiting);
+    waiting(lastStatus);
+  }
+  let cfg: Config;
+  try {
+    cfg = json<Config>(await call("setPrinter", [JSON.stringify(st)]));
+  } finally {
+    statusListeners.delete(waiting);
+  }
+  daemonCaps = caps;
   link = next;
   bb.writeLink(browserStore(), link);
   return linked(cfg);

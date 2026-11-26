@@ -177,6 +177,15 @@ export async function camera(link: Link, signal: AbortSignal): Promise<Response>
   throw new DaemonError(said || `beambam answered HTTP ${res.status}`);
 }
 
+/**
+ * The Print card's text while beambam has answered but the in-browser engine is still starting (`engine`: its
+ * start-up status, "" before the first one). On a first visit, and on a phone, that start takes 10-20 s, and
+ * "Connecting to beambam…" would blame beambam, which answers in milliseconds.
+ */
+export function engineWaitText(engine: string): string {
+  return engine ? `beambam answered; the engine is still starting: ${engine}` : "beambam answered; the engine is still starting…";
+}
+
 /** The printer's state report (the daemon's cached copy: milliseconds). */
 export async function readState(link: Link): Promise<Json> {
   const st = await request(link, "/state");

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { DaemonError, headerName, normaliseUrl, plan, print, readLink, slice, startCommand, writeLink } from "./beambam";
+import { DaemonError, engineWaitText, headerName, normaliseUrl, plan, print, readLink, slice, startCommand, writeLink } from "./beambam";
 import type { PrefStore } from "./prefs";
 
 const store = (): PrefStore & { data: Map<string, string> } => {
@@ -42,6 +42,12 @@ describe("link settings", () => {
     expect(normaliseUrl(" https://printer.lan:9000 ")).toBe("https://printer.lan:9000");
     expect(startCommand("https://pokefit.party")).toBe("beambam daemon --http 127.0.0.1:8765 --cors-origin https://pokefit.party");
     expect(headerName("Jolteon (v2) é.3mf")).toBe("Jolteon_v2_.3mf");
+  });
+
+  test("a connect waiting on the engine says so, not that beambam is slow", () => {
+    expect(engineWaitText("Loading numpy, scipy, shapely…"))
+      .toBe("beambam answered; the engine is still starting: Loading numpy, scipy, shapely…");
+    expect(engineWaitText("")).toBe("beambam answered; the engine is still starting…");
   });
 });
 

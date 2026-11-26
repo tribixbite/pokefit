@@ -19,7 +19,7 @@ import { SliceGate } from "./slicegate";
 import { openPrintConfirm, planNamesSlicedNozzles, remapFilamentMap, type ConfirmSource } from "./printconfirm";
 import { bindPrintSettings, showPrintSettings } from "./printsettings";
 import { renderProjectSync } from "./projectsync";
-import { isLoopback, normaliseUrl, startCommand } from "./beambam";
+import { engineWaitText, isLoopback, normaliseUrl, startCommand } from "./beambam";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
 } from "./types";
@@ -1256,7 +1256,7 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
   if (!quiet) busy(true, on ? "Connecting to beambam…" : "Disconnecting…");
   try {
     state.config = on ? await api.connectBeambam($<HTMLInputElement>("beambamUrl").value,
-      $<HTMLInputElement>("beambamToken").value)
+      $<HTMLInputElement>("beambamToken").value, (engine) => { info.textContent = engineWaitText(engine); })
       : await api.disconnectBeambam();
     renderPrinter(state.config);
     if (!on) printerCard.stop();          // the camera stream and status poll were that daemon's
