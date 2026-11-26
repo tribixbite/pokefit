@@ -4,6 +4,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import type { ConfirmSource } from "./printconfirm";
 import type { AmsSlot, PrintMapping } from "./types";
 
 beforeAll(() => GlobalRegistrator.register());
@@ -120,5 +121,84 @@ describe("confirm panel in a DOM", () => {
     expect(startButton(p.box).disabled).toBe(true);
     expect(panelText(p.box)).toContain("tray B1 is empty");
     p.stop();
+  });
+});
+
+/* From the 2026-11-26 audit: a pick's pending check, and a check that fails once. */
+const auditTrays: AmsSlot[] = [
+  { slot: 4, label: "B1", type: "PETG", colour: "#F4EE2A", name: "" },
+  { slot: 7, label: "B4", type: "PETG", colour: "#FFFFFF", name: "" },
+  { slot: 9, label: "C2", type: "PETG", colour: "#F0E020", name: "" },
+];
+const bySlot = (s: number): AmsSlot => auditTrays.find((t) => t.slot === s)!;
+function planFor(slots: number[], nozzles = ["left", "right"]): PrintMapping {
+  return { filaments: slots.map((s, i) => ({ filament: i + 1, type: "PETG", colour: bySlot(s).colour, nozzle: nozzles[i],
+    errors: [], warnings: [], tray: { tray_id: s, label: bySlot(s).label, type: "PETG", colour: bySlot(s).colour } })),
+    errors: [], warnings: [], notes: [] } as unknown as PrintMapping;
+}
+function later<T>() {
+  let resolve!: (v: T) => void; let reject!: (e: Error) => void;
+  const promise = new Promise<T>((a, b) => { resolve = a; reject = b; });
+  return { promise, resolve, reject };
+}
+const wait = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const button = (box: ParentNode, text: string) => [...box.querySelectorAll("button")].find((b) => b.textContent === text) as HTMLButtonElement;
+
+
+describe("spool checks in a DOM", () => {
+  test("A: Start print pressed while the check of a newly picked spool is still running sends the picked spool (or waits)", async () => {
+    const { openPrintConfirm } = await import("./printconfirm");
+    const box = document.createElement("div");
+    document.body.append(box);
+    const started: number[][] = [];
+    let slow: ReturnType<typeof later<PrintMapping>> | null = null;
+    const src: ConfirmSource = {
+      pollMs: 60_000,
+      plan: async (slots) => (slow ? slow.promise : planFor(slots ?? [4, 7])),
+      trays: async () => auditTrays,
+      start: async (slots) => { started.push(slots); return "accepted"; },
+    };
+    openPrintConfirm(box, src, [4, 7], ["file A"]);
+    await wait(5);
+    // The user opens filament 1's spool list and picks C2 (slot 9); the plan for it is still being fetched
+    // (`beambam ams map` takes seconds in the local version).
+    slow = later<PrintMapping>();
+    (box.querySelector(".slot-picker") as HTMLButtonElement).click();
+    const opt = [...document.querySelectorAll(".slot-opt")].find((o) => o.textContent?.includes("C2")) as HTMLElement;
+    opt.click();
+    await wait();
+    const start = button(box, "Start print");
+    const wasEnabled = !start.disabled;
+    start.click();
+    await wait(5);
+    slow.resolve(planFor([9, 7]));
+    await wait(5);
+    expect(wasEnabled).toBe(false);                    // Start waits for the check
+    // Expected: nothing sent with the old spool.
+    expect(started.some((s) => s[0] === 4)).toBe(false);
+  });
+
+  test("C: a spool check that fails once (network) leaves a way to check again", async () => {
+    const { openPrintConfirm } = await import("./printconfirm");
+    const box = document.createElement("div");
+    document.body.append(box);
+    let fail = false; let calls = 0;
+    const src: ConfirmSource = {
+      pollMs: 20,
+      plan: async (slots) => { calls++; if (fail) { fail = false; throw new Error("beambam is not reachable"); } return planFor(slots ?? [4, 7]); },
+      trays: async () => auditTrays,
+      start: async () => "accepted",
+    };
+    const stop = openPrintConfirm(box, src, [4, 7], ["file A"]);
+    await wait(5);
+    fail = true;
+    (box.querySelector(".slot-picker") as HTMLButtonElement).click();
+    ([...document.querySelectorAll(".slot-opt")].find((o) => o.textContent?.includes("C2")) as HTMLElement).click();
+    await wait(120);                                   // several polls later
+    const text = box.textContent ?? "";
+    expect(button(box, "Check again")).toBeTruthy();
+    console.log("C: plan calls:", calls, "| rows:", box.querySelectorAll(".pc-item").length, "| Start disabled:", button(box, "Start print").disabled, "| text has error:", text.includes("not reachable"));
+    stop();
+    expect(box.querySelectorAll(".pc-item").length).toBe(2);
   });
 });

@@ -171,13 +171,15 @@ export async function sliceOnPrinter(session: string, params: Params,
 
 /** beambam's filament -> tray plan of a daemon-side print file (`slots` null: beambam chooses). */
 export function daemonPlan(file: string, slots: number[] | null): Promise<PrintMapping> {
+  if (!viaDaemon()) return Promise.reject(new Error("Not connected to beambam: connect under Print first."));
   return bb.plan(link, file, slots);
 }
 
 /** START THE PRINT through the daemon (the user's explicit "Start print"). */
 export function daemonPrint(file: string, slots: number[], acceptWarnings: boolean,
-  onTick?: (seconds: number, what: string) => void): Promise<string> {
-  return bb.print(link, file, slots, acceptWarnings, onTick);
+  onTick?: (seconds: number, what: string) => void, digest?: string): Promise<string> {
+  if (!viaDaemon()) return Promise.reject(new Error("Not connected to beambam: connect under Print first."));
+  return bb.print(link, file, slots, acceptWarnings, onTick, digest);
 }
 
 /** Engine configuration: steels, filament slots, slicer availability. Decides local vs browser. */
@@ -343,18 +345,27 @@ export async function readPrinter(clear = false): Promise<Config> {
   return postJson<Config>("/api/printer", { clear });
 }
 
-/** Take the printer's loaded spools as the project's filament list (and `bedType` as its plate; "" keeps it). */
-export async function adoptPrinter(bedType = ""): Promise<Config> {
-  if (mode === "local") return postJson<Config>("/api/printer/adopt", { bed_type: bedType });
+/**
+ * Take the printer's loaded spools as the project's filament list (and `bedType` as its plate; "" keeps it).
+ * `warnings`: what did not take (beambam's word for a spool without a bundled profile, or beambam failing — the
+ * engine's own adoption then stands, with its fallback presets).
+ */
+export async function adoptPrinter(bedType = ""): Promise<{ config: Config; warnings: string[] }> {
+  if (mode === "local") return { config: await postJson<Config>("/api/printer/adopt", { bed_type: bedType }), warnings: [] };
   const cfg = linked(json<Config>(await call("adoptPrinter", [bedType])));
-  if (!viaDaemon() || !daemonCan("project-sync")) return cfg;
+  if (!viaDaemon() || !daemonCan("project-sync")) return { config: cfg, warnings: [] };
   // The engine has no Bambu system profiles in the browser, so a spool of a material the project lacks got a slot of
   // another material (a PETG spool, Generic PLA). beambam has the printer's profiles: it gives each slot its spool's
   // preset, material and colour (POST /project/update, beambam/project_sync.py), and that becomes the project.
   const [name, bytes] = await call<[string, Uint8Array]>("updatedProject", []);
-  if (!/\.3mf$/i.test(name)) return cfg;                 // a presets-only project: nothing for beambam to rewrite
-  const blob = await bb.updateProject(link, name, bytes, bb.traySpools(cfg.ams ?? []), bedType);
-  return setReference(new File([blob], name.replace(/_printer(\.3mf)$/i, "$1")));
+  if (!/\.3mf$/i.test(name)) return { config: cfg, warnings: [] };   // presets only: nothing for beambam to rewrite
+  try {
+    const { blob, warnings } = await bb.updateProject(link, name, bytes, bb.traySpools(cfg.ams ?? []), bedType);
+    return { config: await setReference(new File([blob], name.replace(/_printer(\.3mf)$/i, "$1"))), warnings };
+  } catch (e) {
+    return { config: cfg, warnings: [`beambam could not set the spools' presets (${(e as Error).message}): ` +
+      "slots of a material the project lacks keep another slot's preset"] };
+  }
 }
 
 /** The project with the filament list and plate now in use, to keep (a copy of the user's .3mf, else .json). */

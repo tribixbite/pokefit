@@ -332,6 +332,9 @@ def test_print_overrides_apply_the_print_cards_settings():
     nz = print_overrides(st, Params(nozzles=[2, 1]))
     assert nz["filament_map_mode"] == "Manual" and nz["filament_map"] == ["2", "1", "1"]
     assert print_overrides(st, Params(nozzles=[1, 2, 2, 2]))["filament_map"] == ["1", "2", "2"]
+    # A reference saved with a manual map does not pin a slice nobody chose nozzles for (Bambu's own split).
+    manual = print_overrides({**st, "filament_map_mode": "Manual", "filament_map": ["2", "2", "1"]}, Params())
+    assert manual["filament_map_mode"] == "Auto For Flush" and manual["filament_map"] == ["1", "1", "1"]
 
 
 @pytest.mark.parametrize("bad", [{"supports": "always"}, {"layer_height": 0.5}, {"wall_loops": 0}, {"infill": 101},

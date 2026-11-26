@@ -102,13 +102,15 @@ const postJson = (link: Link, path: string, body: unknown, timeoutMs?: number): 
   request(link, path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     timeoutMs);
 
-/** What the daemon says it can do (`/healthz` capabilities); empty for a beambam that predates them. */
+/** What the daemon says it can do (`/healthz` capabilities); empty for a beambam that predates them. A 503 (the
+ * printer is quiet) still carries them. */
 export async function capabilities(link: Link): Promise<string[]> {
   try {
-    const h = await request(link, "/healthz");
+    const res = await fetch(`${link.url}/healthz`, { cache: "no-store" });
+    const h = (await res.json()) as Json;
     return Array.isArray(h.capabilities) ? h.capabilities.map(String) : [];
   } catch {
-    return [];        // unhealthy (503) or an older daemon: assume nothing beyond the basics
+    return [];        // unreachable or an older daemon: assume nothing beyond the basics
   }
 }
 
@@ -156,18 +158,22 @@ export interface SpoolOption {
  * `bedType`, its plate: beambam's POST /project/update ("project-sync"), which has the printer's bundled profiles.
  */
 export async function updateProject(link: Link, name: string, bytes: Uint8Array, spools: SpoolOption[],
-  bedType = ""): Promise<Blob> {
+  bedType = ""): Promise<{ blob: Blob; warnings: string[] }> {
   const options: Record<string, unknown> = { spools };
   if (bedType) options.bed_type = bedType;
   let res: Response;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 180_000);
   try {
     res = await fetch(`${link.url}/project/update`, {
-      method: "POST", cache: "no-store", body: bytes as BodyInit,
+      method: "POST", cache: "no-store", body: bytes as BodyInit, signal: ctl.signal,
       headers: { "Content-Type": "application/octet-stream", "X-Filename": headerName(name),
         "X-Slice-Options": JSON.stringify(options) },
     });
   } catch {
     throw new DaemonError(`beambam is not reachable at ${link.url}`, true);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     let said = "";
@@ -177,7 +183,13 @@ export async function updateProject(link: Link, name: string, bytes: Uint8Array,
     } catch { /* not JSON */ }
     throw new DaemonError(`beambam could not update the project: ${said || `HTTP ${res.status}`}`);
   }
-  return res.blob();
+  // What the spools could not change (a material without a bundled profile, another nozzle size).
+  let warnings: string[] = [];
+  try {
+    const w: unknown = JSON.parse(res.headers.get("X-Beambam-Warnings") ?? "[]");
+    if (Array.isArray(w)) warnings = w.map(String);
+  } catch { /* none */ }
+  return { blob: await res.blob(), warnings };
 }
 
 /** The AMS trays in order (A1 … D4, then AMS HT) as `spools`: what "Use the printer's filaments" takes. */
@@ -196,6 +208,9 @@ export interface DaemonSlice {
   warnings: string[];
 }
 
+/** Failed polls in a row before a print job is given up on. */
+const POLL_RETRIES = 4;
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** An ASCII file name for the X-Filename header (header values cannot carry other characters). */
@@ -213,9 +228,17 @@ export async function slice(link: Link, name: string, bytes: Uint8Array,
   }, 120_000);
   const poll = String(started.poll ?? "");
   if (!poll) throw new DaemonError("beambam did not start the slice");
+  let failures = 0;
   for (;;) {
     await sleep(SLICE_POLL_MS);
-    const job = await request(link, poll);
+    let job: Json;
+    try {
+      job = await request(link, poll);
+      failures = 0;
+    } catch (e) {
+      if (++failures < POLL_RETRIES) continue;      // a blip: the slice goes on on beambam
+      throw e;
+    }
     onTick?.((performance.now() - t0) / 1000, String(job.message ?? job.state ?? ""));
     if (job.done) {
       if (job.state === "done") return job as unknown as DaemonSlice;
@@ -233,15 +256,31 @@ export async function plan(link: Link, file: string, slots: number[] | null): Pr
 
 /** Start the print (the user pressed Start print, having seen the plan); resolves once the printer accepted it. */
 export async function print(link: Link, file: string, slots: number[], acceptWarnings: boolean,
-  onTick?: (seconds: number, what: string) => void): Promise<string> {
+  onTick?: (seconds: number, what: string) => void, digest?: string): Promise<string> {
   const t0 = performance.now();
-  const reply = await postJson(link, "/print", { file, slot: slots, confirm: true, accept_warnings: acceptWarnings });
+  // `plan_digest` (beambam ≥ 1.9): start only the plan on screen; a changed one answers 409 with the new plan.
+  const req: Json = { file, slot: slots, confirm: true, accept_warnings: acceptWarnings };
+  if (digest) req.plan_digest = digest;
+  const reply = await postJson(link, "/print", req);
+  if (reply.plan_changed === true) {
+    throw new DaemonError("The spools, the plate or the file changed since this check: look at it again, then Start.");
+  }
   if (reply.ok === false) throw new DaemonError(String(reply.error ?? "beambam refused the print"));
   const poll = String(reply.poll ?? "");
   if (!poll) throw new DaemonError("beambam did not start a print job");
+  let failures = 0;
   for (;;) {
     await sleep(PRINT_POLL_MS);
-    const job = await request(link, poll);
+    let job: Json;
+    try {
+      job = await request(link, poll);
+      failures = 0;
+    } catch {
+      // beambam took the print: a lost poll must not read as "start it again".
+      if (++failures < POLL_RETRIES) continue;
+      throw new DaemonError("Lost contact with beambam after it took the print: it may have started. " +
+        "Check the printer before trying again.");
+    }
     onTick?.((performance.now() - t0) / 1000, String(job.message ?? job.state ?? ""));
     if (job.done) {
       if (job.state === "accepted" || job.state === "sent") return String(job.message ?? job.state);

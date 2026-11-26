@@ -58,3 +58,11 @@ describe("print-wide warnings", () => {
     expect(printWarnings(m as never)).toEqual([m.warnings[0]]);
   });
 });
+
+describe("slots by filament number", () => {
+  test("unused filaments keep the sliced-for tray (the local server wants one per project filament)", () => {
+    const m = { filaments: [{ filament: 2, tray: { tray_id: 9 } }], errors: [], warnings: [], notes: [] };
+    expect(slotsFromPlan(m as never, [4, 7, 0])).toEqual([4, 9, 0]);
+    expect(slotsFromPlan(m as never)).toEqual([-1, 9]);           // beambam reads a list with -1 by number
+  });
+});

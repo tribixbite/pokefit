@@ -2545,5 +2545,12 @@ def print_overrides(st: dict, params: Params) -> dict:
         # entries past the palette (a colour removed since) are dropped.
         out["filament_map_mode"] = "Manual"
         out["filament_map"] = ([str(x) for x in params.nozzles] + ["1"] * n)[:n]
+    elif str(out.get("filament_map_mode", "")).startswith("Manual"):
+        # No nozzle choice: Bambu's own split. A reference project saved with a manual map would otherwise pin
+        # every slice to it, re-indexed by material slot (not the user's map) while the panel says "Bambu's
+        # choice"; the plate map written from these settings (model3mf._plate_filament_map) follows.
+        n = len(out.get("filament_settings_id") or []) or 1
+        out["filament_map_mode"] = "Auto For Flush"
+        out["filament_map"] = ["1"] * n
     return out
 

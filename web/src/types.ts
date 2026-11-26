@@ -507,6 +507,8 @@ export interface ProjectSync {
 export type BrimType = "auto_brim" | "outer_only" | "no_brim";
 
 export interface PrintMapping {
+  /** beambam's hash of this plan: POST /print with it starts only this plan (beambam ≥ 1.9). */
+  digest?: string;
   filaments: { filament: number; type: string; colour: string; nozzle: string;
     tray: { tray_id: number; label: string; type: string; colour: string } | null;
     errors: string[]; warnings: string[] }[];

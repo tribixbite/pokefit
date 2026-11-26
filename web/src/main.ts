@@ -335,7 +335,8 @@ function renderPrinter(cfg: Config): void {
   $("amsRow").hidden = !cfg.printer_link;
   $("printerCard").hidden = !cfg.printer_link;
   $("amsClear").hidden = !cfg.ams.length;
-  renderProjectSync($("projectSync"), cfg, { adopt: adoptPrinter, download: downloadProject });
+  renderProjectSync($("projectSync"), cfg, { adopt: adoptPrinter, download: downloadProject,
+    plate: () => state.params.bed_type ?? null });
   // Without a track switch each AMS unit is wired to one nozzle: show which (R / L) beside each spool.
   const side = (a: AmsSlot): string => (cfg.track_switch || a.extruder == null ? "" : a.extruder === 1 ? " (L)" : " (R)");
   $("amsInfo").textContent = cfg.ams.length
@@ -712,6 +713,7 @@ async function runAnalyse(rememberIt = true): Promise<void> {
     // Quick first (fit, pockets, preview): the printability checks follow in a second call.
     const rep = await api.analyse(state.session, state.params, true);
     if (seq !== state.seq) return;          // a newer request superseded this one
+    staleIfChanged();
     show(rep);
     await completeChecks(rep, seq);
   } catch (e) {
@@ -1078,6 +1080,24 @@ function sliceStale(why: string): void {
 }
 /** Bumped by every change that makes a slice in flight out of date (`sliceStale`). */
 let sliceGen = 0;
+/** What the slice on screen was made from (`sliceKey`); null: no slice shown. */
+let slicedKey: string | null = null;
+
+/** Everything a slice depends on: the figure's params (not the nozzle choice, which a re-slice in the confirm
+ * panel changes itself), the project, the printer link and its spools. */
+function sliceKey(): string {
+  const c = state.config;
+  return JSON.stringify([{ ...state.params, nozzles: null }, state.session, c?.reference, c?.beambam ?? null,
+    (c?.ams ?? []).map((a) => [a.slot, a.type, a.colour, a.filament_id ?? ""])]);
+}
+
+/** After any change: a slice made from something else is out of date. */
+function staleIfChanged(): void {
+  if (slicedKey !== null && sliceKey() !== slicedKey) {
+    slicedKey = null;
+    sliceStale("The figure, its project or the spools changed since this slice: Slice again to print it.");
+  }
+}
 
 async function doSlice(): Promise<void> {
   if (!state.session) return;
@@ -1088,9 +1108,11 @@ async function doSlice(): Promise<void> {
   // A Slice from here is Bambu's own nozzle split: nozzles are chosen per print file, in its confirm panel (a
   // map kept across slices would pin by filament number, which a palette change renumbers).
   state.params.nozzles = null;
+  confirmPanel?.stop();
   const gen = ++sliceGen;
+  const key = sliceKey();
   if (api.viaDaemon()) {
-    await sliceWithDaemon(state.session, btn, out, gen);
+    await sliceWithDaemon(state.session, btn, out, gen, key);
     return;
   }
   try {
@@ -1099,6 +1121,7 @@ async function doSlice(): Promise<void> {
       if (gen === sliceGen) out.firstElementChild!.textContent = `Slicing with Bambu Studio… ${Math.round(s)} s`;
     });
     if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
+    slicedKey = key;
     const needs = res.supports_needed;
     const mode = state.params.supports ?? "auto";
     // Supports chosen by the user: one slice, so "needed" was not tested.
@@ -1141,12 +1164,14 @@ async function doSlice(): Promise<void> {
 }
 
 /** The site: the engine builds the print project, the beambam daemon on this device slices it. */
-async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement, gen: number): Promise<void> {
+async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement, gen: number,
+  key: string): Promise<void> {
   try {
     const res = await api.sliceOnPrinter(session, state.params, (s, what) => {
       if (gen === sliceGen) out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
     });
     if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
+    slicedKey = key;
     // One holder for the current print file: a re-slice in the panel replaces it, and "Send to printer…"
     // opened again must show and print that one, not the first.
     const current = { res };
@@ -1190,6 +1215,8 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
     state.config = on ? await api.connectBeambam($<HTMLInputElement>("beambamUrl").value)
       : await api.disconnectBeambam();
     renderPrinter(state.config);
+    if (!on) printerCard.stop();          // the camera stream and status poll were that daemon's
+    staleIfChanged();                     // a print file on the daemon just left is no longer reachable
     info.textContent = on ? `Connected: ${state.config.ams.length} spools loaded. Slice, then Send to printer.` : "";
     state.params.filament_map = null;
     if (state.session) await runAnalyse();
@@ -1206,15 +1233,24 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
 async function adoptPrinter(): Promise<void> {
   busy(true, "Taking the printer's filaments…");
   try {
-    // The plate chosen in Print settings, else the plate on the printer when its marker is a known one.
-    state.config = await api.adoptPrinter(state.params.bed_type ?? state.config?.printer_plate_name ?? "");
+    // The plate on the printer when its marker is a known one (what the button names), else the one chosen in
+    // Print settings. Once the project has it, the Print settings choice is no longer needed.
+    const plate = state.config?.printer_plate_name ?? state.params.bed_type ?? "";
+    const { config, warnings } = await api.adoptPrinter(plate);
+    state.config = config;
+    if (plate) state.params.bed_type = null;
     renderSlots(state.config);
     renderPrinter(state.config);
     syncControls();
     state.params.filament_map = null;
+    state.params.slot = config.default_slot ?? state.params.slot;   // its old index named another material
     sliceStale("The project's filaments changed: Slice again to print with them.");
     if (state.session) await runAnalyse();
-    toast("The project now lists the printer's filaments. Download the updated project to keep it.");
+    const left = config.project_sync?.differs ? config.project_sync.printer - config.project_sync.same : 0;
+    toast(warnings.length || left
+      ? [left ? `${left} slot${left > 1 ? "s" : ""} could not take the spool's material (see Slot by slot).` : "",
+        ...warnings].filter(Boolean).join(" ")
+      : "The project now lists the printer's filaments. Download the updated project to keep it.");
   } catch (e) {
     toast((e as Error).message);
   } finally {
@@ -1246,6 +1282,37 @@ async function liveTrays(): Promise<AmsSlot[]> {
   return cfg.ams;
 }
 
+/**
+ * The confirm panel on screen, if any: only one at a time, and none opened while it re-slices or sends a print
+ * (the panels of one slice share its print-file holder, so a second one could show file A and print file B).
+ */
+let confirmPanel: { stop: () => void; busy: number } | null = null;
+/** The Printer card (camera + status): stopped when the printer link goes. */
+let printerCard: PrinterCard;
+
+/** Open the confirm panel for `src`, closing the previous one; refuses (false) while that one is busy. */
+function openConfirm(src: ConfirmSource, initial: number[] | null, header: (string | HTMLElement)[],
+  notes: string[] = []): boolean {
+  if (confirmPanel && confirmPanel.busy > 0) {
+    toast("Wait for the panel below: it is slicing again or sending the print.");
+    return false;
+  }
+  confirmPanel?.stop();
+  const me = { stop: () => {}, busy: 0 };
+  const track = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => {
+    me.busy++;
+    try {
+      return await fn(...a);
+    } finally {
+      me.busy--;
+    }
+  };
+  const tracked: ConfirmSource = { ...src, start: track(src.start), renozzle: src.renozzle && track(src.renozzle) };
+  me.stop = openPrintConfirm($("printPlan"), tracked, initial, header, notes);
+  confirmPanel = me;
+  return true;
+}
+
 /** The site: confirm and print a file the beambam daemon sliced. Choosing other nozzles slices it again there. */
 function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }): void {
   const head = (): string[] => [`${current.res.name}: ${formatDuration(current.res.seconds)}, ` +
@@ -1254,7 +1321,7 @@ function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }
     pollMs: 4000,                   // the daemon answers from its cache in milliseconds
     plan: (slots) => api.daemonPlan(current.res.file, slots),
     trays: liveTrays,
-    start: (slots, accept, onTick) => api.daemonPrint(current.res.file, slots, accept, onTick),
+    start: (slots, accept, onTick, digest) => api.daemonPrint(current.res.file, slots, accept, onTick, digest),
     nozzles: () => state.params.nozzles ?? null,
     // Only from a daemon whose plan names the nozzles Bambu really sliced on: an older one reports the map asked
     // for (all left under Bambu's own split), and a pick built on that would move the other filaments too.
@@ -1273,7 +1340,7 @@ function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }
       return head();
     } : undefined,
   };
-  openPrintConfirm($("printPlan"), src, current.res.ams_slots, head(),
+  openConfirm(src, current.res.ams_slots, head(),
     api.daemonCan("plan-sliced-nozzles") ? [] : ["Update beambam to choose each filament's nozzle here."]);
 }
 
@@ -1297,6 +1364,10 @@ function swatch(colour: string): HTMLSpanElement {
 /** Local version: what the print file will print, each filament from its AMS spool, with "Start print" (the
  * only control in pokefit that starts the printer; beambam re-checks every spool before it starts). */
 async function showPrintPlan(current: { file: string; slots: number[] }): Promise<void> {
+  if (confirmPanel && confirmPanel.busy > 0) {
+    toast("Wait for the panel below: it is slicing again or sending the print.");
+    return;
+  }
   const slots = current.slots;
   const box = $("printPlan");
   box.replaceChildren(h("div", { cls: "muted", textContent: "Reading the print file…" }));
@@ -1340,12 +1411,12 @@ async function showPrintPlan(current: { file: string; slots: number[] }): Promis
     },
     trays: liveTrays,
     start: (s, accept, onTick) => api.startPrint(current.file, s, onTick, accept),
-    note: (i) => {
-      const p = last?.filaments[i]?.preset;
+    note: (filament) => {
+      const p = last?.filaments.find((x) => x.filament === filament)?.preset;
       return p ? `sliced as ${p.replace(/ @BBL.*$/, "")}` : "";
     },
   };
-  openPrintConfirm(box, src, slots, [
+  openConfirm(src, slots, [
     `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C). Each filament prints from:`,
     printCheckView(plan)]);
 }
@@ -1786,6 +1857,7 @@ function bind(): void {
   $("autoPockets").addEventListener("click", () => { state.params.pockets = null; void runAnalyse(); });
   $<HTMLSelectElement>("slotSelect").addEventListener("change", (e) => {
     state.params.slot = +(e.target as HTMLSelectElement).value;
+    staleIfChanged();
   });
   bindPrintSettings({
     params: () => state.params,
@@ -1793,6 +1865,7 @@ function bind(): void {
     changed: (reanalyse) => {
       remember();
       sliceStale("Print settings changed: Slice again to print with them.");
+      if (state.config) renderPrinter(state.config);          // the plate line compares the chosen plate
       if (reanalyse && state.session) void runAnalyse();      // layer height feeds the islands check
     },
   });
@@ -1815,7 +1888,7 @@ function bind(): void {
     }
   };
   $("amsBtn").addEventListener("click", () => void printer(false));
-  new PrinterCard($<HTMLButtonElement>("watchBtn"), $("printerStatus"), $<HTMLImageElement>("camView"));
+  printerCard = new PrinterCard($<HTMLButtonElement>("watchBtn"), $("printerStatus"), $<HTMLImageElement>("camView"));
   $("amsClear").addEventListener("click", () => void printer(true));
   // The same switch beside the slot map: read the AMS, or go back to the project's slots.
   $("slotSourceBtn").addEventListener("click", () => void printer(Boolean(state.config?.ams.length)));

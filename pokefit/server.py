@@ -582,9 +582,13 @@ class Handler(BaseHTTPRequestHandler):
             # Offer the print file (.gcode.3mf) as a download next to the exports.
             if res.get("print_file"):
                 src = Path(res["print_file"])
-                dest = OUT_DIR / safe_stem(s.project.path.name) / src.name
+                # One directory per slice: a superseded slice still running must not overwrite the file a
+                # newer one shows (and Start would upload). Written to a temp name, then moved in whole.
+                dest = OUT_DIR / safe_stem(s.project.path.name) / uuid.uuid4().hex[:8] / src.name
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(src.read_bytes())
+                tmp = dest.with_name(dest.name + ".part")
+                tmp.write_bytes(src.read_bytes())
+                tmp.replace(dest)
                 rel = str(dest.relative_to(OUT_DIR)).replace("\\", "/")
                 res["print_file"] = {"name": dest.name, "path": str(dest), "file": rel,
                                      "url": "/api/download?file=" + quote(rel)}

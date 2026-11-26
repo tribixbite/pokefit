@@ -109,9 +109,11 @@ describe("camera and project sync", () => {
     let sent: Record<string, string> = {};
     globalThis.fetch = (async (_u: string | URL | Request, init?: RequestInit) => {
       sent = init?.headers as Record<string, string>;
-      return new Response(new Uint8Array([80, 75]), { status: 200 });
+      return new Response(new Uint8Array([80, 75]), { status: 200,
+        headers: { "X-Beambam-Warnings": JSON.stringify(["filament 3: no bundled Bambu profile for PPS"]) } });
     }) as typeof fetch;
-    const blob = await updateProject(link, "jolteon.3mf", new Uint8Array([1]), spools, "Supertack Plate");
+    const { blob, warnings } = await updateProject(link, "jolteon.3mf", new Uint8Array([1]), spools, "Supertack Plate");
+    expect(warnings).toEqual(["filament 3: no bundled Bambu profile for PPS"]);
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([80, 75]));
     expect(JSON.parse(sent["X-Slice-Options"])).toEqual({ spools, bed_type: "Supertack Plate" });
     fakeDaemon({ "/project/update": () => [400, { error: "jolteon.3mf has no print settings" }] });

@@ -29,6 +29,8 @@ export interface ProjectSyncHost {
   adopt(): Promise<void>;
   /** Download the project as now in use. */
   download(): Promise<void>;
+  /** The plate chosen under Print settings → Plate (null: the project's), which the slices use. */
+  plate?(): string | null;
 }
 
 /** "3 of 16 slots already match the printer" and friends: the one-line verdict. */
@@ -62,10 +64,13 @@ export function renderProjectSync(box: HTMLElement, cfg: Config, host: ProjectSy
     box.replaceChildren();
     return;
   }
+  // Redrawn on every spool read: keep "Slot by slot" as the user left it.
+  const wasOpen = (box.querySelector("details.sync-rows") as HTMLDetailsElement | null)?.open ?? false;
   const head = el("div", s.differs ? "warn-text" : "muted", syncSummary(s));
   const parts: HTMLElement[] = [head];
   if (s.differs) {
     const list = el("details", "sync-rows");
+    list.open = wasOpen;
     list.append(el("summary", "", "Slot by slot"));
     for (const r of s.rows.slice(0, Math.max(s.printer, 1))) {
       const row = el("div", `sync-row${r.same ? "" : " differs"}`);
@@ -78,7 +83,7 @@ export function renderProjectSync(box: HTMLElement, cfg: Config, host: ProjectSy
     }
     parts.push(list);
   }
-  const plate = plateLine(s.plate, cfg.printer_plate_name, cfg.printer_plate);
+  const plate = plateLine(host.plate?.() ?? s.plate, cfg.printer_plate_name, cfg.printer_plate);
   parts.push(el("div", plate.differs ? "warn-text" : "muted", plate.text));
   const buttons = el("div", "row");
   if (s.differs || plate.differs) {

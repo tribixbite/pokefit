@@ -26,11 +26,12 @@ export interface ConfirmSource {
   /** The spools loaded now. */
   trays(): Promise<AmsSlot[]>;
   /** Start the print (the user pressed Start print). Resolves with beambam's last word. */
-  start(slots: number[], acceptWarnings: boolean, onTick: (seconds: number, what: string) => void): Promise<string>;
+  start(slots: number[], acceptWarnings: boolean, onTick: (seconds: number, what: string) => void,
+    digest?: string): Promise<string>;
   /** How often to read the spools again while the panel is open. */
   pollMs: number;
-  /** A line under a filament (e.g. the preset it was sliced with). */
-  note?(index: number): string;
+  /** A line under filament `filament` (1-based; e.g. the preset it was sliced with). */
+  note?(filament: number): string;
   /** Slice again with filament i on nozzle nozzles[i - 1] (1 = left, 2 = right), or null for Bambu's own choice;
    *  resolves with the new header (time, weight). Absent: the nozzles cannot be changed here. */
   renozzle?(nozzles: number[] | null, onTick: (seconds: number, what: string) => void): Promise<(string | HTMLElement)[]>;
@@ -61,9 +62,15 @@ export function traySignature(trays: AmsSlot[]): string {
 }
 
 /** The trays beambam assigned, file order; null when one has none (it cannot print yet). */
-export function slotsFromPlan(m: PrintMapping): number[] | null {
-  const ids = m.filaments.map((f) => f.tray?.tray_id);
-  return ids.every((x): x is number => typeof x === "number") ? ids : null;
+export function slotsFromPlan(m: PrintMapping, base: number[] | null = null): number[] | null {
+  if (m.filaments.some((f) => typeof f.tray?.tray_id !== "number")) return null;
+  // Filament-indexed (index 0 = filament 1): beambam's plan lists the used filaments only, so filaments the
+  // plate does not use keep their entry from `base` (the trays the print was sliced for: one per project
+  // filament, which the local server requires), else -1. beambam reads either form by filament number.
+  const n = Math.max(base?.length ?? 0, ...m.filaments.map((f) => f.filament));
+  const out = Array.from({ length: n }, (_, i) => base?.[i] ?? -1);
+  for (const f of m.filaments) out[f.filament - 1] = f.tray!.tray_id;
+  return out;
 }
 
 /** Picker choices: the loaded spools, plus the filament's current tray if it is no longer loaded. */
@@ -113,6 +120,14 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   let stopped = false;
   let timer: number | null = null;
   let replanning: Promise<void> | null = null;
+  /** Spool checks asked for and not answered yet (Start print stays off meanwhile). */
+  let pending = 0;
+  const retryButton = (): HTMLButtonElement => {
+    const b = el("button", "btn", "Check again");
+    b.type = "button";
+    b.addEventListener("click", () => void replan(""));
+    return b;
+  };
 
   const panel = el("div", "print-plan print-confirm");
   const head = el("div", "pc-head");
@@ -144,7 +159,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
     closeSlotPicker();
     const m = mapping;
     if (!m) return;
-    rows.replaceChildren(...m.filaments.map((f, i) => {
+    rows.replaceChildren(...m.filaments.map((f) => {
       const row = el("div", `slot-row pc-row${f.errors.length ? " bad" : f.warnings.length ? " warn" : ""}`);
       row.setAttribute("role", "listitem");
       const what = el("span", "pc-fil");
@@ -157,9 +172,11 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
         figureColour: f.colour.slice(0, 7),
         ariaLabel: `Spool for filament ${f.filament}`,
         onChange: (v) => {
-          if (v < 0 || reslicing) return;
-          const base = slots ?? slotsFromPlan(m) ?? m.filaments.map((x) => x.tray?.tray_id ?? -1);
-          slots = base.map((s, k) => (k === i ? v : s));
+          if (v < 0 || reslicing || starting) return;
+          const base = [...(slotsFromPlan(m, slots ?? initial) ?? slots ?? initial ?? [])];
+          while (base.length < f.filament) base.push(-1);
+          base[f.filament - 1] = v;
+          slots = base;
           void replan("");
         },
       });
@@ -171,7 +188,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       const lines = el("div", "pc-lines");
       const nz = nozzleNumber(f.nozzle);
       if (src.renozzle && nz !== null) lines.append(nozzleSwitch(m, f.filament, nz));
-      const note = src.note?.(i);
+      const note = src.note?.(f.filament);
       if (note) lines.append(el("div", "muted", note));
       for (const e of f.errors) lines.append(el("div", "err", `✗ ${e}`));
       for (const w of f.warnings) lines.append(el("div", "warn-text", `⚠ ${w}`));
@@ -184,7 +201,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
         : "Spool check (beambam): every spool matches.";
     check.replaceChildren(el("div", "", verdict), ...printWarnings(m).map((w) => el("div", "warn-text", `⚠ ${w}`)),
       ...m.notes.map((n) => el("div", "muted", n)));
-    startBtn.disabled = starting || reslicing || m.errors.length > 0 || !slotsFromPlan(m);
+    startBtn.disabled = starting || reslicing || pending > 0 || m.errors.length > 0 || !slotsFromPlan(m, slots);
     showNozzleInfo();
   };
 
@@ -256,18 +273,24 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   };
 
   const replan = (reason: string): Promise<void> => {
+    // Until this check answers, Start print would send the previous spools: keep it off and say so.
+    pending++;
+    startBtn.disabled = true;
+    check.replaceChildren(el("div", "muted", "Checking the spools with beambam…"));
     const run = async (): Promise<void> => {
       try {
         mapping = await src.plan(slots);
         if (stopped) return;
-        slots = slotsFromPlan(mapping) ?? slots;
+        slots = slotsFromPlan(mapping, slots ?? initial) ?? slots;
+        pending--;
         render();
         if (reason) sync.textContent = reason;
       } catch (e) {
+        pending--;
         if (stopped) return;
-        mapping = null;
-        rows.replaceChildren(el("div", "err", (e as Error).message));
-        check.replaceChildren();
+        // Keep the last plan's rows on screen and offer a retry (a one-off failure must not kill the panel).
+        check.replaceChildren(el("div", "err", `Spool check failed: ${(e as Error).message}`),
+          retryButton());
         startBtn.disabled = true;
       }
     };
@@ -304,8 +327,8 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
 
   startBtn.addEventListener("click", async () => {
     const m = mapping;
-    const s = m ? slotsFromPlan(m) : null;
-    if (!m || !s || m.errors.length || reslicing) return;
+    const s = m ? slotsFromPlan(m, slots ?? initial) : null;
+    if (!m || !s || m.errors.length || reslicing || pending > 0) return;
     starting = true;
     startBtn.disabled = true;
     cancelBtn.disabled = true;
@@ -314,7 +337,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       // The warnings on screen when Start print was pressed are the user's OK; beambam checks the spools again.
       const said = await src.start(s, m.warnings.length > 0, (sec, what) => {
         status.textContent = `${what || "Sending"}… ${Math.round(sec)} s`;
-      });
+      }, m.digest);
       const last = said.split("\n").filter(Boolean).slice(-1)[0] ?? "";
       status.textContent = last ? `Started: ${last}.` : "Started.";
       stop();
