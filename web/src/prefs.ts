@@ -50,9 +50,10 @@ export function browserStore(): PrefStore | null {
 const ALLOWED: Partial<Record<RememberedKey, (v: unknown) => boolean>> = {
   supports: (v) => v === "auto" || v === "plate" || v === "off",
   brim: (v) => v === "auto_brim" || v === "outer_only" || v === "no_brim",
-  layer_height: (v) => typeof v === "number" && v >= 0.08 && v <= 0.28,
-  wall_loops: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10,
-  infill: (v) => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 100,
+  // Only what the Print settings' selects offer (index.html): a value they cannot show would apply unseen.
+  layer_height: (v) => [0.08, 0.12, 0.16, 0.2, 0.24, 0.28].includes(v as number),
+  wall_loops: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 6,
+  infill: (v) => [0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100].includes(v as number),
 };
 
 function valid(key: RememberedKey, v: unknown): boolean {

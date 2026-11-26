@@ -1069,9 +1069,13 @@ function sliceLine(label: string, r: SliceResult | undefined): HTMLElement {
 /** A slice (and any confirm panel under it) made with settings that changed since: replace it with `why`, so
  * Start print cannot send a print file that no longer matches what the page shows. */
 function sliceStale(why: string): void {
+  sliceGen++;          // a slice still running was made with the old settings: its result is dropped
   const out = $("sliceOut");
   if (out.childElementCount) out.replaceChildren(h("div", { cls: "muted", textContent: why }));
+  $<HTMLButtonElement>("sliceBtn").disabled = !state.config?.slicer && !api.viaDaemon();
 }
+/** Bumped by every change that makes a slice in flight out of date (`sliceStale`). */
+let sliceGen = 0;
 
 async function doSlice(): Promise<void> {
   if (!state.session) return;
@@ -1079,39 +1083,49 @@ async function doSlice(): Promise<void> {
   const out = $("sliceOut");
   btn.disabled = true;
   out.replaceChildren(h("div", { cls: "muted", textContent: "Slicing with Bambu Studio…" }));
+  // A Slice from here is Bambu's own nozzle split: nozzles are chosen per print file, in its confirm panel (a
+  // map kept across slices would pin by filament number, which a palette change renumbers).
+  state.params.nozzles = null;
+  const gen = ++sliceGen;
   if (api.viaDaemon()) {
-    await sliceWithDaemon(state.session, btn, out);
+    await sliceWithDaemon(state.session, btn, out, gen);
     return;
   }
   try {
     const x10 = $<HTMLInputElement>("x10Toggle").checked;
     const res: SliceVariants = await api.slice(state.session, state.params, x10, (s) => {
-      out.firstElementChild!.textContent = `Slicing with Bambu Studio… ${Math.round(s)} s`;
+      if (gen === sliceGen) out.firstElementChild!.textContent = `Slicing with Bambu Studio… ${Math.round(s)} s`;
     });
+    if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
     const needs = res.supports_needed;
+    const mode = state.params.supports ?? "auto";
+    // Supports chosen by the user: one slice, so "needed" was not tested.
     const verdict = h("div", {
       cls: `verdict ${needs ? "yes" : "no"}`,
-      textContent: needs === null ? "Supports: unknown" : needs ? "Supports needed" : "No supports needed",
+      textContent: mode === "off" ? "Supports: off (your choice)"
+        : mode === "plate" ? `Supports from the plate only: ${needs ? "Bambu added some" : "none needed"}`
+          : needs === null ? "Supports: unknown" : needs ? "Supports needed" : "No supports needed",
     });
     const per = res.x10?.ok ? h("div", { cls: "muted", textContent:
       `10× plate: ${formatDuration(res.x10.seconds / 10)} and ${(res.x10.grams / 10).toFixed(1)} g per figure` }) : "";
     const tbl = h("table", { cls: "tbl" },
       h("thead", {}, h("tr", {}, ...["", "time", "filament", ""].map((t) => h("th", { textContent: t })))),
       h("tbody", {},
-        sliceLine("1× no supports", res.off),
-        sliceLine("1× auto supports", res.auto),
+        ...(mode === "auto" ? [sliceLine("1× no supports", res.off), sliceLine("1× auto supports", res.auto)]
+          : [sliceLine(mode === "off" ? "1× no supports" : "1× supports from the plate", res.auto)]),
         res.x10 ? sliceLine(`10× ${needs ? "with" : "no"} supports`, res.x10) : h("tr")));
     applySlicerVerdict(res);
-    const warn = [...res.off.warnings, ...res.auto.warnings].filter(Boolean);
+    const warn = [...new Set([...res.off.warnings, ...res.auto.warnings])].filter(Boolean);
     const pf = res.print_file;
     const print = pf ? h("div", {},
       h("a", { href: pf.url, download: pf.name, textContent: `⬇ ${pf.name}`,
         title: "Sliced and ready to print: send it from Bambu Studio or Handy, copy it to the SD card, or beambam print" }),
       h("span", { cls: "muted", textContent: ` — ready to print (${needs ? "with" : "no"} supports)` })) : "";
+    const current = pf ? { file: pf.file, slots: res.ams_slots ?? [] } : null;
     // Send to printer: only when the slice was made for the printer's AMS spools (ams_slots).
     const send = pf && res.ams_slots && state.config?.printer_link
       ? h("div", { cls: "row" }, h("button", { cls: "btn", textContent: "Send to printer…",
-        onclick: () => void showPrintPlan(pf.file, res.ams_slots ?? []) }))
+        onclick: () => void showPrintPlan(current!) }))
       : pf && state.config?.printer_link
         ? h("div", { cls: "muted", textContent: unmappedText() })
         : "";
@@ -1125,19 +1139,23 @@ async function doSlice(): Promise<void> {
 }
 
 /** The site: the engine builds the print project, the beambam daemon on this device slices it. */
-async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement): Promise<void> {
+async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement, gen: number): Promise<void> {
   try {
     const res = await api.sliceOnPrinter(session, state.params, (s, what) => {
-      out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
+      if (gen === sliceGen) out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
     });
+    if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
+    // One holder for the current print file: a re-slice in the panel replaces it, and "Send to printer…"
+    // opened again must show and print that one, not the first.
+    const current = { res };
     out.replaceChildren(
       h("div", { id: "sliceSummary", textContent: daemonSummary(res) }),
       h("div", { cls: "row" }, h("button", { cls: "btn", textContent: "Send to printer…",
-        onclick: () => showDaemonPlan(session, res) })),
+        onclick: () => showDaemonPlan(session, current) })),
       h("div", { id: "printPlan" }),
       ...res.warnings.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
-    out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+    if (gen === sliceGen) out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {
     btn.disabled = false;
   }
@@ -1190,30 +1208,34 @@ async function liveTrays(): Promise<AmsSlot[]> {
 }
 
 /** The site: confirm and print a file the beambam daemon sliced. Choosing other nozzles slices it again there. */
-function showDaemonPlan(session: string, first: api.DaemonSliceResult): void {
-  let res = first;
-  const head = (): string[] => [`${res.name}: ${formatDuration(res.seconds)}, ${res.grams.toFixed(1)} g. Each filament prints from:`];
+function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }): void {
+  const head = (): string[] => [`${current.res.name}: ${formatDuration(current.res.seconds)}, ` +
+    `${current.res.grams.toFixed(1)} g. Each filament prints from:`];
   const src: ConfirmSource = {
     pollMs: 4000,                   // the daemon answers from its cache in milliseconds
-    plan: (slots) => api.daemonPlan(res.file, slots),
+    plan: (slots) => api.daemonPlan(current.res.file, slots),
     trays: liveTrays,
-    start: (slots, accept, onTick) => api.daemonPrint(res.file, slots, accept, onTick),
+    start: (slots, accept, onTick) => api.daemonPrint(current.res.file, slots, accept, onTick),
     nozzles: () => state.params.nozzles ?? null,
-    async renozzle(nozzles, onTick) {
-      const before = state.params.nozzles ?? null;
-      state.params.nozzles = nozzles;
+    // Only from a daemon whose plan names the nozzles Bambu really sliced on: an older one reports the map asked
+    // for (all left under Bambu's own split), and a pick built on that would move the other filaments too.
+    renozzle: api.daemonCan("plan-sliced-nozzles") ? async (nozzles, onTick) => {
+      const p = state.params;        // the figure this panel is for, even if another opens meanwhile
+      const before = p.nozzles ?? null;
+      p.nozzles = nozzles;
       try {
-        res = await api.sliceOnPrinter(session, state.params, onTick);
+        current.res = await api.sliceOnPrinter(session, p, onTick);
       } catch (e) {
-        state.params.nozzles = before;
+        p.nozzles = before;
         throw e;
       }
       const sum = document.getElementById("sliceSummary");
-      if (sum) sum.textContent = daemonSummary(res);
+      if (sum) sum.textContent = daemonSummary(current.res);
       return head();
-    },
+    } : undefined,
   };
-  openPrintConfirm($("printPlan"), src, res.ams_slots, head());
+  openPrintConfirm($("printPlan"), src, current.res.ams_slots, head(),
+    api.daemonCan("plan-sliced-nozzles") ? [] : ["Update beambam to choose each filament's nozzle here."]);
 }
 
 /** Why a sliced file cannot be sent: the AMS was not read, or some colour has no loaded spool near it. */
@@ -1235,12 +1257,13 @@ function swatch(colour: string): HTMLSpanElement {
 
 /** Local version: what the print file will print, each filament from its AMS spool, with "Start print" (the
  * only control in pokefit that starts the printer; beambam re-checks every spool before it starts). */
-async function showPrintPlan(file: string, slots: number[]): Promise<void> {
+async function showPrintPlan(current: { file: string; slots: number[] }): Promise<void> {
+  const slots = current.slots;
   const box = $("printPlan");
   box.replaceChildren(h("div", { cls: "muted", textContent: "Reading the print file…" }));
   let plan: PrintPlan;
   try {
-    plan = await api.printPlan(file, slots);
+    plan = await api.printPlan(current.file, slots);
   } catch (e) {
     box.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
     return;
@@ -1253,15 +1276,16 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
     nozzles: () => state.params.nozzles ?? null,
     async renozzle(nozzles, onTick) {
       if (!session) throw new Error("Open the figure again first.");
-      const before = state.params.nozzles ?? null;
-      state.params.nozzles = nozzles;
+      const p = state.params;        // the figure this panel is for, even if another opens meanwhile
+      const before = p.nozzles ?? null;
+      p.nozzles = nozzles;
       try {
-        const res = await api.slice(session, state.params, false, (sec) => onTick(sec, "slicing"));
+        const res = await api.slice(session, p, false, (sec) => onTick(sec, "slicing"));
         if (!res.print_file) throw new Error([...res.auto.warnings, res.auto.error ?? "Bambu made no print file"].filter(Boolean).join("; "));
-        file = res.print_file.file;
-        plan = await api.printPlan(file, slots);
+        plan = await api.printPlan(res.print_file.file, slots);
+        current.file = res.print_file.file;          // "Send to printer…" again opens this one
       } catch (e) {
-        state.params.nozzles = before;
+        p.nozzles = before;
         throw e;
       }
       last = plan;
@@ -1270,13 +1294,13 @@ async function showPrintPlan(file: string, slots: number[]): Promise<void> {
         printCheckView(plan)];
     },
     async plan(s) {
-      if (!(fresh && s && s.join() === slots.join())) last = await api.printPlan(file, s ?? slots);
+      if (!(fresh && s && s.join() === slots.join())) last = await api.printPlan(current.file, s ?? slots);
       fresh = false;
       if (!last?.mapping) throw new Error(`Spool check unavailable: ${last?.mapping_error ?? "no answer"}`);
       return last.mapping;
     },
     trays: liveTrays,
-    start: (s, accept, onTick) => api.startPrint(file, s, onTick, accept),
+    start: (s, accept, onTick) => api.startPrint(current.file, s, onTick, accept),
     note: (i) => {
       const p = last?.filaments[i]?.preset;
       return p ? `sliced as ${p.replace(/ @BBL.*$/, "")}` : "";

@@ -73,6 +73,13 @@ COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "
                          "texture_colours", "texture_details", "despeckle",
                          "supports", "layer_height", "wall_loops", "infill", "brim", "nozzles"})
 SUPPORT_MODES = ("auto", "plate", "off")
+
+
+def _whole(v: Any, name: str, lo: int, hi: int) -> int:
+    """`v` as a whole number in lo..hi; refuses 2.7, true and "3" alike (a client bug, not a setting)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != int(v) or not lo <= v <= hi:
+        raise ValueError(f"{name} must be a whole number {lo}..{hi}")
+    return int(v)
 BRIM_TYPES = ("auto_brim", "outer_only", "no_brim")
 LAYER_HEIGHTS = (0.08, 0.28)   # mm: Bambu's range for a 0.4 mm nozzle
 LINE_MARGIN = 0.02             # mm a line widened for a tall layer stays wider than the layer
@@ -312,6 +319,8 @@ class Params:
                                  "triangles, or null for the file's own")
 
     def _check_print_settings(self) -> None:
+        if self.supports is None:
+            self.supports = "auto"                       # a client sending null means "as Bambu finds"
         if self.supports not in SUPPORT_MODES:
             raise ValueError(f"supports must be one of {', '.join(SUPPORT_MODES)}")
         if self.layer_height is not None:
@@ -319,22 +328,18 @@ class Params:
             if not LAYER_HEIGHTS[0] <= self.layer_height <= LAYER_HEIGHTS[1]:
                 raise ValueError(f"layer_height must be {LAYER_HEIGHTS[0]}..{LAYER_HEIGHTS[1]} mm (0.4 mm nozzle)")
         if self.wall_loops is not None:
-            self.wall_loops = int(self.wall_loops)
-            if not 1 <= self.wall_loops <= 10:
-                raise ValueError("wall_loops must be 1..10")
+            self.wall_loops = _whole(self.wall_loops, "wall_loops", 1, 10)
         if self.infill is not None:
-            self.infill = int(self.infill)
-            if not 0 <= self.infill <= 100:
-                raise ValueError("infill must be 0..100 %")
+            self.infill = _whole(self.infill, "infill", 0, 100)
         if self.brim is not None and self.brim not in BRIM_TYPES:
             raise ValueError(f"brim must be one of {', '.join(BRIM_TYPES)} (or null for the project's)")
         if self.nozzles is not None:
-            try:
-                self.nozzles = [int(n) for n in self.nozzles]
-            except (TypeError, ValueError) as exc:
-                raise ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament") from exc
-            if not self.nozzles or any(n not in (1, 2) for n in self.nozzles) or len(self.nozzles) > 64:
-                raise ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament")
+            bad = ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament")
+            if not isinstance(self.nozzles, (list, tuple)) or not 0 < len(self.nozzles) <= 64:
+                raise bad
+            if any(isinstance(n, bool) or n not in (1, 2) for n in self.nozzles):
+                raise bad
+            self.nozzles = [int(n) for n in self.nozzles]
 
     @property
     def paint_ops(self) -> list[PaintOp]:
@@ -2421,14 +2426,16 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     root.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {}
     stem = export_stem(session, params)
-    written, ext = cored(final, session.extruder(params), params.core_filament)
-    # Supports chosen by the user ("off" / "plate"): one slice, shown as both variants.
+    written, ext = _print_parts(session, params, final)
+    # Supports chosen by the user ("off" / "plate"): one slice, shown as both variants (`supports_mode` says so).
     variants = (("off", False), ("auto", True)) if params.supports == "auto" else (("auto", True),)
     for name, sup in variants:
         f = write_project(session.project, obj.name, ext, written, root / f"{name}.3mf",
                           settings=_slice_settings(session, params, sup))
-        out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{name}.gcode.3mf").to_dict()
+        label = name if params.supports == "auto" else params.supports
+        out[name] = slice_3mf(f, work_dir=root / name, export_name=f"{stem}_{label}.gcode.3mf").to_dict()
     out.setdefault("off", out["auto"])
+    out["supports_mode"] = params.supports
     needs = out["auto"].get("support_seconds", 0) > 0
     out["supports_needed"] = needs if out["auto"].get("ok") else None
     # The print file of the variant the slicer says to print (supports only if it generated any).
@@ -2438,9 +2445,9 @@ def slice_variants(session: Session, params: Params, x10: bool = True,
     out["ams_slots"] = print_ams_slots(session, params)
     if x10:
         v = np.vstack([p.vertices for p in final])
-        ext = np.ptp(v, axis=0)
+        size = np.ptp(v, axis=0)        # (was assigned to `ext`, the object's filament, and written as it)
         st = _slice_settings(session, params, needs)
-        pos = grid_positions((float(ext[0]), float(ext[1])), 10, plate_size(st))
+        pos = grid_positions((float(size[0]), float(size[1])), 10, plate_size(st))
         if pos is None:
             out["x10"] = SliceResult(False, error="10 copies do not fit on one plate", copies=10).to_dict()
         else:
@@ -2468,13 +2475,17 @@ def print_project(session: Session, params: Params, out_dir: str | Path) -> dict
     obj = session.obj(params)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    settings = _slice_settings(session, params, True)
-    # "Print weak parts solid" reaches the printer as it reaches the export: modifier volumes in the project.
-    mods, _ = reinforced(final, settings) if params.reinforce else ([], [])
-    written, ext = cored(final + mods, session.extruder(params), params.core_filament)
+    written, ext = _print_parts(session, params, final)
     f = write_project(session.project, obj.name, ext, written, out / f"{export_stem(session, params)}.3mf",
-                      settings=settings)
+                      settings=_slice_settings(session, params, True))
     return {"file": f, "ams_slots": print_ams_slots(session, params)}
+
+
+def _print_parts(session: Session, params: Params, final: list[Part]) -> tuple[list[Part], int]:
+    """The parts a slice prints and the object's filament: the figure cored, plus, with "Print weak parts solid",
+    the modifier volumes over its weak parts — the same for the export, the local Slice and the daemon's."""
+    mods, _ = reinforced(final, export_settings(session, params)) if params.reinforce else ([], [])
+    return cored(final + mods, session.extruder(params), params.core_filament)
 
 
 def _slice_settings(session: Session, params: Params, supports: bool) -> dict | None:

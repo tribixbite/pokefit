@@ -125,9 +125,16 @@ export async function connectBeambam(url: string): Promise<Config> {
   const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true };
   const st = await bb.readState(next);
   const cfg = json<Config>(await call("setPrinter", [JSON.stringify(st)]));
+  daemonCaps = await bb.capabilities(next);
   link = next;
   bb.writeLink(browserStore(), link);
   return linked(cfg);
+}
+
+/** The connected daemon's `/healthz` capabilities (beambam.ts `capabilities`). */
+let daemonCaps: string[] = [];
+export function daemonCan(capability: string): boolean {
+  return viaDaemon() && daemonCaps.includes(capability);
 }
 
 /** Stop using the daemon (and the spools read from it). */

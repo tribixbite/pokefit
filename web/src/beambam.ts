@@ -102,6 +102,16 @@ const postJson = (link: Link, path: string, body: unknown, timeoutMs?: number): 
   request(link, path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     timeoutMs);
 
+/** What the daemon says it can do (`/healthz` capabilities); empty for a beambam that predates them. */
+export async function capabilities(link: Link): Promise<string[]> {
+  try {
+    const h = await request(link, "/healthz");
+    return Array.isArray(h.capabilities) ? h.capabilities.map(String) : [];
+  } catch {
+    return [];        // unhealthy (503) or an older daemon: assume nothing beyond the basics
+  }
+}
+
 /** The printer's state report (the daemon's cached copy: milliseconds). */
 export async function readState(link: Link): Promise<Json> {
   const st = await request(link, "/state");

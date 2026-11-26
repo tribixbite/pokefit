@@ -361,3 +361,45 @@ def test_a_tall_layer_widens_only_the_lines_it_is_too_tall_for():
     assert print_overrides(st, Params(layer_height=0.16))["outer_wall_line_width"] == "0.2"
     out = print_overrides(st, Params(layer_height=0.24))
     assert (out["outer_wall_line_width"], out["line_width"], out["support_line_width"]) == ("0.26", "0.42", "0")
+
+
+def test_the_daemon_project_prints_what_the_export_prints(critter: Path, tmp_path: Path) -> None:
+    """print_project (the site's slice through beambam) and the export share the parts: with "print weak parts
+    solid" both carry the same modifier volumes (print_project used to leave them out)."""
+    from pokefit.pipeline import BUNDLED_REFERENCE, print_project
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+    for reinforce in (False, True):
+        p = Params(steel="US1/4x1", reinforce=reinforce)
+        exp = read_project(Path(export(s, p, tmp_path / f"e{reinforce}")["figure_3mf"])).default_object()
+        prj = read_project(Path(print_project(s, p, tmp_path / f"p{reinforce}")["file"])).default_object()
+        assert sorted(x.subtype for x in prj.parts) == sorted(x.subtype for x in exp.parts)
+
+
+def test_print_card_settings_and_nozzles_reach_the_project(critter: Path, tmp_path: Path) -> None:
+    from pokefit.pipeline import BUNDLED_REFERENCE, print_project
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+    p = Params(steel="US1/4x1", supports="off", layer_height=0.24, wall_loops=4, infill=30, brim="outer_only",
+               colours=["#E05028", "#161616"], nozzles=[2, 1])
+    for f in (Path(export(s, p, tmp_path / "e")["figure_3mf"]), Path(print_project(s, p, tmp_path / "p")["file"])):
+        with zipfile.ZipFile(f) as z:
+            st = json.loads(z.read("Metadata/project_settings.config"))
+            ms = z.read("Metadata/model_settings.config").decode()
+        assert (st["enable_support"], st["layer_height"], st["wall_loops"], st["sparse_infill_density"],
+                st["brim_type"]) == ("0", "0.24", "4", "30%", "outer_only"), f.name
+        assert st["filament_map_mode"] == "Manual" and st["filament_map"][:2] == ["2", "1"]
+        # The CLI reads the grouping from the plate first: it must be inside <plate>, not only in the settings.
+        plate = ms[ms.index("<plate>"):ms.index("</plate>")]
+        assert '<metadata key="filament_map_mode" value="Manual"/>' in plate
+        assert f'<metadata key="filament_maps" value="{" ".join(st["filament_map"])}"/>' in plate
+
+
+def test_the_colour_change_estimate_keeps_pinned_nozzles(critter: Path, tmp_path: Path) -> None:
+    from pokefit.pipeline import BUNDLED_REFERENCE
+    s = open_session(critter, BALL_3MF, BUNDLED_REFERENCE, tmp_path / "w")
+    p = Params(steel="US1/4x1", colours=["#E05028", "#161616"])
+    tc = analyse(s, p)[0].to_dict().get("toolchange") or {}
+    if tc.get("nozzles", 1) < 2:
+        pytest.skip("reference is a one-nozzle printer")
+    for pin in ([1, 1], [2, 1]):
+        got = analyse(s, Params(steel="US1/4x1", colours=["#E05028", "#161616"], nozzles=pin))[0].to_dict()["toolchange"]
+        assert got["nozzle_of"] == pin

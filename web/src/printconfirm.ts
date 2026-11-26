@@ -103,7 +103,7 @@ function swatch(colour: string, text = ""): HTMLSpanElement {
  * function (also called by Cancel, and when `box` leaves the page).
  */
 export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: number[] | null,
-  header: (string | HTMLElement)[]): () => void {
+  header: (string | HTMLElement)[], notes: string[] = []): () => void {
   let slots = initial;
   let trays: AmsSlot[] = [];
   let traySig = "";
@@ -210,8 +210,10 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
 
   /** Who chose the nozzles, with a way back to Bambu's choice. */
   const showNozzleInfo = (): void => {
-    if (!src.renozzle || !mapping?.filaments.some((f) => nozzleNumber(f.nozzle) !== null)) {
-      nozzleInfo.replaceChildren();
+    const twoNozzles = mapping?.filaments.some((f) => nozzleNumber(f.nozzle) !== null) ?? false;
+    if (!src.renozzle || !twoNozzles) {
+      // e.g. "Update beambam to choose each filament's nozzle here." (an older daemon)
+      nozzleInfo.replaceChildren(...(twoNozzles ? notes.map((n) => el("div", "muted", n)) : []));
       return;
     }
     const mine = src.nozzles?.() ?? null;

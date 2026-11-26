@@ -67,5 +67,8 @@ describe("remembered settings", () => {
     store.setItem("pokefit.prefs.v1", JSON.stringify({ supports: "always", layer_height: 0.5, wall_loops: 2.5,
       infill: 120, brim: "mouse_ear", clearance: 1.5 }));
     expect(readPrefs(store)).toEqual({ clearance: 1.5 });
+    // Values the engine takes but the selects cannot show are dropped too (they would apply unseen).
+    store.setItem("pokefit.prefs.v1", JSON.stringify({ wall_loops: 8, infill: 33, layer_height: 0.1, clearance: 1.5 }));
+    expect(readPrefs(store)).toEqual({ clearance: 1.5 });
   });
 });
