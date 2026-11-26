@@ -345,10 +345,11 @@ def test_print_defaults_read_the_project():
     from pokefit.pipeline import print_defaults
 
     assert print_defaults({"layer_height": "0.16", "wall_loops": "2", "sparse_infill_density": "15%",
-                           "brim_type": "no_brim"}) == {"layer_height": 0.16, "wall_loops": 2, "infill": 15,
-                                                        "brim": "no_brim", "min_line_width": None}
+                           "brim_type": "no_brim", "curr_bed_type": "Supertack Plate"}) == {
+        "layer_height": 0.16, "wall_loops": 2, "infill": 15, "brim": "no_brim", "bed_type": "Supertack Plate",
+        "min_line_width": None}
     assert print_defaults(None) == {"layer_height": None, "wall_loops": None, "infill": None, "brim": None,
-                                    "min_line_width": None}
+                                    "bed_type": None, "min_line_width": None}
     assert print_defaults({"line_width": "0.42", "outer_wall_line_width": "0.2", "support_line_width": "0",
                            "top_surface_line_width": "100%"})["min_line_width"] == 0.2
 
