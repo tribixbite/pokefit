@@ -71,8 +71,9 @@ SHAPE_CACHE = 4             # fit / underside / printability results kept per se
 COLOUR_ONLY = frozenset({"slot", "settings_source", "process", "filament_map", "colours", "paint", "colour_map",
                          "paint_depth", "core_filament", "simplify_auto",
                          "texture_colours", "texture_details", "despeckle",
-                         "supports", "layer_height", "wall_loops", "infill", "brim", "nozzles"})
+                         "supports", "layer_height", "wall_loops", "infill", "brim", "bed_type", "nozzles"})
 SUPPORT_MODES = ("auto", "plate", "off")
+from .projectsync import BED_TYPES, compare as project_vs_printer  # noqa: E402
 
 
 def _whole(v: Any, name: str, lo: int, hi: int) -> int:
@@ -178,6 +179,8 @@ class Params:
     wall_loops: int | None = None
     infill: int | None = None
     brim: str | None = None
+    # The build plate the print is sliced for (Bambu `curr_bed_type`, projectsync.BED_TYPES; None = the project's).
+    bed_type: str | None = None
     # The nozzle each filament prints with on a two-nozzle printer (index 0 = filament 1; 1 = left, 2 = right):
     # Bambu's "Manual" filament grouping. None = Bambu chooses ("Auto For Flush": fewest swaps and purge). With the
     # printer's track switch any AMS spool reaches either nozzle; without it beambam refuses a spool that cannot.
@@ -333,6 +336,8 @@ class Params:
             self.infill = _whole(self.infill, "infill", 0, 100)
         if self.brim is not None and self.brim not in BRIM_TYPES:
             raise ValueError(f"brim must be one of {', '.join(BRIM_TYPES)} (or null for the project's)")
+        if self.bed_type is not None and self.bed_type not in BED_TYPES:
+            raise ValueError(f"bed_type must be one of {', '.join(BED_TYPES)} (or null for the project's)")
         if self.nozzles is not None:
             bad = ValueError("nozzles must be a list of 1 (left) / 2 (right), one per filament")
             if not isinstance(self.nozzles, (list, tuple)) or not 0 < len(self.nozzles) <= 64:
@@ -1002,6 +1007,8 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         "printer": (ref or {}).get("printer_settings_id", ""),
         "process": (ref or {}).get("print_settings_id", ""),
         "print_defaults": print_defaults(ref),
+        # The project's filament list against the loaded spools (projectsync): the UI offers to take the printer's.
+        "project_sync": project_vs_printer(ref, ams),
         "slicer": slicer,
     }
 
@@ -1038,6 +1045,7 @@ def print_defaults(ref: dict | None) -> dict[str, Any]:
     widths = _line_widths(ref)
     return {"layer_height": num("layer_height"), "wall_loops": int(walls) if walls is not None else None,
             "infill": int(infill) if infill is not None else None, "brim": ref.get("brim_type") or None,
+            "bed_type": ref.get("curr_bed_type") or None,
             # The narrowest line: a layer this tall or taller widens it (`thin_lines`).
             "min_line_width": min(widths.values()) if widths else None}
 
@@ -2527,6 +2535,8 @@ def print_overrides(st: dict, params: Params) -> dict:
         out["sparse_infill_density"] = f"{params.infill}%"
     if params.brim is not None:
         out["brim_type"] = params.brim
+    if params.bed_type is not None:
+        out["curr_bed_type"] = params.bed_type
     if params.nozzles is not None:
         n = len(out.get("filament_settings_id") or []) or len(params.nozzles)
         # Bambu Studio's manual grouping: the CLI reads `filament_map` (1-based extruder per filament) when the

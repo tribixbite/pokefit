@@ -90,6 +90,8 @@ export interface Params {
   /** Sparse infill density, %. */
   infill?: number | null;
   brim?: BrimType | null;
+  /** The build plate to slice for (Bambu curr_bed_type); null = the project's. */
+  bed_type?: string | null;
   /** The nozzle each filament prints with (index 0 = filament 1; 1 = left, 2 = right); null = Bambu's choice. */
   nozzles?: number[] | null;
   /** Filament (palette number) the inside prints in past the paint depth; null = the object's own. */
@@ -486,6 +488,20 @@ export interface PrintPlan {
 /** `printer.print_plan` (beambam `ams map --json` / daemon `/print/plan`). Errors refuse the print; warnings need
  * the user's OK, which "Start print" gives (`accept_warnings`). */
 export type SupportMode = "auto" | "plate" | "off";
+
+/** Project slot i against the i-th loaded AMS tray (pokefit projectsync.compare). */
+export interface ProjectSync {
+  differs: boolean;
+  /** Slots that already match (material and colour) among those the printer has a spool for. */
+  same: number;
+  project: number;
+  printer: number;
+  /** The project's plate (curr_bed_type). */
+  plate: string | null;
+  rows: { index: number; same: boolean;
+    project: { type: string; colour: string; name: string } | null;
+    spool: { label: string; type: string; colour: string; name: string } | null }[];
+}
 export type BrimType = "auto_brim" | "outer_only" | "no_brim";
 
 export interface PrintMapping {
@@ -551,8 +567,13 @@ export interface Config {
   beambam?: string;
   /** The project's own layer height, walls, infill % and brim (the Print settings' "project's" choice). */
   print_defaults?: { layer_height: number | null; wall_loops: number | null; infill: number | null; brim: string | null;
+    bed_type?: string | null;
     /** The project's narrowest line (mm): a layer this tall or taller prints those lines a little wider. */
     min_line_width?: number | null };
+  /** The project's filament list against the loaded spools (pokefit projectsync.compare); null without both. */
+  project_sync?: ProjectSync | null;
+  /** The build plate marker the printer read (X2D device.plate.cur_id), not decoded into a type. */
+  printer_plate?: string | null;
   /** The printer has a Filament Track Switch: any AMS spool can feed either nozzle. */
   track_switch?: boolean;
   /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */

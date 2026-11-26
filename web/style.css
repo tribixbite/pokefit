@@ -437,6 +437,12 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .pc-nozzle .seg button { min-height: 40px; min-width: 64px; }
 .pc-nozzles { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
 .print-settings { margin: 6px 0 10px; }
+.project-sync { display: grid; gap: 6px; margin: 6px 0 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.project-sync .sync-rows > summary { cursor: pointer; min-height: 32px; padding: 4px 0; }
+.sync-row { display: grid; grid-template-columns: 1.6em 18px minmax(0, 1fr) 1.2em 18px minmax(0, 1fr); align-items: center; gap: 6px; padding: 2px 0; }
+.sync-row .sw { width: 16px; height: 16px; border-radius: 4px; display: inline-block; border: 1px solid var(--line); }
+.sync-row > span:not(.sw) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-row.differs { color: var(--warn); }
 .print-settings > summary { cursor: pointer; padding: 6px 0; min-height: 32px; }
 .print-settings .grid2 { margin-top: 6px; }
 .print-settings select { width: 100%; }

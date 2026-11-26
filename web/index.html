@@ -454,6 +454,7 @@
       <section class="card">
         <h2>Print (Bambu Studio)</h2>
         <p id="printerInfo" class="hint"></p>
+        <div id="projectSync" class="project-sync" hidden aria-live="polite"></div>
         <p id="tcInfo" class="hint" hidden></p>
         <label id="slotRow">Filament for every colour
           <select id="slotSelect"></select>
@@ -478,6 +479,9 @@
             </label>
             <label>Brim
               <select id="brimSelect"><option value="">project's</option><option value="auto_brim">auto</option><option value="outer_only">outside only</option><option value="no_brim">none</option></select>
+            </label>
+            <label title="The build plate the print is sliced for (its bed temperature and first-layer settings)">Plate
+              <select id="plateSelect"><option value="">project's</option><option value="Cool Plate">Cool Plate</option><option value="Engineering Plate">Engineering Plate</option><option value="High Temp Plate">Smooth PEI / High Temp</option><option value="Textured PEI Plate">Textured PEI</option><option value="Supertack Plate">Cool Plate SuperTack</option></select>
             </label>
           </div>
           <p id="layerNote" class="hint" hidden></p>

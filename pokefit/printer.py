@@ -181,6 +181,14 @@ def _unit_extruder(info: Any) -> int | None:
 
 # TODO: without a switch, pass each colour's allowed nozzle (its matched slot's `extruder`) to
 # `toolchange.plan(allowed=...)`; needs the firmware-id -> Bambu `filament_map` (1-based) side mapping verified.
+def plate_id(state: dict[str, Any]) -> str | None:
+    """The build plate's marker id the printer read (X2D `device.plate.cur_id`, e.g. "P0301"), if it reports one.
+    Not decoded into a plate type: no public mapping, and one X2D's id did not match the plate its jobs use."""
+    pr = state.get("print") or state
+    cur = ((pr.get("device") or {}).get("plate") or {}).get("cur_id")
+    return str(cur) if cur else None
+
+
 def track_switch(state: dict[str, Any]) -> bool:
     """Whether a Filament Track Switch is installed (any AMS unit can feed either nozzle)."""
     pr = state.get("print") or state

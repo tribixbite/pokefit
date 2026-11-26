@@ -49,6 +49,10 @@ export interface WebApi {
   print_progress(state: string): string;
   /** The project for beambam to slice and print: [{name, ams_slots} JSON, [[name, bytes]]]. */
   print_project(sid: string, params: string): { toJs(o?: object): [string, [string, Uint8Array][]]; destroy(): void };
+  /** The project's filaments (and plate, "" = keep) become the printer's spools -> the config. */
+  adopt_printer(bed_type: string): string;
+  /** The project as now in use, to download: [file name, bytes]. */
+  updated_project(): { toJs(o?: object): [string, Uint8Array]; destroy(): void };
 }
 
 export interface BootOptions {

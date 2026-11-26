@@ -41,7 +41,12 @@ exist only on the original Windows machine (ask the user for the files).
      right) 2 h 09 min 27.3 g; brown moved left 2 h 44 min 25.9 g. Earlier, on the 0.16 mm project: auto 2 h 43 min,
      L R L R 3 h 26 min, all left 4 h 57 min. A layer as tall as the project's 0.2 mm outer wall was refused
      (code -51 "Too small line width"): those lines now widen to layer + 0.02 mm.
-   - Needs beambam with commit d57bf47 (not released yet): older ones label Bambu's own split all "left" (they read
+   - 2026-11-26: headed run in Edge Canary on the phone (pokefit.party + beambam 1.7.0): Edge asked "pokefit.party
+     wants to access other apps and services on this device" (allowed), then connect → slice → nozzles → re-slice
+     all worked. "Project vs printer" added (projectsync); the plate marker P0301 is not decoded yet — ask the user
+     which plate is on the printer to add the first entry.
+   - Needs beambam ≥ 1.7.0 (released 2026-11-26) for the nozzle switch (/healthz "plan-sliced-nozzles"); with an
+     older one the panel says to update. Before d57bf47: older ones label Bambu's own split all "left" (they read
      project_settings' `filament_map`, all 1 in Auto For Flush), so the first Left/Right pick starts from that
      wrong split. A manual map reads correctly on any version. Verified 2026-11-25 from the site: yellow + brown
      left, white + black right started on the X2D (PREPARE → RUNNING in 8 s) and was stopped before the bed heated.

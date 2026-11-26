@@ -20,7 +20,7 @@ from .pipeline import (Params, Session, analyse, app_config, auto_simplify, expo
                        print_project as _print_project, reopened,
                        prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
-from .printer import AmsSlot, ams_slots, print_progress as _print_progress, track_switch
+from .printer import AmsSlot, ams_slots, plate_id, print_progress as _print_progress, track_switch
 
 WORK = Path("/tmp/pokefit")
 _sessions: dict[str, Session] = {}
@@ -30,6 +30,8 @@ _presets = PresetLibrary()              # imported Bambu presets (no system prof
 _ball_model: Path | None = None         # the user's copy of the ball model (for the steel seat shell)
 _ams: list[AmsSlot] | None = None       # the printer's loaded filaments, read by the page from beambam
 _track_switch = False                   # ... and whether a Filament Track Switch feeds either nozzle
+_plate_id: str | None = None            # ... and the build plate marker it read (printer.plate_id)
+_reference_path: Path | None = None     # the file the user's project came from (for "Download the updated project")
 
 
 def _dump(o: Any) -> str:
@@ -60,21 +62,21 @@ def _session(sid: str) -> Session:
 
 def config() -> str:
     return _dump({**app_config(None, _reference, _reference_name, _presets, _ams), "engine": "browser",
-                  "track_switch": _track_switch})
+                  "track_switch": _track_switch, "printer_plate": _plate_id})
 
 
 def set_printer(state_json: str) -> str:
     """Match colours to the printer's loaded spools: `state_json` is its state report as the beambam daemon
     sends it (`GET /state`); "" forgets them (back to the project's slots). The config, with `ams`."""
-    global _ams, _track_switch
+    global _ams, _track_switch, _plate_id
     if not state_json:
-        _ams, _track_switch = None, False
+        _ams, _track_switch, _plate_id = None, False, None
     else:
         state = json.loads(state_json)
         slots = ams_slots(state)
         if not slots:
             raise ValueError("The printer reports no loaded filament.")
-        _ams, _track_switch = slots, track_switch(state)
+        _ams, _track_switch, _plate_id = slots, track_switch(state), plate_id(state)
     for s in _sessions.values():
         s.ams, s.track_switch = _ams, _track_switch
     return config()
@@ -101,16 +103,43 @@ def load(name: str, data: Any, params_json: str = "{}", quick: bool = False) -> 
 
 def set_reference(name: str, data: Any) -> str:
     """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
-    global _reference, _reference_name
+    global _reference, _reference_name, _reference_path
     path = WORK / "reference" / Path(name).name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_raw(data))
     ref = load_settings_file(path, _presets)
     if ref is not None:
-        _reference, _reference_name = ref, path.name
+        _reference, _reference_name, _reference_path = ref, path.name, path
         for s in _sessions.values():
             s.reference = _reference
     return config()
+
+
+def adopt_printer(bed_type: str = "") -> str:
+    """The project's filament i becomes the printer's AMS tray i (projectsync.adopt), and its plate `bed_type`
+    if given: for this visit's slices and exports. The config, whose `project_sync` then matches."""
+    global _reference, _reference_name
+    from .pipeline import DEFAULT_REFERENCE, reference_settings
+    from .projectsync import adopt
+    if not _ams:
+        raise ValueError("Connect to beambam first: the printer's spools are not read.")
+    ref = _reference if _reference is not None else reference_settings(DEFAULT_REFERENCE)
+    _reference = adopt(ref, _ams, None, bed_type or None)
+    base = _reference_name or DEFAULT_REFERENCE.name
+    _reference_name = base if base.endswith(" (printer's filaments)") else f"{base} (printer's filaments)"
+    for s in _sessions.values():
+        s.reference = _reference
+    return config()
+
+
+def updated_project() -> tuple[str, bytes]:
+    """The project with the filament list (and plate) now in use, to keep: a copy of the user's .3mf with these
+    settings, else a project .json (projectsync.updated_project)."""
+    from .pipeline import DEFAULT_REFERENCE, reference_settings
+    from .projectsync import updated_project as _updated
+    ref = _reference if _reference is not None else reference_settings(DEFAULT_REFERENCE)
+    name = (_reference_name or DEFAULT_REFERENCE.name).replace(" (printer's filaments)", "")
+    return _updated(_reference_path, ref, name)
 
 
 def set_ball_model(name: str, data: Any) -> str:

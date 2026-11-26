@@ -52,8 +52,8 @@ from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, beambam_url,
                       print_file_check, print_plan,
                       print_file_summary,
-                      print_progress, read_state, send_print, track_switch)
-from .slicer import find_exe
+                      plate_id, print_progress, read_state, send_print, track_switch)
+from .slicer import find_exe, reference_settings
 from .steel import CATALOGUE, DEFAULT_STEEL
 
 WEB_DIST = ROOT / "web" / "dist"
@@ -129,6 +129,8 @@ _reference_name = ""
 _presets = PresetLibrary(system=default_system_profiles())
 _ams: list[AmsSlot] | None = None        # the printer's loaded filaments, once read (POST /api/printer)
 _track_switch = False                     # ... and whether a Filament Track Switch routes them to either nozzle
+_plate_id: str | None = None              # ... and the build plate marker it read (printer.plate_id)
+_reference_path: Path | None = None       # the file the user's project came from ("Download the updated project")
 _camera = CameraProxy()                   # live view, started on demand (POST /api/printer/camera)
 
 
@@ -137,7 +139,7 @@ def _config() -> dict[str, Any]:
     from .imageto3d import Comfy
     return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets, _ams), "engine": "local",
             "photos": Comfy(COMFY_URL).alive(timeout=1.5), "printer_link": beambam_command() is not None or beambam_url() is not None,
-            "track_switch": _track_switch}
+            "track_switch": _track_switch, "printer_plate": _plate_id}
 
 
 def _run_job(job_id: str, fn: Any) -> None:
@@ -260,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_reference(self, q: dict[str, str]) -> None:
         """Use the user's own Bambu project (filament slots, printer settings) or add exported presets."""
-        global _reference, _reference_name
+        global _reference, _reference_name, _reference_path
         name = Path(unquote(self.headers.get("X-Filename") or "project.3mf")).name
         d = UPLOAD_DIR / "reference"
         d.mkdir(parents=True, exist_ok=True)
@@ -271,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 — any unreadable project is a 400
             raise ApiError(400, f"Cannot read {name}: {exc}") from exc
         if ref is not None:
-            _reference, _reference_name = ref, name
+            _reference, _reference_name, _reference_path = ref, name, path
             with _registry_lock:
                 for s in _sessions.values():
                     s.reference = ref
@@ -344,9 +346,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_printer(self, q: dict[str, str]) -> None:
         """Read the printer's loaded AMS filaments through beambam; {"clear": true} forgets them."""
-        global _ams, _track_switch
+        global _ams, _track_switch, _plate_id
         if self._json_body().get("clear"):
-            _ams, _track_switch = None, False
+            _ams, _track_switch, _plate_id = None, False, None
         else:
             try:
                 state = read_state()
@@ -355,11 +357,41 @@ class Handler(BaseHTTPRequestHandler):
             slots = ams_slots(state)
             if not slots:
                 raise ApiError(404, "The printer reports no loaded filament.")
-            _ams, _track_switch = slots, track_switch(state)
+            _ams, _track_switch, _plate_id = slots, track_switch(state), plate_id(state)
         with _registry_lock:
             for s in _sessions.values():
                 s.ams, s.track_switch = _ams, _track_switch
         self._json(_config())
+
+    def post_printer_adopt(self, q: dict[str, str]) -> None:
+        """The project's filament list becomes the printer's AMS trays (and its plate `bed_type`, if given):
+        projectsync.adopt, for this run's slices and exports."""
+        global _reference, _reference_name
+        from .projectsync import adopt
+        if not _ams:
+            raise ApiError(409, "Read the printer's AMS first (Use my printer's AMS).")
+        bed = str(self._json_body().get("bed_type") or "") or None
+        ref = _reference if _reference is not None else reference_settings(DEFAULT_REFERENCE)
+        try:
+            new = adopt(ref, _ams, _presets.system, bed)
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from exc
+        base = _reference_name or DEFAULT_REFERENCE.name
+        _reference = new
+        _reference_name = base if base.endswith(" (printer's filaments)") else f"{base} (printer's filaments)"
+        with _registry_lock:
+            for s in _sessions.values():
+                s.reference = new
+        self._json(_config())
+
+    def post_project_updated(self, q: dict[str, str]) -> None:
+        """The project as now in use, to download (projectsync.updated_project)."""
+        from .projectsync import updated_project
+        ref = _reference if _reference is not None else reference_settings(DEFAULT_REFERENCE)
+        name, data = updated_project(_reference_path, ref,
+                                     (_reference_name or DEFAULT_REFERENCE.name).replace(" (printer's filaments)", ""))
+        ctype = "application/json" if name.endswith(".json") else "application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
+        self._send(200, data, ctype, {"Content-Disposition": f'attachment; filename="{name}"'})
 
     def post_printer_status(self, q: dict[str, str]) -> None:
         """What the printer is doing (state, progress, temperatures); read-only."""

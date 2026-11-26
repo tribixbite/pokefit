@@ -20,7 +20,7 @@ const REMEMBERED = {
   flat_depth: "number", flat_fill: "number", fill_area: "string", paint_depth: "number|null",
   simplify: "number|null", simplify_auto: "boolean", despeckle: "number", reinforce: "boolean",
   supports: "string", layer_height: "number|null", wall_loops: "number|null", infill: "number|null",
-  brim: "string|null",
+  brim: "string|null", bed_type: "string|null",
 } as const satisfies Partial<Record<keyof Params, string>>;
 
 export type RememberedKey = keyof typeof REMEMBERED;
@@ -50,6 +50,7 @@ export function browserStore(): PrefStore | null {
 const ALLOWED: Partial<Record<RememberedKey, (v: unknown) => boolean>> = {
   supports: (v) => v === "auto" || v === "plate" || v === "off",
   brim: (v) => v === "auto_brim" || v === "outer_only" || v === "no_brim",
+  bed_type: (v) => ["Cool Plate", "Engineering Plate", "High Temp Plate", "Textured PEI Plate", "Supertack Plate"].includes(v as string),
   // Only what the Print settings' selects offer (index.html): a value they cannot show would apply unseen.
   layer_height: (v) => [0.08, 0.12, 0.16, 0.2, 0.24, 0.28].includes(v as number),
   wall_loops: (v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 6,

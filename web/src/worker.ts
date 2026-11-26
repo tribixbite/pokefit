@@ -1,7 +1,7 @@
 /**
  * Web Worker running the pokefit Python engine in the browser (Pyodide), so the
  * static site (pokefit.party) needs no server. Messages:
- *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | steels | preview | faces | pick | paintPrepare | limb | colourPieces | weak | export | setPrinter | printProgress | printProject
+ *   in:  { id, fn, args }        fn ∈ config | load | setReference | setBallModel | analyse | steels | preview | faces | pick | paintPrepare | limb | colourPieces | weak | export | setPrinter | adoptPrinter | updatedProject | printProgress | printProject
  *   out: { id, ok: true, result } | { id, ok: false, error } | { status: string }
  */
 import Module from "manifold-3d";
@@ -72,6 +72,15 @@ scope.onmessage = async (ev: MessageEvent<Call>): Promise<void> => {
       case "colourPieces": result = api.colour_pieces(args[0] as string, args[1] as string, args[2] as string); break;
       case "weak": result = api.weak(args[0] as string, args[1] as string); break;
       case "setPrinter": result = api.set_printer(args[0] as string); break;
+      case "adoptPrinter": result = api.adopt_printer((args[0] as string | undefined) ?? ""); break;
+      case "updatedProject": {
+        const p = api.updated_project();
+        const [name, bytes] = p.toJs({ create_proxies: false });
+        p.destroy();
+        transfer.push(bytes.buffer);
+        result = [name, bytes];
+        break;
+      }
       case "printProgress": result = api.print_progress(args[0] as string); break;
       case "export":
       case "printProject": {

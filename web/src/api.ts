@@ -336,6 +336,24 @@ export async function readPrinter(clear = false): Promise<Config> {
   return postJson<Config>("/api/printer", { clear });
 }
 
+/** Take the printer's loaded spools as the project's filament list (and `bedType` as its plate; "" keeps it). */
+export async function adoptPrinter(bedType = ""): Promise<Config> {
+  if (mode === "local") return postJson<Config>("/api/printer/adopt", { bed_type: bedType });
+  return linked(json<Config>(await call("adoptPrinter", [bedType])));
+}
+
+/** The project with the filament list and plate now in use, to keep (a copy of the user's .3mf, else .json). */
+export async function updatedProject(): Promise<{ name: string; blob: Blob }> {
+  if (mode === "local") {
+    const res = await fetch("/api/project/updated", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "project_printer.3mf";
+    return { name, blob: await res.blob() };
+  }
+  const [name, bytes] = await call<[string, Uint8Array]>("updatedProject", []);
+  return { name, blob: new Blob([bytes as BlobPart]) };
+}
+
 /** What the printer is doing (read-only, local only). */
 export async function printerStatus(): Promise<PrintProgress> {
   if (viaDaemon()) return json<PrintProgress>(await call("printProgress", [JSON.stringify(await bb.readState(link))]));

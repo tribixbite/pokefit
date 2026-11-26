@@ -30,6 +30,7 @@ export function settingsSummary(p: Params, cfg: Config | null): string {
     walls != null ? `${walls} wall${walls === 1 ? "" : "s"}` : "",
     infill != null ? `${infill} % infill` : "",
     brim ? `brim ${BRIM_NAMES[brim] ?? brim}` : "",
+    (p.bed_type ?? d?.bed_type) ? String(p.bed_type ?? d?.bed_type) : "",
   ].filter(Boolean).join(" · ");
 }
 
@@ -44,6 +45,7 @@ function labelDefaults(cfg: Config | null): void {
   set("wallSelect", d?.wall_loops != null ? String(d.wall_loops) : null);
   set("infillSelect", d?.infill != null ? `${d.infill} %` : null);
   set("brimSelect", d?.brim ? (BRIM_NAMES[d.brim] ?? d.brim) : null);
+  set("plateSelect", d?.bed_type ?? null);
   // Bambu refuses a line no wider than the layer: the engine widens those lines (pipeline `thin_lines`); say so.
   const thin = d?.min_line_width ?? null;
   for (const o of $<HTMLSelectElement>("layerSelect").options) {
@@ -81,6 +83,7 @@ export function showPrintSettings(p: Params, cfg: Config | null): void {
     sel.value = numberValue(sel, v);
   }
   $<HTMLSelectElement>("brimSelect").value = p.brim ?? "";
+  $<HTMLSelectElement>("plateSelect").value = p.bed_type ?? "";
   $("printSettingsSum").textContent = settingsSummary(p, cfg);
   layerNote(p, cfg);
 }
@@ -101,4 +104,5 @@ export function bindPrintSettings(host: PrintSettingsHost): void {
   on("wallSelect", (v) => { host.params().wall_loops = num(v); return false; });
   on("infillSelect", (v) => { host.params().infill = num(v); return false; });
   on("brimSelect", (v) => { host.params().brim = v === "" ? null : v as BrimType; return false; });
+  on("plateSelect", (v) => { host.params().bed_type = v === "" ? null : v; return false; });
 }

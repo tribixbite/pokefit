@@ -17,6 +17,7 @@ import {
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
 import { openPrintConfirm, type ConfirmSource } from "./printconfirm";
 import { bindPrintSettings, showPrintSettings } from "./printsettings";
+import { renderProjectSync } from "./projectsync";
 import { startCommand } from "./beambam";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
@@ -48,7 +49,7 @@ let defaults: Params = {
   process: null, bend: null, flat_base: null, flat_depth: 1.2, flat_fill: 2.5, fill_circle: null, fill_area: "steel", fill_shape: null, paint_depth: null, core_filament: null,
   filament_map: null, colours: null, paint: null, colour_map: null, texture_colours: null, texture_details: 0, strengthen: 0,
   simplify: null, despeckle: 0.5, strengthen_at: null, reinforce: false,
-  supports: "auto", layer_height: null, wall_loops: null, infill: null, brim: null, nozzles: null,
+  supports: "auto", layer_height: null, wall_loops: null, infill: null, brim: null, bed_type: null, nozzles: null,
 };
 /** Settings the user changed are remembered in this browser and are the next figure's defaults (prefs.ts). */
 const prefStore = browserStore();
@@ -334,6 +335,7 @@ function renderPrinter(cfg: Config): void {
   $("amsRow").hidden = !cfg.printer_link;
   $("printerCard").hidden = !cfg.printer_link;
   $("amsClear").hidden = !cfg.ams.length;
+  renderProjectSync($("projectSync"), cfg, { adopt: adoptPrinter, download: downloadProject });
   // Without a track switch each AMS unit is wired to one nozzle: show which (R / L) beside each spool.
   const side = (a: AmsSlot): string => (cfg.track_switch || a.extruder == null ? "" : a.extruder === 1 ? " (L)" : " (R)");
   $("amsInfo").textContent = cfg.ams.length
@@ -1196,6 +1198,42 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
     if (state.config) renderPrinter(state.config);
   } finally {
     if (!quiet) busy(false);
+  }
+}
+
+/** "Use the printer's filaments": the project's filament list becomes the loaded spools (and its plate the one
+ * chosen in Print settings), then everything is matched and checked again. */
+async function adoptPrinter(): Promise<void> {
+  busy(true, "Taking the printer's filaments…");
+  try {
+    state.config = await api.adoptPrinter(state.params.bed_type ?? "");
+    renderSlots(state.config);
+    renderPrinter(state.config);
+    syncControls();
+    state.params.filament_map = null;
+    sliceStale("The project's filaments changed: Slice again to print with them.");
+    if (state.session) await runAnalyse();
+    toast("The project now lists the printer's filaments. Download the updated project to keep it.");
+  } catch (e) {
+    toast((e as Error).message);
+  } finally {
+    busy(false);
+  }
+}
+
+/** Save the project as now in use (a copy of the user's .3mf with the new settings, else a project .json). */
+async function downloadProject(): Promise<void> {
+  try {
+    const { name, blob } = await api.updatedProject();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
+  } catch (e) {
+    toast(`Could not build the project: ${(e as Error).message}`);
   }
 }
 

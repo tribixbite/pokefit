@@ -100,6 +100,15 @@ the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beamba
    to "Auto For Flush". With a Filament Track Switch every AMS spool reaches either nozzle (beambam
    `read_topology`); without one beambam's check refuses a spool its filament's nozzle cannot reach.
 
+6. Project vs printer (`pokefit/projectsync.py`, `web/src/projectsync.ts`): once the spools are read (here, or
+   "Use my printer's AMS" locally) the Print card compares the project's filament list slot by slot with the AMS
+   trays in order (A1 … D4; the external spools are no slot) and offers "Use the printer's filaments" (filament i
+   becomes tray i: its preset, material, colour; the project's slots past the spools stay, so objects assigned to
+   them still have a filament) and "Download the updated project" (a copy of the user's .3mf with the new
+   settings, else a project .json). The plate is Print settings → Plate (`Params.bed_type` → `curr_bed_type`);
+   the printer's plate marker (`device.plate.cur_id`, e.g. P0301) is shown, not decoded: no public mapping, and
+   this X2D's marker did not match the plate its jobs use.
+
 The site probes nothing until the user connects: probing 127.0.0.1 for every visitor would show them Chrome's
 prompt. The daemon has no camera route, so the Printer card shows status only there.
 
