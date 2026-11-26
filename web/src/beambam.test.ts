@@ -90,13 +90,38 @@ describe("daemon calls", () => {
 });
 
 describe("camera and project sync", () => {
-  test("the camera URL is the daemon's relay; a failure is told in beambam's words", async () => {
-    const { cameraProblem, cameraUrl } = await import("./beambam");
-    expect(cameraUrl(link, 7)).toBe("http://127.0.0.1:8765/camera.mjpeg?n=7");
-    fakeDaemon({ "/snapshot.jpg": () => [503, "camera proxy unreachable; start it with `beambam cam start`"] });
-    expect(await cameraProblem(link)).toContain("beambam cam start");
-    fakeDaemon({ "/snapshot.jpg": () => [200, "jpeg"] });
-    expect(await cameraProblem(link)).toBeNull();
+  test("the camera is a fetch with the token; a refusal is told in beambam's words", async () => {
+    const { camera } = await import("./beambam");
+    const seen: RequestInit[] = [];
+    let reply = new Response("camera proxy unreachable; start it with `beambam cam start`", { status: 503 });
+    globalThis.fetch = (async (_: unknown, init?: RequestInit) => (seen.push(init ?? {}), reply)) as typeof fetch;
+    const ctl = new AbortController();
+    const err = await camera({ ...link, token: "t0k" }, ctl.signal).catch((e: Error) => e);
+    expect((err as Error).message).toContain("beambam cam start");
+    expect((seen[0].headers as Record<string, string>).Authorization).toBe("Bearer t0k");
+    reply = new Response(JSON.stringify({ error: "the camera is shown only to the pages this daemon allows" }), { status: 403 });
+    expect(((await camera(link, ctl.signal).catch((e: Error) => e)) as Error).message).toContain("only to the pages");
+    reply = new Response("", { status: 401 });
+    expect(((await camera(link, ctl.signal).catch((e: Error) => e)) as Error).message).toContain("needs its access token");
+    reply = new Response("--frame", { status: 200 });
+    expect((await camera(link, ctl.signal)).status).toBe(200);
+  });
+
+  test("a daemon on the LAN: a token in the start command, kept with the link, sent on every call", async () => {
+    expect(startCommand("https://pokefit.party", "http://192.168.0.20:8765")).toBe(
+      'beambam daemon --http 0.0.0.0:8765 --auth-token "$(openssl rand -hex 16)" --cors-origin https://pokefit.party');
+    const s = store();
+    writeLink(s, { url: "http://192.168.0.20:8765", enabled: true, token: "t0k" });
+    expect(readLink(s)).toEqual({ url: "http://192.168.0.20:8765", enabled: true, token: "t0k" });
+    const seen: RequestInit[] = [];
+    globalThis.fetch = (async (_: unknown, init?: RequestInit) => (seen.push(init ?? {}),
+      new Response(JSON.stringify({ filaments: [], errors: [], warnings: [], notes: [] }), { status: 200 }))) as typeof fetch;
+    await plan(readLink(s), "/f", null);
+    const h = seen[0].headers as Record<string, string>;
+    expect(h.Authorization).toBe("Bearer t0k");
+    expect(h["Content-Type"]).toBe("application/json");
+    globalThis.fetch = (async (_: unknown) => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+    expect(((await plan(link, "/f", null).catch((e: Error) => e)) as Error).message).toContain("needs its access token");
   });
 
   test("the trays in order become the spools; the daemon hands the project back or says why not", async () => {

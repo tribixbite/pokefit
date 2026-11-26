@@ -15,10 +15,11 @@ import {
   budgetCount, budgetShare, countBudget, LEVELS, levelName, shareToSlider, SLIDER_MAX, sliderBudget,
 } from "./simplify";
 import { closeSlotPicker, slotPicker, type SlotChoice } from "./slotpicker";
-import { openPrintConfirm, type ConfirmSource } from "./printconfirm";
+import { SliceGate } from "./slicegate";
+import { openPrintConfirm, planNamesSlicedNozzles, remapFilamentMap, type ConfirmSource } from "./printconfirm";
 import { bindPrintSettings, showPrintSettings } from "./printsettings";
 import { renderProjectSync } from "./projectsync";
-import { startCommand } from "./beambam";
+import { isLoopback, normaliseUrl, startCommand } from "./beambam";
 import type {
   AmsSlot, Check, Config, FillArea, Params, PrintPlan, RegionView, Report, SliceResult, SliceVariants, SteelRow,
 } from "./types";
@@ -225,6 +226,7 @@ async function init(): Promise<void> {
   renderPrinter(cfg);
   // The site, connected to beambam on an earlier visit: connect again (the browser already allowed it).
   $<HTMLInputElement>("beambamUrl").value = api.beambamLink().url;
+  $<HTMLInputElement>("beambamToken").value = api.beambamLink().token ?? "";
   if (cfg.engine === "browser" && api.beambamLink().enabled) void linkBeambam(true, true);
 
   const query = new URLSearchParams(location.search);
@@ -317,7 +319,7 @@ function renderPrinter(cfg: Config): void {
       : cfg.slicer
         ? `Sliced with your ${cfg.printer} / ${cfg.process} settings (from ${cfg.reference}).`
         : "Bambu Studio not found — slicing unavailable; geometry checks still run.";
-  ($("sliceBtn") as HTMLButtonElement).disabled = !cfg.slicer && !daemon;
+  updateSliceBtn(cfg);
   // Slicing controls only where a slicer exists (the local version, or beambam for the site).
   // The material picker also sets the exported 3MF's filament settings, so it shows everywhere.
   $("sliceRow").hidden = cfg.engine === "browser" && !daemon;
@@ -325,7 +327,8 @@ function renderPrinter(cfg: Config): void {
   $("beambamRow").hidden = cfg.engine !== "browser";
   $("beambamBtn").textContent = daemon ? "Disconnect" : "Connect to beambam";
   $<HTMLInputElement>("beambamUrl").disabled = daemon;
-  $("beambamCmd").textContent = startCommand(location.origin, api.beambamLink().url);
+  $<HTMLInputElement>("beambamToken").disabled = daemon;
+  showLinkHelp();
   $("engineWhere").textContent = cfg.engine === "browser" ? "in your browser" : "local";
   // The bundled default project is a JSON profile: name it as such rather than by file name.
   $("refInfo").textContent = !cfg.reference ? "" : cfg.reference.endsWith(".json")
@@ -709,6 +712,9 @@ async function runAnalyse(rememberIt = true): Promise<void> {
   const seq = ++state.seq;
   paintDirty = false;
   busy(true);
+  // Before the analysis, not only after it: a change that makes the slice stale also drops its nozzle choice
+  // (`sliceStale`), and the colour-change estimate must not use that map for the changed figure.
+  staleIfChanged();
   try {
     // Quick first (fit, pockets, preview): the printability checks follow in a second call.
     const rep = await api.analyse(state.session, state.params, true);
@@ -1073,13 +1079,34 @@ function sliceLine(label: string, r: SliceResult | undefined): HTMLElement {
 /** A slice (and any confirm panel under it) made with settings that changed since: replace it with `why`, so
  * Start print cannot send a print file that no longer matches what the page shows. */
 function sliceStale(why: string): void {
-  sliceGen++;          // a slice still running was made with the old settings: its result is dropped
+  // A nozzle choice belongs to the print file it was sliced for: kept past it, Export and the colour-change
+  // estimate would apply a map keyed by filament number to another palette or setup.
+  state.params.nozzles = null;
   const out = $("sliceOut");
   if (out.childElementCount) out.replaceChildren(h("div", { cls: "muted", textContent: why }));
-  $<HTMLButtonElement>("sliceBtn").disabled = !state.config?.slicer && !api.viaDaemon();
+  gate.stale();        // a slice still running was made with the old settings: its result is dropped
 }
-/** Bumped by every change that makes a slice in flight out of date (`sliceStale`). */
-let sliceGen = 0;
+/** Which slice is current and whether Slice can run (a dropped beambam slice keeps the daemon busy). */
+const gate = new SliceGate(() => updateSliceBtn());
+
+/** Slice is on with a slicer (the local one or beambam's), and off while the current slice runs or the daemon is
+ * still busy with one (it slices one at a time: a new one would be refused until that ends). */
+function updateSliceBtn(cfg: Config | null = state.config): void {
+  const btn = document.getElementById("sliceBtn") as HTMLButtonElement | null;
+  if (!btn) return;
+  const { disabled, waiting } = gate.button(Boolean(cfg?.slicer), api.viaDaemon());
+  btn.disabled = disabled;
+  btn.title = waiting ? "beambam is still slicing: Slice is back when it is done." : "";
+  const out = document.getElementById("sliceOut");
+  const wait = document.getElementById("sliceWait");
+  if (waiting && out && !wait && out.childElementCount) {
+    // Under the slice output (e.g. "Slice again to print it"): why the button is still off.
+    out.append(h("div", { id: "sliceWait", cls: "muted",
+      textContent: "beambam is finishing a slice it started (it slices one at a time): Slice is back when it is done." }));
+  } else if (!waiting) {
+    wait?.remove();
+  }
+}
 /** What the slice on screen was made from (`sliceKey`); null: no slice shown. */
 let slicedKey: string | null = null;
 
@@ -1103,24 +1130,24 @@ async function doSlice(): Promise<void> {
   if (!state.session) return;
   const btn = $<HTMLButtonElement>("sliceBtn");
   const out = $("sliceOut");
-  btn.disabled = true;
+  if (btn.disabled) return;               // e.g. beambam still running a dropped slice (updateSliceBtn)
   out.replaceChildren(h("div", { cls: "muted", textContent: "Slicing with Bambu Studio…" }));
   // A Slice from here is Bambu's own nozzle split: nozzles are chosen per print file, in its confirm panel (a
   // map kept across slices would pin by filament number, which a palette change renumbers).
   state.params.nozzles = null;
   confirmPanel?.stop();
-  const gen = ++sliceGen;
+  const gen = gate.begin();
   const key = sliceKey();
   if (api.viaDaemon()) {
-    await sliceWithDaemon(state.session, btn, out, gen, key);
+    await sliceWithDaemon(state.session, out, gen, key);
     return;
   }
   try {
     const x10 = $<HTMLInputElement>("x10Toggle").checked;
     const res: SliceVariants = await api.slice(state.session, state.params, x10, (s) => {
-      if (gen === sliceGen) out.firstElementChild!.textContent = `Slicing with Bambu Studio… ${Math.round(s)} s`;
+      if (gate.isCurrent(gen)) out.firstElementChild!.textContent = `Slicing with Bambu Studio… ${Math.round(s)} s`;
     });
-    if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
+    if (!gate.isCurrent(gen)) return;            // settings changed meanwhile: sliceStale said so
     slicedKey = key;
     const needs = res.supports_needed;
     const mode = state.params.supports ?? "auto";
@@ -1157,20 +1184,20 @@ async function doSlice(): Promise<void> {
     out.replaceChildren(verdict, tbl, per, print, send, h("div", { id: "printPlan" }),
       ...warn.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
-    out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+    if (gate.isCurrent(gen)) out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {
-    btn.disabled = !state.config?.slicer;
+    // Only the current slice's end turns Slice back on: a dropped one ending must not while a newer one runs.
+    gate.end(gen);
   }
 }
 
 /** The site: the engine builds the print project, the beambam daemon on this device slices it. */
-async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTMLElement, gen: number,
-  key: string): Promise<void> {
+async function sliceWithDaemon(session: string, out: HTMLElement, gen: number, key: string): Promise<void> {
   try {
-    const res = await api.sliceOnPrinter(session, state.params, (s, what) => {
-      if (gen === sliceGen) out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
-    });
-    if (gen !== sliceGen) return;            // settings changed meanwhile: sliceStale said so
+    const res = await gate.daemonSlice(() => api.sliceOnPrinter(session, state.params, (s, what) => {
+      if (gate.isCurrent(gen)) out.firstElementChild!.textContent = `${what ? what[0].toUpperCase() + what.slice(1) : "Slicing"}… ${Math.round(s)} s`;
+    }));
+    if (!gate.isCurrent(gen)) return;            // settings changed meanwhile: sliceStale said so
     slicedKey = key;
     // One holder for the current print file: a re-slice in the panel replaces it, and "Send to printer…"
     // opened again must show and print that one, not the first.
@@ -1182,9 +1209,9 @@ async function sliceWithDaemon(session: string, btn: HTMLButtonElement, out: HTM
       h("div", { id: "printPlan" }),
       ...res.warnings.map((w) => h("div", { cls: "muted", textContent: `Bambu: ${w}` })));
   } catch (e) {
-    if (gen === sliceGen) out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
+    if (gate.isCurrent(gen)) out.replaceChildren(h("div", { cls: "err", textContent: (e as Error).message }));
   } finally {
-    btn.disabled = false;
+    gate.end(gen);
   }
 }
 
@@ -1205,6 +1232,22 @@ function nozzleText(nozzles: number[]): string {
     r && `${l ? "" : "filament" + (r.includes(",") ? "s " : " ")}${r} on the right`].filter(Boolean).join(", ");
 }
 
+/**
+ * The start command for the address typed, and the access-token field where it is needed: a daemon on another
+ * machine requires one (beambam refuses a LAN bind without it); one on this device does not, so the usual connect
+ * stays one field.
+ */
+function showLinkHelp(): void {
+  const typed = $<HTMLInputElement>("beambamUrl").value;
+  let url = api.beambamLink().url;
+  try {
+    if (typed.trim()) url = normaliseUrl(typed);
+  } catch { /* not an address yet: keep the last good one */ }
+  $("beambamCmd").textContent = startCommand(location.origin, url);
+  const token = $<HTMLInputElement>("beambamToken");
+  token.hidden = isLoopback(url) && !token.value && !api.beambamLink().token;
+}
+
 /** The site: connect to (or disconnect from) the beambam daemon on this device. `quiet`: the automatic
  * reconnect on page load, which reports in the Print card instead of covering the page. */
 async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
@@ -1212,7 +1255,8 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
   info.textContent = on ? "Connecting to beambam…" : "";
   if (!quiet) busy(true, on ? "Connecting to beambam…" : "Disconnecting…");
   try {
-    state.config = on ? await api.connectBeambam($<HTMLInputElement>("beambamUrl").value)
+    state.config = on ? await api.connectBeambam($<HTMLInputElement>("beambamUrl").value,
+      $<HTMLInputElement>("beambamToken").value)
       : await api.disconnectBeambam();
     renderPrinter(state.config);
     if (!on) printerCard.stop();          // the camera stream and status poll were that daemon's
@@ -1223,6 +1267,7 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
   } catch (err) {
     info.textContent = (err as Error).message;
     if (state.config) renderPrinter(state.config);
+    if (/access token/.test(info.textContent)) $("beambamToken").hidden = false;   // beambam answered 401
   } finally {
     if (!quiet) busy(false);
   }
@@ -1276,7 +1321,11 @@ async function downloadProject(): Promise<void> {
 
 /** Read the printer's spools for an open confirm panel, keeping the Print card and colour matching current. */
 async function liveTrays(): Promise<AmsSlot[]> {
+  const before = state.config?.ams ?? [];
   const cfg = await api.readPrinter(false);
+  // The engine now matches against the new reading: a manual colour -> slot choice is a position in that list, so
+  // a spool loaded or run out would shift it onto another tray for the next re-slice. Keep each on its tray.
+  state.params.filament_map = remapFilamentMap(state.params.filament_map, before, cfg.ams);
   state.config = cfg;
   renderPrinter(cfg);
   return cfg.ams;
@@ -1321,6 +1370,7 @@ function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }
     pollMs: 4000,                   // the daemon answers from its cache in milliseconds
     plan: (slots) => api.daemonPlan(current.res.file, slots),
     trays: liveTrays,
+    plate: () => state.config?.printer_plate ?? null,
     start: (slots, accept, onTick, digest) => api.daemonPrint(current.res.file, slots, accept, onTick, digest),
     nozzles: () => state.params.nozzles ?? null,
     // Only from a daemon whose plan names the nozzles Bambu really sliced on: an older one reports the map asked
@@ -1328,14 +1378,16 @@ function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }
     renozzle: api.daemonCan("plan-sliced-nozzles") ? async (nozzles, onTick) => {
       const p = state.params;        // the figure this panel is for, even if another opens meanwhile
       const before = p.nozzles ?? null;
+      const gen = gate.gen;
       p.nozzles = nozzles;
       try {
-        current.res = await api.sliceOnPrinter(session, p, onTick);
+        current.res = await gate.daemonSlice(() => api.sliceOnPrinter(session, p, onTick));
       } catch (e) {
-        p.nozzles = before;
+        gate.restoreNozzles(p, before, gen);
         throw e;
       }
-      const sum = document.getElementById("sliceSummary");
+      // The summary on screen is this slice's only while no newer Slice or change replaced it.
+      const sum = gate.isCurrent(gen) ? document.getElementById("sliceSummary") : null;
       if (sum) sum.textContent = daemonSummary(current.res);
       return head();
     } : undefined,
@@ -1388,6 +1440,7 @@ async function showPrintPlan(current: { file: string; slots: number[] }): Promis
       if (!session) throw new Error("Open the figure again first.");
       const p = state.params;        // the figure this panel is for, even if another opens meanwhile
       const before = p.nozzles ?? null;
+      const gen = gate.gen;
       p.nozzles = nozzles;
       try {
         const res = await api.slice(session, p, false, (sec) => onTick(sec, "slicing"));
@@ -1395,7 +1448,7 @@ async function showPrintPlan(current: { file: string; slots: number[] }): Promis
         plan = await api.printPlan(res.print_file.file, slots);
         current.file = res.print_file.file;          // "Send to printer…" again opens this one
       } catch (e) {
-        p.nozzles = before;
+        gate.restoreNozzles(p, before, gen);
         throw e;
       }
       last = plan;
@@ -1409,8 +1462,14 @@ async function showPrintPlan(current: { file: string; slots: number[] }): Promis
       if (!last?.mapping) throw new Error(`Spool check unavailable: ${last?.mapping_error ?? "no answer"}`);
       return last.mapping;
     },
+    // Left / Right only when beambam's plan names the nozzles the file was sliced on (it reads slice_info since
+    // "plan-sliced-nozzles"): checked against the file itself, whichever beambam (CLI or daemon) answers.
+    nozzlesKnown: (m) => planNamesSlicedNozzles(m, last?.filaments ?? []),
     trays: liveTrays,
-    start: (s, accept, onTick) => api.startPrint(current.file, s, onTick, accept),
+    plate: () => state.config?.printer_plate ?? null,
+    // The plan's digest: the local server plans again just before it starts and refuses a changed plan, so
+    // accepting the warnings covers only the ones on screen.
+    start: (s, accept, onTick, digest) => api.startPrint(current.file, s, onTick, accept, digest),
     note: (filament) => {
       const p = last?.filaments.find((x) => x.filament === filament)?.preset;
       return p ? `sliced as ${p.replace(/ @BBL.*$/, "")}` : "";
@@ -1418,7 +1477,9 @@ async function showPrintPlan(current: { file: string; slots: number[] }): Promis
   };
   openConfirm(src, slots, [
     `${plan.name} on the ${plan.plate} (bed ${plan.filaments[0]?.bed_temp ?? "?"} °C). Each filament prints from:`,
-    printCheckView(plan)]);
+    printCheckView(plan)],
+  // Shown when the plan's nozzles do not match the file's (`nozzlesKnown`): an older beambam.
+  ["Update beambam to choose each filament's nozzle here."]);
 }
 
 /** beambam's check of the G-code before "Start print": time, weight, waste (purge + prime tower), nozzle swaps, its warnings. */
@@ -1871,6 +1932,7 @@ function bind(): void {
   });
   $<HTMLSelectElement>("processSelect").addEventListener("change", (e) => {
     state.params.process = (e.target as HTMLSelectElement).value || null;
+    showPrintSettings(state.params, state.config);   // "project's (…)" and the thin-line note follow the preset
     if (state.session) void runAnalyse();     // layer height feeds the islands check
   });
   // The printer's AMS (local engine with beambam): match colours to what is loaded.
@@ -1893,9 +1955,12 @@ function bind(): void {
   // The same switch beside the slot map: read the AMS, or go back to the project's slots.
   $("slotSourceBtn").addEventListener("click", () => void printer(Boolean(state.config?.ams.length)));
   $("beambamBtn").addEventListener("click", () => void linkBeambam(!state.config?.beambam, false));
-  $("beambamUrl").addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter") void linkBeambam(true, false);
-  });
+  for (const id of ["beambamUrl", "beambamToken"]) {
+    $(id).addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") void linkBeambam(true, false);
+    });
+  }
+  $("beambamUrl").addEventListener("input", showLinkHelp);
   // Recolour the figure with the matched filaments' colours (what will actually print).
   $("snapColours").addEventListener("click", () => {
     const rep = state.report;

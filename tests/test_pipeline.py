@@ -344,6 +344,24 @@ def test_print_settings_out_of_range_are_refused(bad):
         Params(**bad)
 
 
+def test_print_defaults_follow_an_imported_process():
+    # The Print card's "project's (…)" values with an imported process preset chosen: that preset's, not the
+    # project's (its layer height, walls and narrowest line decide the label and the thin-line note).
+    from pokefit.pipeline import BUNDLED_REFERENCE, app_config
+    from pokefit.presets import PresetLibrary, read_presets
+    from pokefit.slicer import reference_settings
+    ref = reference_settings(BUNDLED_REFERENCE)
+    proc = {"print_settings_id": "0.12 fine", "from": "User", "inherits": "0.12mm Fine @BBL X2D", "name": "0.12 fine",
+            "layer_height": "0.12", "wall_loops": "3", "outer_wall_line_width": "0.15"}
+    lib = PresetLibrary()
+    lib.add(read_presets("p.json", json.dumps(proc).encode()))
+    cfg = app_config(None, ref, "ref.json", lib)
+    d = cfg["process_defaults"]["0.12 fine"]
+    assert d["layer_height"] == 0.12 and d["wall_loops"] == 3 and d["min_line_width"] == 0.15
+    assert cfg["print_defaults"]["layer_height"] == float(ref["layer_height"])
+    assert app_config(None, ref, "ref.json", None)["process_defaults"] == {}
+
+
 def test_print_defaults_read_the_project():
     from pokefit.pipeline import print_defaults
 
@@ -407,3 +425,6 @@ def test_the_colour_change_estimate_keeps_pinned_nozzles(critter: Path, tmp_path
     for pin in ([1, 1], [2, 1]):
         got = analyse(s, Params(steel="US1/4x1", colours=["#E05028", "#161616"], nozzles=pin))[0].to_dict()["toolchange"]
         assert got["nozzle_of"] == pin
+    # A list shorter than the palette: the rest print on the left, as print_overrides writes it for the slice.
+    got = analyse(s, Params(steel="US1/4x1", colours=["#E05028", "#161616"], nozzles=[2]))[0].to_dict()["toolchange"]
+    assert got["nozzle_of"] == [2, 1]

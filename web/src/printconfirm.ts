@@ -37,6 +37,12 @@ export interface ConfirmSource {
   renozzle?(nozzles: number[] | null, onTick: (seconds: number, what: string) => void): Promise<(string | HTMLElement)[]>;
   /** The nozzles the user chose for the current print file (null: Bambu chose them). */
   nozzles?(): number[] | null;
+  /** Whether plan `m` names the nozzles the file was really sliced on (absent: it does). An older beambam reports
+   *  the map asked for (all left under Bambu's own split), and a Left/Right pick built on that would move the other
+   *  filaments too: without it the nozzle switches are not offered. */
+  nozzlesKnown?(m: PrintMapping): boolean;
+  /** The build plate on the printer as last read (its marker): a change re-checks the plan like a spool change. */
+  plate?(): string | null | undefined;
 }
 
 /** The nozzle number (1 = left, 2 = right) beambam's plan names, or null ("-": one nozzle; "both": either). */
@@ -56,9 +62,48 @@ export function nozzlesWith(m: PrintMapping, filament: number, to: 1 | 2): numbe
 
 type Filament = PrintMapping["filaments"][number];
 
-/** What makes two readings of the spools different for printing: tray, material, colour, name. */
-export function traySignature(trays: AmsSlot[]): string {
-  return trays.map((t) => `${t.slot}:${t.type}:${t.colour.toUpperCase()}:${t.name}`).sort().join("|");
+/**
+ * Whether beambam's plan names the nozzles the print file was really sliced on: every filament the plan puts on
+ * the left or right matches `sliced` (the file's own slice_info, `nozzle` 1 = left, 2 = right, per filament). An
+ * older beambam reports the map asked for (all left under Bambu's own split); a file whose nozzles are unknown
+ * cannot vouch for the plan either.
+ */
+export function planNamesSlicedNozzles(m: PrintMapping,
+  sliced: readonly { filament: number; nozzle?: number | null }[]): boolean {
+  return m.filaments.every((f) => {
+    const n = nozzleNumber(f.nozzle);
+    if (n === null) return true;                     // one nozzle, or "both": nothing to vouch for
+    const s = sliced.find((x) => x.filament === f.filament)?.nozzle;
+    return s === n;
+  });
+}
+
+/**
+ * The user's colour -> slot choices (`Params.filament_map`, 1-based positions in the AMS list) carried over a new
+ * reading of the spools: each keeps the tray it named (by slot number), and is dropped when that tray is no longer
+ * loaded. Positions past the list ("a new slot") keep their distance past its end. Null when nothing is left.
+ */
+export function remapFilamentMap(map: Record<string, number> | null, before: readonly AmsSlot[],
+  after: readonly AmsSlot[]): Record<string, number> | null {
+  if (!map) return null;
+  const out: Record<string, number> = {};
+  for (const [colour, pos] of Object.entries(map)) {
+    if (pos > before.length) {
+      out[colour] = pos - before.length + after.length;
+      continue;
+    }
+    const slot = before[pos - 1]?.slot;
+    const at = after.findIndex((a) => a.slot === slot);
+    if (at >= 0) out[colour] = at + 1;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** What makes two readings of the printer different for printing: each tray's material, colour and name, and the
+ *  build plate on it (beambam's plan warns when that is not the one the file was sliced for). */
+export function traySignature(trays: AmsSlot[], plate: string | null = null): string {
+  return trays.map((t) => `${t.slot}:${t.type}:${t.colour.toUpperCase()}:${t.name}`).sort().join("|") +
+    `|plate:${plate ?? ""}`;
 }
 
 /** The trays beambam assigned, file order; null when one has none (it cannot print yet). */
@@ -119,6 +164,9 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   let reslicing = false;
   let stopped = false;
   let timer: number | null = null;
+  /** A spool read in flight: `tick` is single-flight, so a kick while one awaits (a failed Start, the tab shown
+   *  again) cannot start a second poll loop; the running one schedules the next read. */
+  let ticking = false;
   let replanning: Promise<void> | null = null;
   /** Spool checks asked for and not answered yet (Start print stays off meanwhile). */
   let pending = 0;
@@ -155,7 +203,15 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
     document.removeEventListener("visibilitychange", onVisible);
   };
 
+  /** A panel replaced by another one (or whose box left the page) does nothing more: its late answers must not
+   *  redraw, nor close the spool list open in the panel now on screen (`closeSlotPicker` is page-wide). */
+  const inert = (): boolean => stopped || !panel.isConnected;
+  /** The nozzle switches for plan `m`: the source can slice again and the plan names the sliced nozzles. */
+  const canRenozzle = (m: PrintMapping): boolean => !!src.renozzle && (src.nozzlesKnown?.(m) ?? true);
+  const readSig = (now: AmsSlot[]): string => traySignature(now, src.plate?.() ?? null);
+
   const render = (): void => {
+    if (inert()) return;
     closeSlotPicker();
     const m = mapping;
     if (!m) return;
@@ -164,7 +220,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       row.setAttribute("role", "listitem");
       const what = el("span", "pc-fil");
       what.append(swatch(f.colour, String(f.filament)),
-        el("span", "", `${f.type}${f.nozzle && !(src.renozzle && nozzleNumber(f.nozzle)) ? ` · ${f.nozzle} nozzle` : ""} prints from`));
+        el("span", "", `${f.type}${f.nozzle && !(canRenozzle(m) && nozzleNumber(f.nozzle)) ? ` · ${f.nozzle} nozzle` : ""} prints from`));
       const current = f.tray?.tray_id;
       const picker = slotPicker({
         choices: trayChoices(trays, f, current),
@@ -187,7 +243,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       row.append(what, verdict, picker);
       const lines = el("div", "pc-lines");
       const nz = nozzleNumber(f.nozzle);
-      if (src.renozzle && nz !== null) lines.append(nozzleSwitch(m, f.filament, nz));
+      if (canRenozzle(m) && nz !== null) lines.append(nozzleSwitch(m, f.filament, nz));
       const note = src.note?.(f.filament);
       if (note) lines.append(el("div", "muted", note));
       for (const e of f.errors) lines.append(el("div", "err", `✗ ${e}`));
@@ -229,7 +285,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   /** Who chose the nozzles, with a way back to Bambu's choice. */
   const showNozzleInfo = (): void => {
     const twoNozzles = mapping?.filaments.some((f) => nozzleNumber(f.nozzle) !== null) ?? false;
-    if (!src.renozzle || !twoNozzles) {
+    if (!mapping || !canRenozzle(mapping) || !twoNozzles) {
       // e.g. "Update beambam to choose each filament's nozzle here." (an older daemon)
       nozzleInfo.replaceChildren(...(twoNozzles ? notes.map((n) => el("div", "muted", n)) : []));
       return;
@@ -300,25 +356,32 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
 
   /** Read the spools; re-check the plan when they changed. Runs every `pollMs` while visible. */
   const tick = async (): Promise<void> => {
+    if (ticking) return;                  // the read in flight schedules the next one
+    if (timer !== null) clearTimeout(timer);
     timer = null;
     if (stopped) return;
-    if (!box.isConnected || !box.contains(panel)) { stop(); return; }
-    // An open spool list or a print being sent: read again later rather than redraw under the finger.
-    if (!document.hidden && !starting && !reslicing && !document.querySelector(".slot-list")) {
-      try {
-        const now = await src.trays();
-        if (stopped) return;
-        const sig = traySignature(now);
-        const changed = traySig !== "" && sig !== traySig;
-        trays = now;
-        traySig = sig;
-        if (changed) await replan(`The printer's spools changed at ${clock(new Date())}: checked again.`);
-        else sync.textContent = `Spools read from the printer at ${clock(new Date())} (every ${Math.round(src.pollMs / 1000)} s).`;
-      } catch (e) {
-        if (!stopped) sync.textContent = `Could not read the printer's spools: ${(e as Error).message}`;
+    if (inert()) { stop(); return; }
+    ticking = true;
+    try {
+      // An open spool list or a print being sent: read again later rather than redraw under the finger.
+      if (!document.hidden && !starting && !reslicing && !document.querySelector(".slot-list")) {
+        try {
+          const now = await src.trays();
+          if (inert()) return;
+          const sig = readSig(now);
+          const changed = traySig !== "" && sig !== traySig;
+          trays = now;
+          traySig = sig;
+          if (changed) await replan(`The printer's spools or plate changed at ${clock(new Date())}: checked again.`);
+          else sync.textContent = `Spools read from the printer at ${clock(new Date())} (every ${Math.round(src.pollMs / 1000)} s).`;
+        } catch (e) {
+          if (!inert()) sync.textContent = `Could not read the printer's spools: ${(e as Error).message}`;
+        }
       }
+    } finally {
+      ticking = false;
     }
-    if (!stopped && !document.hidden) timer = window.setTimeout(() => void tick(), src.pollMs);
+    if (!stopped && !document.hidden && timer === null) timer = window.setTimeout(() => void tick(), src.pollMs);
   };
   const onVisible = (): void => {
     if (!document.hidden && timer === null && !stopped) void tick();
@@ -342,11 +405,15 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       status.textContent = last ? `Started: ${last}.` : "Started.";
       stop();
     } catch (e) {
+      if (inert()) return;
       status.textContent = (e as Error).message;
       starting = false;
       cancelBtn.disabled = false;
       render();
-      if (timer === null && !stopped) void tick();
+      // Check again: beambam may have refused because the plan changed since it was shown (its 409), and Start
+      // must not stay on the plan it refused. Then resume the spool reads (single-flight: no second loop).
+      void replan("");
+      void tick();
     }
   });
   cancelBtn.addEventListener("click", () => {
@@ -358,15 +425,18 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   sync.textContent = "Reading the printer's spools…";
   startBtn.disabled = true;
   void (async () => {
+    ticking = true;                       // the first read: a kick meanwhile must not start a second loop
     try {
       trays = await src.trays();
-      traySig = traySignature(trays);
+      traySig = readSig(trays);
       sync.textContent = `Spools read from the printer at ${clock(new Date())} (every ${Math.round(src.pollMs / 1000)} s).`;
     } catch (e) {
       sync.textContent = `Could not read the printer's spools: ${(e as Error).message}`;
+    } finally {
+      ticking = false;
     }
     await replan("");
-    if (!stopped) timer = window.setTimeout(() => void tick(), src.pollMs);
+    if (!stopped && timer === null) timer = window.setTimeout(() => void tick(), src.pollMs);
   })();
   return stop;
 }

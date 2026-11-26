@@ -202,3 +202,101 @@ describe("spool checks in a DOM", () => {
     expect(box.querySelectorAll(".pc-item").length).toBe(2);
   });
 });
+
+/* The 2026-11-26 audit, findings 16, 18 and 21: nozzle switches only when the plan names the sliced nozzles, one
+ * poll loop, inert orphaned panels, and the plate in what re-checks a plan. */
+describe("poll loop and orphaned panels in a DOM", () => {
+  test("a failed Start does not start a second poll loop, and checks the plan again", async () => {
+    const { openPrintConfirm } = await import("./printconfirm");
+    const box = document.createElement("div");
+    document.body.append(box);
+    let reads = 0;
+    let plans = 0;
+    let gate: ReturnType<typeof later<AmsSlot[]>> | null = null;
+    const src: ConfirmSource = {
+      pollMs: 30,
+      plan: async (slots) => { plans++; return planFor(slots ?? [4, 7]); },
+      trays: async () => { reads++; return gate ? gate.promise : auditTrays; },
+      start: async () => { throw new Error("The spools, the plate or the file changed since this check"); },
+    };
+    const stop = openPrintConfirm(box, src, [4, 7], ["file A"]);
+    await wait(5);
+    // A spool read hangs (the local `beambam status` takes seconds); Start fails meanwhile.
+    gate = later<AmsSlot[]>();
+    await wait(40);                                  // the poll's tick is now awaiting the read
+    const plansBefore = plans;
+    button(box, "Start print").click();
+    await wait(5);
+    expect(plans).toBe(plansBefore + 1);             // checked again after the refusal
+    const pending = gate;
+    gate = null;
+    pending.resolve(auditTrays);
+    reads = 0;
+    await wait(100);                                 // ~3 poll periods
+    stop();
+    // One loop reads about every 30 ms; two would read twice as often.
+    expect(reads).toBeGreaterThan(0);
+    expect(reads).toBeLessThanOrEqual(4);
+  });
+
+  test("an orphaned panel's late answer does not close the spool list open in the new one", async () => {
+    const { openPrintConfirm } = await import("./printconfirm");
+    const page = document.createElement("div");
+    document.body.append(page);
+    const boxA = document.createElement("div");
+    page.append(boxA);
+    const sending = later<string>();
+    const src: ConfirmSource = {
+      pollMs: 60_000,
+      plan: async (slots) => planFor(slots ?? [4, 7]),
+      trays: async () => auditTrays,
+      start: () => sending.promise,
+    };
+    openPrintConfirm(boxA, src, [4, 7], ["file A"]);
+    await wait(5);
+    button(boxA, "Start print").click();             // sending...
+    await wait();
+    // The slice went stale meanwhile: its output (and this panel) left the page; a new slice's panel opens.
+    const boxB = document.createElement("div");
+    page.replaceChildren(boxB);
+    const stopNew = openPrintConfirm(boxB, { ...src, start: async () => "accepted" }, [4, 7], ["file B"]);
+    await wait(5);
+    (boxB.querySelector(".slot-picker") as HTMLButtonElement).click();
+    expect(document.querySelector(".slot-list")).not.toBeNull();
+    sending.reject(new Error("beambam refused the print"));   // the orphaned panel's late answer
+    await wait(5);
+    expect(document.querySelector(".slot-list")).not.toBeNull();
+    (document.querySelector(".slot-opt") as HTMLElement | null)?.click();
+    stopNew();
+  });
+
+  test("no nozzle switches when the plan does not name the sliced nozzles", async () => {
+    const p = await open({ renozzle: async () => ["file B"], nozzlesKnown: () => false },
+      ["Update beambam to choose each filament's nozzle here."]);
+    expect(p.box.querySelector(".pc-nozzle")).toBeNull();
+    expect(panelText(p.box)).toContain("Update beambam");
+    expect(panelText(p.box)).toContain("right nozzle");
+    p.stop();
+  });
+
+  test("a plate change on the printer checks the plan again", async () => {
+    const { openPrintConfirm } = await import("./printconfirm");
+    const box = document.createElement("div");
+    document.body.append(box);
+    let plate = "P0301";
+    let plans = 0;
+    const stop = openPrintConfirm(box, {
+      pollMs: 20,
+      plan: async (slots) => { plans++; return planFor(slots ?? [4, 7]); },
+      trays: async () => auditTrays,
+      plate: () => plate,
+      start: async () => "accepted",
+    }, [4, 7], ["file A"]);
+    await wait(50);
+    const before = plans;
+    plate = "P0201";
+    await wait(50);
+    stop();
+    expect(plans).toBe(before + 1);                  // once: the next reads see the same plate
+  });
+});

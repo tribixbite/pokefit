@@ -364,13 +364,36 @@ def print_file_summary(path: Path) -> dict[str, Any]:
     import zipfile
     with zipfile.ZipFile(path) as z:
         ps = json.loads(z.read("Metadata/project_settings.config"))
+        sliced = _sliced_nozzles(z)
     bed = str(ps.get("curr_bed_type", ""))
     temps = ps.get(f"{PLATE_KEYS.get(bed, '')}_plate_temp_initial_layer") or []
     names, types, cols = (list(ps.get(k) or []) for k in ("filament_settings_id", "filament_type", "filament_colour"))
     return {"plate": bed, "filaments": [
         {"filament": i + 1, "preset": names[i] if i < len(names) else "", "type": types[i] if i < len(types) else "",
-         "colour": cols[i] if i < len(cols) else "", "bed_temp": temps[i] if i < len(temps) else ""}
+         "colour": cols[i] if i < len(cols) else "", "bed_temp": temps[i] if i < len(temps) else "",
+         "nozzle": sliced.get(i + 1)}
         for i in range(len(types))]}
+
+
+def _sliced_nozzles(z: Any) -> dict[int, int | None]:
+    """The nozzle each filament of a sliced file was really sliced on (1 left, 2 right), from slice_info.config's
+    `<filament id group_id>` (0 = left; Bambu's own split lands there, while project_settings' `filament_map` is
+    only the request and stays all 1 under "Auto For Flush"). None for a filament on both (dynamic, "0,1") or
+    without a group; {} for a file without slice_info (not sliced by Bambu Studio)."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(z.read("Metadata/slice_info.config"))
+    except (KeyError, ET.ParseError):
+        return {}
+    out: dict[int, int | None] = {}
+    for f in root.iter("filament"):
+        try:
+            fid = int(f.get("id") or "")
+        except ValueError:
+            continue
+        group = (f.get("group_id") or "").strip()
+        out.setdefault(fid, int(group) + 1 if group.isdigit() else None)
+    return out
 
 
 ANALYZE_TIMEOUT_S = 60.0
@@ -413,6 +436,45 @@ def _check_slots(slots: list[int]) -> None:
         raise PrinterError(f"AMS slots must be 0..15, one per filament: {slots}")
 
 
+def plan_digest(plan: dict[str, Any], path: Path, slots: list[int]) -> str:
+    """A short hash of what the user confirms in a plan (beambam's `plan_digest`, computed here so the CLI's
+    `ams map`, which has none, and a remote daemon, which sees a fresh upload each time, both get a stable one):
+    the local print file (size, mtime), the slots asked for, the plate on the file and the printer, each
+    filament's nozzle and tray, the mapping arrays and every warning / error. `confirm_plan` refuses a start whose
+    plan differs, so accepting the warnings covers only the ones that were shown."""
+    import hashlib
+    try:
+        st = path.stat()
+        stamp = [st.st_size, st.st_mtime_ns]
+    except OSError:
+        stamp = []
+    key = {"stamp": stamp, "slots": list(slots), "plate": plan.get("plate"), "bed": plan.get("bed"),
+           "filaments": [[f.get("filament"), f.get("nozzle"), (f.get("tray") or {}).get("tray_id")]
+                         for f in plan.get("filaments") or []],
+           "ams_mapping": plan.get("ams_mapping"), "ams_mapping2": plan.get("ams_mapping2"),
+           "warnings": plan.get("warnings"), "errors": plan.get("errors")}
+    return hashlib.sha256(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+class PlanChanged(PrinterError):
+    """The plan made just before a start differs from the one the user confirmed (`plan` is the new one)."""
+
+    def __init__(self, plan: dict[str, Any]):
+        super().__init__("the spools, the plate or the file changed since the plan you confirmed: check the new plan")
+        self.plan = plan
+
+
+def confirm_plan(path: Path, slots: list[int], digest: str, timeout: float = TIMEOUT_S) -> dict[str, Any]:
+    """Plan `path` again just before starting it and return that plan, or raise `PlanChanged` when its digest is
+    not `digest` (the plan on the user's screen when they pressed Start print). Reads the printer, changes
+    nothing. What is left open: a change in the seconds between this plan and beambam starting the print, which
+    beambam's own check at start covers for errors (and, through a local daemon, `beambam_digest` for all of it)."""
+    now = print_plan(path, slots, timeout=timeout)
+    if now.get("digest") != digest:
+        raise PlanChanged(now)
+    return now
+
+
 def print_plan(path: Path, slots: list[int], timeout: float = TIMEOUT_S) -> dict[str, Any]:
     """beambam's filament -> tray plan for printing `path` with `slots` against the live AMS (`ams map --json`
     or the daemon's `/print/plan`). Reads the printer, changes nothing. The dict has `filaments` (each with
@@ -447,20 +509,31 @@ def print_plan(path: Path, slots: list[int], timeout: float = TIMEOUT_S) -> dict
                           for e in f.get("errors") or []]
         plan["warnings"] = [f"filament {f.get('filament')}: {w}" for f in plan.get("filaments") or []
                             for w in f.get("warnings") or []]
+    # The daemon's own digest names the file path it read: stable for a daemon on this machine (the same path),
+    # so `send_print` can hand it back for the daemon's check at start; a remote one reads a new upload each time.
+    if isinstance(plan.get("digest"), str) and beambam_url() and _daemon_is_local():
+        plan["beambam_digest"] = plan["digest"]
+    else:
+        plan.pop("beambam_digest", None)
+    plan["digest"] = plan_digest(plan, path, slots)
     return plan
 
 
 def send_print(path: Path, slots: list[int], timeout: float = PRINT_TIMEOUT_S, *,
-               accept_warnings: bool = False) -> str:
+               accept_warnings: bool = False, beambam_digest: str | None = None) -> str:
     """Upload `path` (a sliced .gcode.3mf) to the printer and start it, filament i from AMS slot slots[i]
     (`beambam print <file> --slot a,b,...`, or the daemon's `POST /print`). CHANGES THE PRINTER: call only on
     the user's explicit action. beambam re-checks each slot's spool against the file: errors (empty slot,
     wrong material) always refuse; warnings (colour, brand, profile) refuse unless `accept_warnings` — pass
-    it only when the user was shown `print_plan`'s warnings before pressing "Start print"."""
+    it only when the user was shown `print_plan`'s warnings before pressing "Start print". `beambam_digest`
+    (a local daemon's, from `print_plan`): the daemon starts only that plan, refusing (409) a changed one."""
     _check_slots(slots)
     if beambam_url():
-        reply = _daemon("POST", "/print", {"file": _daemon_file(path), "slot": slots, "confirm": True,
-                                           "accept_warnings": accept_warnings}, timeout=TIMEOUT_S)
+        req: dict[str, Any] = {"file": _daemon_file(path), "slot": slots, "confirm": True,
+                               "accept_warnings": accept_warnings}
+        if beambam_digest:
+            req["plan_digest"] = beambam_digest
+        reply = _daemon("POST", "/print", req, timeout=TIMEOUT_S)
         poll = str(reply.get("poll") or "")
         deadline = time.monotonic() + timeout
         while poll:

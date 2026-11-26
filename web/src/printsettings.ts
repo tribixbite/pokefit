@@ -3,7 +3,7 @@
  * `brim`, applied by `print_overrides` to every slice and export). "project's" (null) keeps the reference project's
  * value, shown beside it when the engine reported it (`Config.print_defaults`).
  */
-import type { BrimType, Config, Params, SupportMode } from "./types";
+import type { BrimType, Config, Params, PrintDefaults, SupportMode } from "./types";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -14,12 +14,18 @@ export interface PrintSettingsHost {
   changed(reanalyse: boolean): void;
 }
 
+/** The "project's" values in effect: the project's own, or with the imported process preset chosen
+ *  (`Params.process`) applied, which can bring another layer height, walls, infill or line widths. */
+export function defaultsFor(p: Params, cfg: Config | null): PrintDefaults | undefined {
+  return (p.process ? cfg?.process_defaults?.[p.process] : undefined) ?? cfg?.print_defaults;
+}
+
 const BRIM_NAMES: Record<string, string> = { auto_brim: "auto", outer_only: "outside only", no_brim: "none" };
 const SUPPORT_NAMES: Record<SupportMode, string> = { auto: "supports where needed", plate: "supports from the plate", off: "no supports" };
 
 /** "supports where needed · 0.16 mm · 2 walls · 15 % infill" for the closed section's summary. */
 export function settingsSummary(p: Params, cfg: Config | null): string {
-  const d = cfg?.print_defaults;
+  const d = defaultsFor(p, cfg);
   const lh = p.layer_height ?? d?.layer_height;
   const walls = p.wall_loops ?? d?.wall_loops;
   const infill = p.infill ?? d?.infill;
@@ -35,8 +41,8 @@ export function settingsSummary(p: Params, cfg: Config | null): string {
 }
 
 /** Label each select's "project's" option with the project's value. */
-function labelDefaults(cfg: Config | null): void {
-  const d = cfg?.print_defaults;
+function labelDefaults(p: Params, cfg: Config | null): void {
+  const d = defaultsFor(p, cfg);
   const set = (id: string, v: string | null): void => {
     const o = $<HTMLSelectElement>(id).querySelector<HTMLOptionElement>('option[value=""]');
     if (o) o.textContent = v ? `project's (${v})` : "project's";
@@ -57,7 +63,7 @@ function labelDefaults(cfg: Config | null): void {
 
 /** Under the controls: what a layer as tall as the project's narrowest line does to those lines. */
 function layerNote(p: Params, cfg: Config | null): void {
-  const thin = cfg?.print_defaults?.min_line_width ?? null;
+  const thin = defaultsFor(p, cfg)?.min_line_width ?? null;
   const lh = p.layer_height;
   const note = $("layerNote");
   note.hidden = !(thin !== null && lh != null && lh >= thin);
@@ -76,7 +82,7 @@ function numberValue(sel: HTMLSelectElement, v: number | null | undefined): stri
 
 /** Show `p` in the controls. */
 export function showPrintSettings(p: Params, cfg: Config | null): void {
-  labelDefaults(cfg);
+  labelDefaults(p, cfg);
   $<HTMLSelectElement>("supportSelect").value = p.supports ?? "auto";
   for (const [id, v] of [["layerSelect", p.layer_height], ["wallSelect", p.wall_loops], ["infillSelect", p.infill]] as const) {
     const sel = $<HTMLSelectElement>(id);

@@ -124,3 +124,52 @@ def test_reference_project_sets_slots(base_url: str, tmp_path: Path) -> None:
         assert code == 400
     finally:
         server._reference, server._reference_name = None, ""      # module state: do not leak into other tests
+
+
+def test_start_print_refuses_a_plan_that_changed_since_it_was_shown(base_url: str,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    # The page sends the digest of the plan on screen; the server plans again just before the start, so accepting
+    # beambam's warnings covers only the ones the user saw. No printer: beambam is faked.
+    import zipfile
+    from pokefit import printer
+    d = server.OUT_DIR / "_test_digest"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "fig.gcode.3mf"
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("Metadata/project_settings.config", json.dumps({
+            "curr_bed_type": "Supertack Plate", "filament_type": ["PLA"], "filament_colour": ["#FFFFFF"],
+            "filament_settings_id": ["Generic PLA"]}))
+    plans = [{"filaments": [{"filament": 1, "nozzle": "left", "tray": {"tray_id": 3}}], "errors": [],
+              "warnings": ["filament 1: colour"]}]
+
+    def plan(path: Path, slots: list[int], timeout: float = 0) -> dict[str, Any]:
+        p = json.loads(json.dumps(plans[-1]))
+        p["digest"] = printer.plan_digest(p, path, slots)
+        return p
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(printer, "print_plan", plan)
+    monkeypatch.setattr(server, "print_plan", plan)
+    monkeypatch.setattr(server, "print_file_check", lambda p: {})
+    monkeypatch.setattr(server, "send_print", lambda *a, **k: sent.append(k) or "accepted")
+    rel = "_test_digest/fig.gcode.3mf"
+    try:
+        code, prev = _post(base_url, "/api/printer/print", {"file": rel, "slots": [3]})
+        assert code == 200, prev
+        digest = prev["mapping"]["digest"]
+        start = {"file": rel, "slots": [3], "confirm": True, "accept_warnings": True}
+        code, body = _post(base_url, "/api/printer/print", start)
+        assert code == 400 and "plan_digest" in body["error"]
+        plans.append({**plans[0], "warnings": [*plans[0]["warnings"], "the printer has a Cool Plate"]})
+        code, body = _post(base_url, "/api/printer/print", {**start, "plan_digest": digest})
+        assert code == 409 and "changed since this check" in body["error"] and not sent
+        plans.pop()
+        code, body = _post(base_url, "/api/printer/print", {**start, "plan_digest": digest})
+        assert code == 200 and body["job"]
+        for _ in range(100):
+            if sent:
+                break
+            time.sleep(0.02)
+        assert sent and sent[0]["accept_warnings"] is True
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)

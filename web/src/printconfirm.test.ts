@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { nozzleNumber, nozzlesWith, slotsFromPlan, trayChoices, traySignature } from "./printconfirm";
+import { nozzleNumber, nozzlesWith, planNamesSlicedNozzles, remapFilamentMap, slotsFromPlan, trayChoices,
+  traySignature } from "./printconfirm";
 import type { AmsSlot, PrintMapping } from "./types";
 
 const tray = (slot: number, label: string, type: string, colour: string, name = ""): AmsSlot =>
@@ -18,6 +19,34 @@ describe("print confirm", () => {
     expect(traySignature(a)).toBe(traySignature([tray(4, "B1", "PETG", "#F72323"), tray(0, "A1", "PLA", "#FFFFFF")]));
     expect(traySignature(a)).not.toBe(traySignature([tray(0, "A1", "PLA", "#FFFFFF"), tray(4, "B1", "PLA", "#F72323")]));
     expect(traySignature(a)).not.toBe(traySignature([tray(0, "A1", "PLA", "#FFFFFF")]));
+  });
+
+  test("a plate change changes the signature too", () => {
+    const a = [tray(0, "A1", "PLA", "#FFFFFF")];
+    expect(traySignature(a, "P0301")).toBe(traySignature(a, "P0301"));
+    expect(traySignature(a, "P0301")).not.toBe(traySignature(a, "P0201"));
+    expect(traySignature(a)).not.toBe(traySignature(a, "P0301"));
+  });
+
+  test("the plan vouches for the sliced nozzles only when it matches the file's", () => {
+    const m = (n1: string, n2: string): PrintMapping =>
+      ({ ...mapping(4, 7), filaments: mapping(4, 7).filaments.map((f, i) => ({ ...f, nozzle: i ? n2 : n1 })) });
+    // Bambu put filament 2 on the right; an older beambam reports the map asked for (all left).
+    expect(planNamesSlicedNozzles(m("left", "left"), [{ filament: 1, nozzle: 1 }, { filament: 2, nozzle: 2 }])).toBe(false);
+    expect(planNamesSlicedNozzles(m("left", "right"), [{ filament: 1, nozzle: 1 }, { filament: 2, nozzle: 2 }])).toBe(true);
+    // A file whose nozzles are unknown cannot vouch; one nozzle ("-") or "both" needs nothing.
+    expect(planNamesSlicedNozzles(m("left", "right"), [{ filament: 1, nozzle: 1 }, { filament: 2, nozzle: null }])).toBe(false);
+    expect(planNamesSlicedNozzles(m("-", "both"), [])).toBe(true);
+  });
+
+  test("a manual colour -> slot choice stays on its tray across a new reading of the spools", () => {
+    const before = [tray(0, "A1", "PLA", "#FFFFFF"), tray(1, "A2", "PLA", "#000000"), tray(4, "B1", "PETG", "#F72323")];
+    // A2 ran out: B1 moves from position 3 to 2; the choice of A2 has no tray left; a "new slot" keeps its distance.
+    const after = [tray(0, "A1", "PLA", "#FFFFFF"), tray(4, "B1", "PETG", "#F72323")];
+    expect(remapFilamentMap({ "1": 3, "2": 2, "3": 4 }, before, after)).toEqual({ "1": 2, "3": 3 });
+    expect(remapFilamentMap({ "2": 2 }, before, after)).toBeNull();
+    expect(remapFilamentMap(null, before, after)).toBeNull();
+    expect(remapFilamentMap({ "1": 1 }, before, before)).toEqual({ "1": 1 });
   });
 
   test("trays come from the plan, or none while a filament has no spool", () => {

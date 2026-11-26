@@ -113,7 +113,10 @@ the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beamba
 
 The site probes nothing until the user connects: probing 127.0.0.1 for every visitor would show them Chrome's
 prompt. With beambam's "camera" capability the Printer card shows the daemon's camera relay (GET /camera.mjpeg)
-there too; without it, status only.
+there too, read with fetch (`web/src/mjpeg.ts`, a port of beambam's site reader) so it carries the token and
+Local Network Access; without it, status only. A daemon on another machine needs `--auth-token` (beambam refuses a
+LAN bind without one): the Print card asks for it when the address is not this device, keeps it with the link in
+this browser, and sends it on every call (`Authorization: Bearer`).
 
 ## Next steps (need the user / the printer)
 

@@ -119,10 +119,12 @@ export function viaDaemon(): boolean {
 
 const linked = (cfg: Config): Config => ({ ...cfg, printer_link: true, beambam: link.url });
 
-/** Connect to the beambam daemon at `url`: read the printer's spools and match colours to them. */
-export async function connectBeambam(url: string): Promise<Config> {
+/** Connect to the beambam daemon at `url` (with its access token, for one on another machine): read the
+ * printer's spools and match colours to them. */
+export async function connectBeambam(url: string, token = ""): Promise<Config> {
   if (mode !== "browser") throw new Error("The local version reaches beambam itself.");
-  const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true };
+  const t = token.trim();
+  const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true, ...(t ? { token: t } : {}) };
   const st = await bb.readState(next);
   const cfg = json<Config>(await call("setPrinter", [JSON.stringify(st)]));
   daemonCaps = await bb.capabilities(next);
@@ -133,9 +135,12 @@ export async function connectBeambam(url: string): Promise<Config> {
 
 /** The connected daemon's `/healthz` capabilities (beambam.ts `capabilities`). */
 let daemonCaps: string[] = [];
-/** Why the live view stopped, in beambam's words (null: a frame comes through, try again). Local version: null. */
-export async function cameraProblem(): Promise<string | null> {
-  return viaDaemon() ? bb.cameraProblem(link) : null;
+
+/** The live view through beambam (the site, connected): its MJPEG response, for `readMjpeg`. */
+export async function daemonCamera(signal: AbortSignal): Promise<Response> {
+  if (!viaDaemon()) throw new Error("Watching the printer needs beambam: connect to it under Print.");
+  if (!daemonCan("camera")) throw new Error("this beambam cannot show the camera: update it and start the daemon with --camera");
+  return bb.camera(link, signal);
 }
 
 export function daemonCan(capability: string): boolean {
@@ -144,7 +149,7 @@ export function daemonCan(capability: string): boolean {
 
 /** Stop using the daemon (and the spools read from it). */
 export async function disconnectBeambam(): Promise<Config> {
-  link = { ...link, enabled: false };
+  link = { url: link.url, enabled: false };           // the token is forgotten with the link
   bb.writeLink(browserStore(), link);
   return json<Config>(await call("setPrinter", [""]));
 }
@@ -388,15 +393,11 @@ export async function printerStatus(): Promise<PrintProgress> {
 }
 
 /**
- * Start (`on`) or stop the printer's live view; returns its MJPEG URL when on. Through the beambam daemon (the
- * site) it is the daemon's relay, when it has one ("camera"); the local version runs a `beambam camera` child.
+ * Local version: start (`on`) or stop the `beambam camera` child; returns its MJPEG URL when on. Through the
+ * beambam daemon (the site) the card reads the daemon's relay with `daemonCamera` instead; nothing to start here.
  */
 export async function printerCamera(on: boolean): Promise<string | null> {
-  if (viaDaemon()) {
-    if (!on) return null;                // dropping the <img> closes the stream
-    if (!daemonCan("camera")) throw new Error("this beambam cannot show the camera: update it and start the daemon with --camera");
-    return bb.cameraUrl(link);
-  }
+  if (viaDaemon()) return null;
   if (mode !== "local") throw new Error("Watching the printer needs beambam: connect to it under Print.");
   return (await postJson<{ url: string | null }>("/api/printer/camera", { on })).url;
 }
@@ -489,12 +490,14 @@ export async function printPlan(file: string, slots: number[]): Promise<PrintPla
   return postJson<PrintPlan>("/api/printer/print", { file, slots });
 }
 
-/** Upload the print file and START THE PRINT (the user's explicit "Start print"). Returns beambam's output. */
+/** Upload the print file and START THE PRINT (the user's explicit "Start print"). Returns beambam's output.
+ * `digest`: the plan the user confirmed (`PrintMapping.digest`); the server plans again just before it starts and
+ * answers 409 when that plan differs (spools, plate, file or warnings), so the OK covers only what was shown. */
 export async function startPrint(file: string, slots: number[], onTick?: (seconds: number, progress: string) => void,
-  acceptWarnings = false,
+  acceptWarnings = false, digest?: string,
 ): Promise<string> {
   if (mode !== "local") throw new Error("Printing needs the local version with beambam.");
   const { job } = await postJson<{ job: string }>("/api/printer/print",
-    { file, slots, confirm: true, accept_warnings: acceptWarnings });
+    { file, slots, confirm: true, accept_warnings: acceptWarnings, ...(digest ? { plan_digest: digest } : {}) });
   return (await waitJob<{ output: string }>(job, 1500, onTick, "the print did not start")).output;
 }

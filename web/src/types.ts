@@ -444,6 +444,17 @@ export interface Slot {
   warning?: string;
 }
 
+/** The project's own values of the Print settings (pipeline.print_defaults): the "project's (…)" choice. */
+export interface PrintDefaults {
+  layer_height: number | null;
+  wall_loops: number | null;
+  infill: number | null;
+  brim: string | null;
+  bed_type?: string | null;
+  /** The project's narrowest line (mm): a layer this tall or taller prints those lines a little wider. */
+  min_line_width?: number | null;
+}
+
 /** A filament loaded in the printer (pokefit/printer.py). */
 export interface AmsSlot {
   slot: number;
@@ -478,7 +489,9 @@ export interface PrintPlan {
   name: string;
   file: string;
   filaments: { filament: number; preset: string; type: string; colour: string; bed_temp: string; slot: number;
-    spool: AmsSlot | null }[];
+    spool: AmsSlot | null;
+    /** The nozzle the file was sliced for (slice_info group_id: 1 left, 2 right); null when not one nozzle or unknown. */
+    nozzle?: number | null }[];
   /** beambam's reading of the G-code (`beambam analyze`, file only); null with `check_error` when it failed. */
   check: PrintCheck | null;
   check_error: string;
@@ -570,10 +583,9 @@ export interface Config {
   /** The beambam daemon the site is connected to (browser engine): it slices and prints. */
   beambam?: string;
   /** The project's own layer height, walls, infill % and brim (the Print settings' "project's" choice). */
-  print_defaults?: { layer_height: number | null; wall_loops: number | null; infill: number | null; brim: string | null;
-    bed_type?: string | null;
-    /** The project's narrowest line (mm): a layer this tall or taller prints those lines a little wider. */
-    min_line_width?: number | null };
+  print_defaults?: PrintDefaults;
+  /** The same with each imported process preset applied (by name, `Params.process`): what "project's" means then. */
+  process_defaults?: Record<string, PrintDefaults>;
   /** The project's filament list against the loaded spools (pokefit projectsync.compare); null without both. */
   project_sync?: ProjectSync | null;
   /** The build plate marker the printer read (X2D device.plate.cur_id), not decoded into a type. */

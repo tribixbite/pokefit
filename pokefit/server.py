@@ -50,7 +50,7 @@ from .pipeline import (CACHE_DIR, DEFAULT_REFERENCE, ROOT, Params, Session, anal
 from .gltf import GLTF_SUFFIXES
 from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, beambam_url,
-                      print_file_check, print_plan,
+                      PlanChanged, confirm_plan, print_file_check, print_plan,
                       print_file_summary,
                       PLATE_MARKERS, plate_id, print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe, reference_settings
@@ -451,10 +451,27 @@ class Handler(BaseHTTPRequestHandler):
                         "check_error": check_error, "mapping": mapping, "mapping_error": mapping_error})
             return
         # `accept_warnings`: the page showed beambam's mapping warnings and the user still pressed Start print.
+        # `plan_digest`: the plan on screen then. It is planned again here, just before the start, and a changed
+        # plan (spools, plate, file, new warnings) is refused: the OK covers only the warnings that were shown.
         accept = body.get("accept_warnings") is True
+        digest = body.get("plan_digest")
+        if accept and not (isinstance(digest, str) and digest):
+            raise ApiError(400, "accepting beambam's warnings needs the plan they belong to (plan_digest): "
+                                "check the spools again, then Start print")
+        now: dict[str, Any] | None = None
+        if isinstance(digest, str) and digest:
+            try:
+                now = confirm_plan(f, slots, digest)
+            except PlanChanged as exc:
+                raise ApiError(409, "The spools, the plate or the file changed since this check: look at it "
+                                    "again, then Start print.") from exc
+            except PrinterError as exc:
+                raise ApiError(502, str(exc)) from exc
+        bb_digest = (now or {}).get("beambam_digest")
         jid = uuid.uuid4().hex[:10]
         _jobs[jid] = {"state": "running", "progress": "uploading to the printer and starting"}
-        self._json({"job": _start_job(lambda: {"output": send_print(f, slots, accept_warnings=accept), **summary},
+        self._json({"job": _start_job(lambda: {"output": send_print(f, slots, accept_warnings=accept,
+                                                                    beambam_digest=bb_digest), **summary},
                                       jid)})
 
     def post_load_path(self, q: dict[str, str]) -> None:

@@ -30,16 +30,49 @@ const SLICE_TIMEOUT_MS = 20 * 60_000;
 export interface Link {
   url: string;
   enabled: boolean;
+  /** The daemon's `--auth-token` (a daemon on another machine needs one), sent as `Authorization: Bearer`. */
+  token?: string;
 }
 
 export function readLink(store: PrefStore | null): Link {
   try {
     const raw = store?.getItem(KEY);
     const v = raw ? (JSON.parse(raw) as Partial<Link>) : {};
-    return { url: normaliseUrl(v.url ?? DEFAULT_URL), enabled: v.enabled === true };
+    const token = typeof v.token === "string" && v.token ? v.token : undefined;
+    return { url: normaliseUrl(v.url ?? DEFAULT_URL), enabled: v.enabled === true, ...(token ? { token } : {}) };
   } catch {
     return { url: DEFAULT_URL, enabled: false };
   }
+}
+
+/** The host is this device (no token needed, no Local Network Access "local" space). */
+export function isLoopback(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return h === "localhost" || h === "[::1]" || /^127\./.test(h);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every call's fetch options: no caching, the token when there is one, and Chrome's Local Network Access opt-in
+ * for an https page calling a LAN address (loopback is a secure origin already). Mirrors beambam's site client.
+ */
+function daemonInit(link: Link, init: RequestInit = {}): RequestInit {
+  const out: RequestInit & { targetAddressSpace?: string } = { ...init, cache: "no-store" };
+  if (!isLoopback(link.url) && typeof location !== "undefined" && location.protocol === "https:") {
+    out.targetAddressSpace = "local";
+  }
+  if (link.token) out.headers = { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${link.token}` };
+  return out;
+}
+
+/** What beambam answered 401 with, in plain words. */
+function tokenProblem(link: Link): string {
+  return link.token
+    ? `beambam at ${link.url} refused the access token: enter the --auth-token it was started with.`
+    : `beambam at ${link.url} needs its access token: enter the --auth-token it was started with.`;
 }
 
 export function writeLink(store: PrefStore | null, link: Link): void {
@@ -56,9 +89,14 @@ export function normaliseUrl(raw: string): string {
   return `${u.protocol}//${u.host}`;
 }
 
-/** The command that starts a daemon this page may use. */
+/** The command that starts a daemon this page may use. Off this device it listens on every interface with an
+ * access token (beambam refuses a non-loopback bind without one), which the page then sends. */
 export function startCommand(origin: string, url: string = DEFAULT_URL): string {
   const host = new URL(url).host;
+  if (!isLoopback(url)) {
+    const port = new URL(url).port || "8765";
+    return `beambam daemon --http 0.0.0.0:${port} --auth-token "$(openssl rand -hex 16)" --cors-origin ${origin}`;
+  }
   return `beambam daemon --http ${host} --cors-origin ${origin}`;
 }
 
@@ -76,7 +114,7 @@ async function request(link: Link, path: string, init: RequestInit = {}, timeout
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   let res: Response;
   try {
-    res = await fetch(link.url + path, { ...init, signal: ctl.signal, cache: "no-store" });
+    res = await fetch(link.url + path, { ...daemonInit(link, init), signal: ctl.signal });
   } catch (e) {
     // A refused connection, a blocked one and a CORS refusal all look the same to the page.
     const why = (e as Error).name === "AbortError" ? "no answer" : "no connection";
@@ -91,6 +129,7 @@ async function request(link: Link, path: string, init: RequestInit = {}, timeout
     body = await res.json();
   } catch { /* not JSON: reported below */ }
   const reply = (body && typeof body === "object" ? body : {}) as Json;
+  if (res.status === 401) throw new DaemonError(tokenProblem(link));
   // A plan with errors is still a plan: the panel shows why the print is refused.
   if (!res.ok && !(Array.isArray(reply.filaments) && (res.status === 409 || res.status === 422))) {
     throw new DaemonError(`beambam: ${typeof reply.error === "string" ? reply.error : `HTTP ${res.status}`}`);
@@ -106,7 +145,7 @@ const postJson = (link: Link, path: string, body: unknown, timeoutMs?: number): 
  * printer is quiet) still carries them. */
 export async function capabilities(link: Link): Promise<string[]> {
   try {
-    const res = await fetch(`${link.url}/healthz`, { cache: "no-store" });
+    const res = await fetch(`${link.url}/healthz`, daemonInit(link));
     const h = (await res.json()) as Json;
     return Array.isArray(h.capabilities) ? h.capabilities.map(String) : [];
   } catch {
@@ -115,26 +154,27 @@ export async function capabilities(link: Link): Promise<string[]> {
 }
 
 /**
- * The chamber camera, live through beambam (`GET /camera.mjpeg`, capability "camera"), for an <img>: the
- * daemon relays its camera proxy's MJPEG. `n` makes each (re)connect a new URL.
+ * Open the chamber camera's live MJPEG through beambam (`GET /camera.mjpeg`, capability "camera"); read it with
+ * `readMjpeg`. A fetch, not an <img>: it carries the token and Local Network Access like every other call, and
+ * `signal` ends it. A refusal throws in beambam's words (503: the camera proxy is down and how to start it).
  */
-export function cameraUrl(link: Link, n: number = Date.now()): string {
-  return `${link.url}/camera.mjpeg?n=${n}`;
-}
-
-/** Why the live view does not show, in beambam's words (its 503 text), or null when a frame comes through now. */
-export async function cameraProblem(link: Link): Promise<string | null> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 25_000);
+export async function camera(link: Link, signal: AbortSignal): Promise<Response> {
+  let res: Response;
   try {
-    const res = await fetch(`${link.url}/snapshot.jpg`, { signal: ctl.signal, cache: "no-store" });
-    if (res.ok) return null;
-    return (await res.text()).trim() || `beambam answered HTTP ${res.status}`;
+    res = await fetch(`${link.url}/camera.mjpeg`, { ...daemonInit(link), signal });
   } catch (e) {
-    return `beambam did not answer (${(e as Error).message})`;
-  } finally {
-    clearTimeout(timer);
+    if (signal.aborted) throw e;
+    throw new DaemonError(`beambam is not reachable at ${link.url}`, true);
   }
+  if (res.ok) return res;
+  if (res.status === 401) throw new DaemonError(tokenProblem(link));
+  const text = (await res.text().catch(() => "")).trim();
+  let said = text;
+  try {
+    const j: unknown = JSON.parse(text);
+    if (j && typeof j === "object" && typeof (j as Json).error === "string") said = String((j as Json).error);
+  } catch { /* plain text (the 503 says how to start the proxy) */ }
+  throw new DaemonError(said || `beambam answered HTTP ${res.status}`);
 }
 
 /** The printer's state report (the daemon's cached copy: milliseconds). */
@@ -166,9 +206,10 @@ export async function updateProject(link: Link, name: string, bytes: Uint8Array,
   const timer = setTimeout(() => ctl.abort(), 180_000);
   try {
     res = await fetch(`${link.url}/project/update`, {
-      method: "POST", cache: "no-store", body: bytes as BodyInit, signal: ctl.signal,
-      headers: { "Content-Type": "application/octet-stream", "X-Filename": headerName(name),
-        "X-Slice-Options": JSON.stringify(options) },
+      ...daemonInit(link, { method: "POST", body: bytes as BodyInit,
+        headers: { "Content-Type": "application/octet-stream", "X-Filename": headerName(name),
+          "X-Slice-Options": JSON.stringify(options) } }),
+      signal: ctl.signal,
     });
   } catch {
     throw new DaemonError(`beambam is not reachable at ${link.url}`, true);

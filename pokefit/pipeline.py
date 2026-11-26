@@ -984,13 +984,18 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
     notes: list[PresetNote] = []
     slots: list[dict[str, Any]] = list(filament_slots(ref)) if ref else []
     processes = [str(ref.get("print_settings_id", ""))] if ref else []
+    # The Print card's "project's (…)" values with each imported process preset applied (`Params.process`):
+    # another layer height, walls, infill or line widths than the project's own.
+    process_defaults: dict[str, dict[str, Any]] = {}
     if ref and presets is not None and presets.presets:
         merged, notes = presets.merged(ref)
         n_real = len(slots)
         from .presets import plate_problem
         slots = [{**s, "imported": i >= n_real, "warning": plate_problem(merged, i) if i >= n_real else ""}
                  for i, s in enumerate(filament_slots(merged))]
-        processes += presets.processes(ref)
+        own = presets.processes(ref)
+        processes += own
+        process_defaults = {name: print_defaults(presets.merged(ref, name)[0]) for name in own}
     ball = load_ball(DEFAULT_BALL)
     return {
         "steels": [w.to_dict() for w in CATALOGUE.values()],
@@ -1007,6 +1012,7 @@ def app_config(slicer: str | None, reference: dict | None = None, reference_name
         "printer": (ref or {}).get("printer_settings_id", ""),
         "process": (ref or {}).get("print_settings_id", ""),
         "print_defaults": print_defaults(ref),
+        "process_defaults": process_defaults,
         # The project's filament list against the loaded spools (projectsync): the UI offers to take the printer's.
         "project_sync": project_vs_printer(ref, ams),
         "slicer": slicer,
@@ -1510,7 +1516,8 @@ def _tc_estimate(parts: list[Part], object_extruder: int, colours: list[str], se
                  pinned: list[int] | None = None) -> dict[str, Any]:
     """Colour changes for these (final-mm) parts: the best nozzle split (what Bambu's Auto For Flush
     finds, within the model's error) and, on a two-nozzle printer, everything on one nozzle. `pinned`: the
-    nozzle the user gave each filament (`Params.nozzles`), which the estimate then keeps."""
+    nozzle the user gave each filament (`Params.nozzles`), which the estimate then keeps; filaments past the list
+    print on the left, as `print_overrides` writes them for the slice."""
     n = max(1, len(colours))
     lh = float(settings.get("layer_height", 0.2) or 0.2)
     first = float(settings.get("initial_layer_print_height", lh) or lh)
@@ -1518,7 +1525,7 @@ def _tc_estimate(parts: list[Part], object_extruder: int, colours: list[str], se
     nozzles = tc.nozzle_count(settings)
     allowed = None
     if pinned and nozzles >= 2:
-        allowed = [{pinned[f]} if f < len(pinned) else set(range(1, nozzles + 1)) for f in range(n)]
+        allowed = [{pinned[f] if f < len(pinned) else 1} for f in range(n)]
     flush = tc.flush_matrix(settings, n)
     best, single = tc.plan(use, flush, n_nozzles=nozzles, allowed=allowed)
     if allowed:      # the comparison stays "everything on one nozzle", not the pinned split's own floor

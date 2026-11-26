@@ -55,9 +55,14 @@ exist only on the original Windows machine (ask the user for the files).
      the site asks beambam (POST /project/update) to give each slot its spool's system preset: the browser
      engine has no Bambu profiles, so a PETG spool used to get the project's Generic PLA slot (0 → 12 of 16
      matched; now 16 of 16). Loading a project while linked no longer hides the Printer card and AMS row.
+   - 2026-11-26: a daemon on the LAN (`--http 0.0.0.0:8765 --auth-token …`) works from the site: token field,
+     sent on every call, and the camera read with fetch (an <img> cannot send the token). Checked against a
+     token daemon on the phone's LAN address: 401 explained without the token, spools + live camera with it.
    - The daemon runs from a shell on the phone and dies with Termux under memory pressure: it needs a service
      entry (operad / boot script) before the site can rely on it.
-   - TODO: re-measure `has_filament_switcher` 0 vs 1 with `--has-filament-switcher=1` (the CLI forced 0 before).
+   - 2026-11-26: beambam now slices a project for the printer's track switch when the X2D reports one (pokefit's
+     projects say 0, which drew "sliced without the Filament Track Switch" on every plan). jolteon_pokefit_60:
+     1 h 42 min with 0, 1 h 46 min with 1 (`has_filament_switcher = 1` in the G-code).
 3. **Palettes on generated figures** (the open quality gap; shapes are good). Auto = best value, capped at 2 h of colour
    changes (`toolchange.AUTO_MAX_MIN`); "Keep details" (`texture_details`, off by default) adds filaments on top of the
    auto count. Weak spots seen in the 12-figure batch (below): Pikachu's red cheeks (~1 % of the surface, close to its
