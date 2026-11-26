@@ -118,6 +118,22 @@ Local Network Access; without it, status only. A daemon on another machine needs
 LAN bind without one): the Print card asks for it when the address is not this device, keeps it with the link in
 this browser, and sends it on every call (`Authorization: Bearer`).
 
+**On a computer (anyone's, 2026-11-26).** beambam ≥ 1.9.0 slices off the phone: `POST /slice` uses the official
+Bambu Studio `beambam slicer install` downloads (CI slices with it on Linux, macOS and Windows), or an installed one.
+With [uv](https://docs.astral.sh/uv/):
+
+```bash
+uvx beambam init               # once: finds the printer, asks for its access code
+uvx beambam slicer install     # once: Bambu Studio for slicing (~200-430 MB)
+uvx beambam boo --http 127.0.0.1:8765 --cors-origin https://pokefit.party --camera
+```
+
+then Print → Connect to beambam at `127.0.0.1:8765` in Chrome or Edge (allow the local-network prompt). The
+camera needs `ffmpeg`. Start needs the printer to take beambam's commands: the key from `beambam key`, or the
+printer's Developer LAN Mode; without either, everything before Start works. To use the phone's beambam from a
+laptop instead (the phone slices), start it on the LAN with a token (the Print card shows the command for an
+address that is not this device) and enter the phone's address and the token.
+
 ## Next steps (need the user / the printer)
 
 1. Done 2026-10-19: credentials in `~/.x2d/credentials` (outside the repo); "Use my printer's AMS" reads the
