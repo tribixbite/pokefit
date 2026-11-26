@@ -1391,6 +1391,10 @@ function showDaemonPlan(session: string, current: { res: api.DaemonSliceResult }
       if (sum) sum.textContent = daemonSummary(current.res);
       return head();
     } : undefined,
+    // No signing key on this beambam? Offer Bambu Connect (its machine, the user's Bambu login) where it is
+    // installed. `current.res.file` follows a re-slice (renozzle), so the closure sends whatever is current.
+    connect: api.daemonConnectProblem() === "" ? () => api.daemonConnect(current.res.file, current.res.name) : undefined,
+    signingNote: (() => { const s = api.daemonSigning(); return s && !s.ready ? s.problem : undefined; })(),
   };
   openConfirm(src, current.res.ams_slots, head(),
     api.daemonCan("plan-sliced-nozzles") ? [] : ["Update beambam to choose each filament's nozzle here."]);

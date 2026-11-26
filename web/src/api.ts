@@ -127,8 +127,8 @@ export async function connectBeambam(url: string, token = "", onWait?: (engine: 
   if (mode !== "browser") throw new Error("The local version reaches beambam itself.");
   const t = token.trim();
   const next: bb.Link = { url: bb.normaliseUrl(url), enabled: true, ...(t ? { token: t } : {}) };
-  // Both from beambam in one round trip (`capabilities` never throws; a 401 or no report fails `readState`).
-  const [st, caps] = await Promise.all([bb.readState(next), bb.capabilities(next)]);
+  // Both from beambam in one round trip (`health` never throws; a 401 or no report fails `readState`).
+  const [st, hp] = await Promise.all([bb.readState(next), bb.health(next)]);
   const waiting = (s: string): void => {
     if (s !== "ready" && !s.startsWith("failed")) onWait?.(s);
   };
@@ -142,14 +142,14 @@ export async function connectBeambam(url: string, token = "", onWait?: (engine: 
   } finally {
     statusListeners.delete(waiting);
   }
-  daemonCaps = caps;
+  daemonHealth = hp;
   link = next;
   bb.writeLink(browserStore(), link);
   return linked(cfg);
 }
 
-/** The connected daemon's `/healthz` capabilities (beambam.ts `capabilities`). */
-let daemonCaps: string[] = [];
+/** The connected daemon's `/healthz` (capabilities, signing, Bambu Connect; beambam.ts `health`). */
+let daemonHealth: bb.Health = { capabilities: [], signing: null, bambuConnect: null };
 
 /** The live view through beambam (the site, connected): its MJPEG response, for `readMjpeg`. */
 export async function daemonCamera(signal: AbortSignal): Promise<Response> {
@@ -159,12 +159,32 @@ export async function daemonCamera(signal: AbortSignal): Promise<Response> {
 }
 
 export function daemonCan(capability: string): boolean {
-  return viaDaemon() && daemonCaps.includes(capability);
+  return viaDaemon() && daemonHealth.capabilities.includes(capability);
+}
+
+/** Whether the connected daemon can sign a print start itself (`beambam key`), or null if it does not say. When it
+ * cannot, Bambu Connect is the way to print with the user's Bambu login. */
+export function daemonSigning(): { ready: boolean; problem: string } | null {
+  return viaDaemon() ? daemonHealth.signing : null;
+}
+
+/** Whether the connected daemon can hand a file to Bambu Connect: '' when it can (installed and supported), a
+ * reason when it cannot, null from a beambam without it. */
+export function daemonConnectProblem(): string | null {
+  return viaDaemon() ? daemonHealth.bambuConnect : null;
+}
+
+/** Hand a daemon-side sliced `file` to Bambu Connect on the daemon's machine (the user's Bambu login, no signing
+ * key). Resolves with the `bambu-connect://` URL opened. */
+export function daemonConnect(file: string, name?: string): Promise<string> {
+  if (!viaDaemon()) return Promise.reject(new Error("Not connected to beambam: connect under Print first."));
+  return bb.connect(link, file, name);
 }
 
 /** Stop using the daemon (and the spools read from it). */
 export async function disconnectBeambam(): Promise<Config> {
   link = { url: link.url, enabled: false };           // the token is forgotten with the link
+  daemonHealth = { capabilities: [], signing: null, bambuConnect: null };
   bb.writeLink(browserStore(), link);
   return json<Config>(await call("setPrinter", [""]));
 }

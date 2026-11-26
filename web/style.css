@@ -447,6 +447,10 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; pad
 .print-settings .grid2 { margin-top: 6px; }
 .print-settings select { width: 100%; }
 .pc-sync { font-size: 12px; }
+/* "Send with Bambu Connect" below Start: another way to print, no signing key. */
+.pc-connect { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.btn.wide { width: 100%; }
+.ok-text { color: var(--ok); font-size: 13px; }
 /* Print card on the site: the link to beambam on this device. */
 .beambam-row { display: grid; gap: 6px; margin-bottom: 8px; }
 .beambam-row .row input { flex: 1 1 200px; min-width: 0; }

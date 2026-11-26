@@ -43,6 +43,13 @@ export interface ConfirmSource {
   nozzlesKnown?(m: PrintMapping): boolean;
   /** The build plate on the printer as last read (its marker): a change re-checks the plan like a spool change. */
   plate?(): string | null | undefined;
+  /** Hand this file to Bambu Connect (the daemon's machine, the user's Bambu login, no signing key); resolves with
+   *  the URL opened. Present only where that can work (beambam reports Bambu Connect installed). Shown below Start
+   *  as another way to print, for a beambam that cannot sign a print start itself. */
+  connect?(): Promise<string>;
+  /** Why this beambam cannot sign a print start itself (so Bambu Connect is the way): a short reason, shown as a
+   *  note above the Bambu Connect button. Absent when it can sign, or does not say. */
+  signingNote?: string;
 }
 
 /** The nozzle number (1 = left, 2 = right) beambam's plan names, or null ("-": one nozzle; "both": either). */
@@ -150,6 +157,47 @@ function swatch(colour: string, text = ""): HTMLSpanElement {
 }
 
 /**
+ * The "Send with Bambu Connect" way to print, below Start: for a beambam that cannot sign a print start itself but
+ * can hand the sliced file to Bambu Connect (Bambu's own bridge app on its machine), which prints with the user's
+ * Bambu login — no signing key. Nothing is added when the source offers neither (the usual case, and the local
+ * server).
+ */
+export function appendConnect(panel: HTMLElement, src: ConfirmSource): void {
+  if (!src.connect && !src.signingNote) return;
+  const box = el("div", "pc-connect");
+  if (src.signingNote) {
+    box.append(el("div", "muted", `This beambam cannot sign a print start yet (${src.signingNote}).` +
+      (src.connect ? " Bambu Connect can send it with your Bambu login instead:" : "")));
+  }
+  if (src.connect) {
+    const send = src.connect;
+    const btn = el("button", "btn wide", "Send with Bambu Connect…");
+    btn.type = "button";
+    const msg = el("div", "muted");
+    msg.setAttribute("aria-live", "polite");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Opening Bambu Connect…";
+      msg.className = "muted";
+      msg.textContent = "";
+      try {
+        await send();
+        msg.className = "ok-text";
+        msg.textContent = "Opened in Bambu Connect: choose the printer and filaments there, then press Send.";
+      } catch (e) {
+        msg.className = "err";
+        msg.textContent = (e as Error).message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Send with Bambu Connect…";
+      }
+    });
+    box.append(btn, msg);
+  }
+  panel.append(box);
+}
+
+/**
  * Fill `box` with the confirm panel. `header`: what the file is (name, time, weight, beambam's file check).
  * `initial`: the trays the print was sliced for, or null to start from beambam's choice. Returns a stop
  * function (also called by Cancel, and when `box` leaves the page).
@@ -194,6 +242,7 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
   buttons.append(startBtn, cancelBtn);
   panel.append(head, nozzleInfo, sync, rows, check,
     el("div", "muted", "Check the plate is clean and the spools are right: this starts the printer."), buttons, status);
+  appendConnect(panel, src);
   box.replaceChildren(panel);
 
   const stop = (): void => {

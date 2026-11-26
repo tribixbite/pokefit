@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { DaemonError, engineWaitText, headerName, normaliseUrl, plan, print, readLink, slice, startCommand, writeLink } from "./beambam";
+import { connect, DaemonError, engineWaitText, headerName, health, normaliseUrl, plan, print, readLink, signingOf, slice, startCommand, writeLink } from "./beambam";
 import type { PrefStore } from "./prefs";
 
 const store = (): PrefStore & { data: Map<string, string> } => {
@@ -149,5 +149,50 @@ describe("camera and project sync", () => {
     expect(JSON.parse(sent["X-Slice-Options"])).toEqual({ spools, bed_type: "Supertack Plate" });
     fakeDaemon({ "/project/update": () => [400, { error: "jolteon.3mf has no print settings" }] });
     await expect(updateProject(link, "jolteon.3mf", new Uint8Array([1]), spools)).rejects.toThrow("no print settings");
+  });
+});
+
+describe("health and Bambu Connect", () => {
+  test("signingOf reads {ready, problem}; null for anything malformed", () => {
+    expect(signingOf({ ready: true, problem: "" })).toEqual({ ready: true, problem: "" });
+    expect(signingOf({ ready: false, problem: "no key on this beambam" })).toEqual({ ready: false, problem: "no key on this beambam" });
+    expect(signingOf({ ready: false })).toEqual({ ready: false, problem: "" });
+    expect(signingOf({ problem: "x" })).toBeNull();      // no boolean ready
+    expect(signingOf(null)).toBeNull();
+    expect(signingOf("nope")).toBeNull();
+  });
+
+  test("health carries capabilities, signing and the Bambu Connect reason", async () => {
+    fakeDaemon({ "/healthz": () => [200, {
+      capabilities: ["slice", "bambu-connect"], signing: { ready: false, problem: "run `beambam key`" }, bambu_connect: "",
+    }] });
+    expect(await health(link)).toEqual({
+      capabilities: ["slice", "bambu-connect"], signing: { ready: false, problem: "run `beambam key`" }, bambuConnect: "",
+    });
+  });
+
+  test("a 503 (printer quiet) still carries the health fields", async () => {
+    fakeDaemon({ "/healthz": () => [503, { capabilities: ["slice"], bambu_connect: "Bambu Connect is not installed" }] });
+    const h = await health(link);
+    expect(h.capabilities).toEqual(["slice"]);
+    expect(h.bambuConnect).toBe("Bambu Connect is not installed");
+    expect(h.signing).toBeNull();
+  });
+
+  test("an older daemon (no signing / bambu_connect) gives null, unreachable gives the empty defaults", async () => {
+    fakeDaemon({ "/healthz": () => [200, { capabilities: ["slice"] }] });
+    expect(await health(link)).toEqual({ capabilities: ["slice"], signing: null, bambuConnect: null });
+    globalThis.fetch = (async () => { throw new Error("connection refused"); }) as unknown as typeof fetch;
+    expect(await health(link)).toEqual({ capabilities: [], signing: null, bambuConnect: null });
+  });
+
+  test("connect posts the file to /connect and returns the URL opened", async () => {
+    const url = "bambu-connect://import-file?path=%2Ftmp%2Fcube.gcode.3mf&name=cube&version=1.0.0";
+    const d = fakeDaemon({ "/connect": () => [200, { ok: true, url }] });
+    expect(await connect(link, "/tmp/cube.gcode.3mf", "cube")).toBe(url);
+    expect(d.seen).toEqual([["POST", "/connect", { file: "/tmp/cube.gcode.3mf", name: "cube" }]]);
+    // A daemon that cannot hand off answers 503 with the reason.
+    fakeDaemon({ "/connect": () => [503, { error: "Bambu Connect has no build for this system (Windows and macOS only)" }] });
+    await expect(connect(link, "/tmp/cube.gcode.3mf")).rejects.toThrow("Windows and macOS only");
   });
 });

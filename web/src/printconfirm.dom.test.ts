@@ -299,4 +299,55 @@ describe("poll loop and orphaned panels in a DOM", () => {
     stop();
     expect(plans).toBe(before + 1);                  // once: the next reads see the same plate
   });
+
+  const connectButton = (box: HTMLElement) =>
+    [...box.querySelectorAll("button")].find((b) => (b.textContent ?? "").startsWith("Send with Bambu Connect")) as
+      HTMLButtonElement | undefined;
+
+  test("no Bambu Connect section without a connect source (the usual case)", async () => {
+    const p = await open();
+    expect(connectButton(p.box)).toBeUndefined();
+    expect(p.box.querySelector(".pc-connect")).toBeNull();
+    p.stop();
+  });
+
+  test("Send with Bambu Connect hands the file over and reports the outcome", async () => {
+    const calls: number[] = [];
+    const p = await open({
+      connect: async () => { calls.push(1); return "bambu-connect://import-file?path=%2Ftmp%2Fa.gcode.3mf"; },
+      signingNote: "no signing key on this beambam yet",
+    });
+    expect(panelText(p.box)).toContain("cannot sign a print start yet (no signing key on this beambam yet)");
+    expect(panelText(p.box)).toContain("Bambu Connect can send it with your Bambu login instead");
+    const btn = connectButton(p.box)!;
+    expect(btn).toBeDefined();
+    btn.click();
+    await tick(5);
+    expect(calls).toEqual([1]);
+    expect(panelText(p.box)).toContain("Opened in Bambu Connect");
+    expect(btn.disabled).toBe(false);                 // usable again
+    p.stop();
+  });
+
+  test("a Bambu Connect failure is shown, the button stays usable", async () => {
+    const p = await open({
+      connect: async () => { throw new Error("beambam connect: Bambu Connect is not installed"); },
+    });
+    // No signingNote: the button still appears (beambam offered it), just no note above it.
+    expect(panelText(p.box)).not.toContain("cannot sign a print start");
+    const btn = connectButton(p.box)!;
+    btn.click();
+    await tick(5);
+    expect(panelText(p.box)).toContain("Bambu Connect is not installed");
+    expect(btn.disabled).toBe(false);
+    p.stop();
+  });
+
+  test("only the note shows when Bambu Connect is not available (no connect source)", async () => {
+    const p = await open({ signingNote: "Bambu Connect has no build for this system" });
+    expect(panelText(p.box)).toContain("cannot sign a print start yet");
+    expect(panelText(p.box)).not.toContain("Bambu Connect can send it with your Bambu login");
+    expect(connectButton(p.box)).toBeUndefined();
+    p.stop();
+  });
 });

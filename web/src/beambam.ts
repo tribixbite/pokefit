@@ -141,16 +141,56 @@ const postJson = (link: Link, path: string, body: unknown, timeoutMs?: number): 
   request(link, path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     timeoutMs);
 
-/** What the daemon says it can do (`/healthz` capabilities); empty for a beambam that predates them. A 503 (the
- * printer is quiet) still carries them. */
-export async function capabilities(link: Link): Promise<string[]> {
+/** The daemon's `/healthz`: what it can do, plus whether it can sign a print start and hand a file to Bambu
+ * Connect. Older daemons send only `capabilities`; the rest is null from them. */
+export interface Health {
+  /** `/healthz` capabilities; empty for a beambam that predates them. */
+  capabilities: string[];
+  /** Whether this beambam can sign a print start itself (`beambam key`); null from one that does not say. */
+  signing: { ready: boolean; problem: string } | null;
+  /** Why POST /connect (hand the file to Bambu Connect) cannot work on the daemon's machine: '' when it can
+   * (installed and supported), a reason when it cannot, null from a beambam without it. */
+  bambuConnect: string | null;
+}
+
+/** `/healthz` `signing` ({ready, problem}) -> itself, or null when absent or malformed. */
+export function signingOf(raw: unknown): { ready: boolean; problem: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as { ready?: unknown; problem?: unknown };
+  return typeof s.ready === "boolean"
+    ? { ready: s.ready, problem: typeof s.problem === "string" ? s.problem : "" }
+    : null;
+}
+
+/** Read `/healthz`. A 503 (the printer is quiet) still carries these; unreachable or an older daemon gives the
+ * empty/null defaults, so the page assumes nothing beyond the basics. */
+export async function health(link: Link): Promise<Health> {
   try {
     const res = await fetch(`${link.url}/healthz`, daemonInit(link));
     const h = (await res.json()) as Json;
-    return Array.isArray(h.capabilities) ? h.capabilities.map(String) : [];
+    return {
+      capabilities: Array.isArray(h.capabilities) ? h.capabilities.map(String) : [],
+      signing: signingOf(h.signing),
+      bambuConnect: typeof h.bambu_connect === "string" ? h.bambu_connect : null,
+    };
   } catch {
-    return [];        // unreachable or an older daemon: assume nothing beyond the basics
+    return { capabilities: [], signing: null, bambuConnect: null };
   }
+}
+
+/** What the daemon says it can do (`/healthz` capabilities); empty for a beambam that predates them. */
+export async function capabilities(link: Link): Promise<string[]> {
+  return (await health(link)).capabilities;
+}
+
+/**
+ * Hand the daemon-side sliced `file` to Bambu Connect on the daemon's machine (`POST /connect`): it prints with
+ * the user's own Bambu login, no signing key, and the printer and filaments are chosen in Bambu Connect. Resolves
+ * with the `bambu-connect://` URL it opened. Use it when `/healthz` `bambuConnect` is '' (installed and supported).
+ */
+export async function connect(link: Link, file: string, name?: string): Promise<string> {
+  const reply = await postJson(link, "/connect", name ? { file, name } : { file });
+  return typeof reply.url === "string" ? reply.url : "";
 }
 
 /**
