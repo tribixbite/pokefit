@@ -52,7 +52,7 @@ from .presets import PresetLibrary, default_system_profiles, load_settings_file
 from .printer import (AmsSlot, CameraProxy, PrinterError, ams_slots, beambam_command, beambam_url,
                       print_file_check, print_plan,
                       print_file_summary,
-                      plate_id, print_progress, read_state, send_print, track_switch)
+                      PLATE_MARKERS, plate_id, print_progress, read_state, send_print, track_switch)
 from .slicer import find_exe, reference_settings
 from .steel import CATALOGUE, DEFAULT_STEEL
 
@@ -139,7 +139,8 @@ def _config() -> dict[str, Any]:
     from .imageto3d import Comfy
     return {**app_config(str(exe) if exe else None, _reference, _reference_name, _presets, _ams), "engine": "local",
             "photos": Comfy(COMFY_URL).alive(timeout=1.5), "printer_link": beambam_command() is not None or beambam_url() is not None,
-            "track_switch": _track_switch, "printer_plate": _plate_id}
+            "track_switch": _track_switch, "printer_plate": _plate_id,
+            "printer_plate_name": PLATE_MARKERS.get(_plate_id or "")}
 
 
 def _run_job(job_id: str, fn: Any) -> None:

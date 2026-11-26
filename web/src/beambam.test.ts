@@ -88,3 +88,33 @@ describe("daemon calls", () => {
     expect((err as Error).message).toContain("--cors-origin");
   });
 });
+
+describe("camera and project sync", () => {
+  test("the camera URL is the daemon's relay; a failure is told in beambam's words", async () => {
+    const { cameraProblem, cameraUrl } = await import("./beambam");
+    expect(cameraUrl(link, 7)).toBe("http://127.0.0.1:8765/camera.mjpeg?n=7");
+    fakeDaemon({ "/snapshot.jpg": () => [503, "camera proxy unreachable; start it with `beambam cam start`"] });
+    expect(await cameraProblem(link)).toContain("beambam cam start");
+    fakeDaemon({ "/snapshot.jpg": () => [200, "jpeg"] });
+    expect(await cameraProblem(link)).toBeNull();
+  });
+
+  test("the trays in order become the spools; the daemon hands the project back or says why not", async () => {
+    const { traySpools, updateProject } = await import("./beambam");
+    const spools = traySpools([
+      { slot: 255, type: "PLA", colour: "#898989", filament_id: "GFL99" },
+      { slot: 4, type: "PETG", colour: "#f4ee2aff", filament_id: "GFG99" },
+      { slot: 0, type: "PLA", colour: "#FFFFFF", filament_id: "" }]);
+    expect(spools).toEqual([{ id: null, type: "PLA", colour: "#FFFFFF" }, { id: "GFG99", type: "PETG", colour: "#F4EE2A" }]);
+    let sent: Record<string, string> = {};
+    globalThis.fetch = (async (_u: string | URL | Request, init?: RequestInit) => {
+      sent = init?.headers as Record<string, string>;
+      return new Response(new Uint8Array([80, 75]), { status: 200 });
+    }) as typeof fetch;
+    const blob = await updateProject(link, "jolteon.3mf", new Uint8Array([1]), spools, "Supertack Plate");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([80, 75]));
+    expect(JSON.parse(sent["X-Slice-Options"])).toEqual({ spools, bed_type: "Supertack Plate" });
+    fakeDaemon({ "/project/update": () => [400, { error: "jolteon.3mf has no print settings" }] });
+    await expect(updateProject(link, "jolteon.3mf", new Uint8Array([1]), spools)).rejects.toThrow("no print settings");
+  });
+});

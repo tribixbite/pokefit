@@ -1,7 +1,8 @@
 /**
- * The "Printer" card (local version with beambam): the printer's live camera and what it is doing.
- * Read-only — nothing here sends a command to the printer. pokefit/printer.py `print_progress` /
- * `CameraProxy`, served at POST /api/printer/status and /api/printer/camera.
+ * The "Printer" card: the printer's live camera and what it is doing, through beambam. Read-only — nothing here
+ * sends a command to the printer. Local version: pokefit/printer.py `print_progress` / `CameraProxy`, served at
+ * POST /api/printer/status and /api/printer/camera. On the site (browser engine linked to the beambam daemon): the
+ * daemon's /state through the engine's `print_progress`, and its camera relay (GET /camera.mjpeg).
  */
 import * as api from "./api";
 import { formatDuration } from "./geometry";
@@ -41,6 +42,8 @@ export function progressText(p: PrintProgress): string {
 export class PrinterCard {
   private timer: number | null = null;
   private watching = false;
+  /** The current stream was already restarted once after an error. */
+  private retried = false;
 
   constructor(
     private readonly button: HTMLButtonElement,
@@ -48,13 +51,33 @@ export class PrinterCard {
     private readonly img: HTMLImageElement,
   ) {
     button.addEventListener("click", () => void (this.watching ? this.stop() : this.start()));
+    img.addEventListener("error", () => void this.cameraFailed());
     document.addEventListener("visibilitychange", () => {
       if (!this.watching) return;
       if (document.hidden) this.clearTimer();
       else void this.poll();
     });
-    // Leaving the page stops the camera child so ffmpeg does not keep pulling the printer's stream.
-    addEventListener("pagehide", () => { if (this.watching) navigator.sendBeacon?.("/api/printer/camera", JSON.stringify({ on: false })); });
+    // Leaving the page stops the camera child so ffmpeg does not keep pulling the printer's stream (local version;
+    // through beambam the closed page closes the stream, and beambam's proxy stops its pump on its own).
+    addEventListener("pagehide", () => {
+      if (this.watching && !api.viaDaemon()) navigator.sendBeacon?.("/api/printer/camera", JSON.stringify({ on: false }));
+    });
+  }
+
+  /** The stream failed: one quiet reconnect when a frame comes through now, else say why (beambam's words). */
+  private async cameraFailed(): Promise<void> {
+    if (!this.watching || !this.img.getAttribute("src")) return;
+    const why = await api.cameraProblem();
+    if (!this.watching) return;
+    if (why === null && !this.retried) {
+      this.retried = true;
+      const url = await api.printerCamera(true).catch(() => null);
+      if (url && this.watching) this.img.src = url;
+      return;
+    }
+    this.img.hidden = true;
+    this.img.removeAttribute("src");
+    this.status.textContent = `Camera: ${why ?? "the live view stopped; press Stop watching, then Watch again"}`;
   }
 
   private clearTimer(): void {
@@ -80,6 +103,7 @@ export class PrinterCard {
     try {
       const url = await api.printerCamera(true);
       if (!this.watching || !url) return;
+      this.retried = false;
       this.img.src = url;
       this.img.hidden = false;
     } catch (err) {

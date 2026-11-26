@@ -180,9 +180,10 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
       return wrap;
     }));
     const verdict = m.errors.length ? "beambam will not start this print: fix the ✗ rows (pick another spool, or load one)."
-      : m.warnings.length ? "Spool check (beambam): Start print accepts the ⚠ differences."
+      : m.warnings.length ? "Check (beambam): Start print accepts the ⚠ warnings."
         : "Spool check (beambam): every spool matches.";
-    check.replaceChildren(el("div", "", verdict), ...m.notes.map((n) => el("div", "muted", n)));
+    check.replaceChildren(el("div", "", verdict), ...printWarnings(m).map((w) => el("div", "warn-text", `⚠ ${w}`)),
+      ...m.notes.map((n) => el("div", "muted", n)));
     startBtn.disabled = starting || reslicing || m.errors.length > 0 || !slotsFromPlan(m);
     showNozzleInfo();
   };
@@ -345,4 +346,12 @@ export function openPrintConfirm(box: HTMLElement, src: ConfirmSource, initial: 
     if (!stopped) timer = window.setTimeout(() => void tick(), src.pollMs);
   })();
   return stop;
+}
+
+/**
+ * The plan's warnings about the print as a whole (the plate on the printer is not the one the file was sliced for),
+ * not shown on a filament's row: beambam's flat list names a filament's own as "filament N: …".
+ */
+export function printWarnings(m: PrintMapping): string[] {
+  return m.warnings.filter((w) => !/^filament \d+: /.test(w));
 }

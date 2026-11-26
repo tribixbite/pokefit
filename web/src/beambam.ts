@@ -112,6 +112,29 @@ export async function capabilities(link: Link): Promise<string[]> {
   }
 }
 
+/**
+ * The chamber camera, live through beambam (`GET /camera.mjpeg`, capability "camera"), for an <img>: the
+ * daemon relays its camera proxy's MJPEG. `n` makes each (re)connect a new URL.
+ */
+export function cameraUrl(link: Link, n: number = Date.now()): string {
+  return `${link.url}/camera.mjpeg?n=${n}`;
+}
+
+/** Why the live view does not show, in beambam's words (its 503 text), or null when a frame comes through now. */
+export async function cameraProblem(link: Link): Promise<string | null> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 25_000);
+  try {
+    const res = await fetch(`${link.url}/snapshot.jpg`, { signal: ctl.signal, cache: "no-store" });
+    if (res.ok) return null;
+    return (await res.text()).trim() || `beambam answered HTTP ${res.status}`;
+  } catch (e) {
+    return `beambam did not answer (${(e as Error).message})`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The printer's state report (the daemon's cached copy: milliseconds). */
 export async function readState(link: Link): Promise<Json> {
   const st = await request(link, "/state");
@@ -119,6 +142,48 @@ export async function readState(link: Link): Promise<Json> {
     throw new DaemonError("beambam has no report from the printer yet: is the printer on and on this network?");
   }
   return st;
+}
+
+/** One project filament's spool for beambam's `spools` option (null id / type: keep the slot's preset). */
+export interface SpoolOption {
+  id: string | null;
+  type: string | null;
+  colour: string;
+}
+
+/**
+ * The project with filament i set to `spools[i]` (the spool's Bambu system preset, material and colour) and, with
+ * `bedType`, its plate: beambam's POST /project/update ("project-sync"), which has the printer's bundled profiles.
+ */
+export async function updateProject(link: Link, name: string, bytes: Uint8Array, spools: SpoolOption[],
+  bedType = ""): Promise<Blob> {
+  const options: Record<string, unknown> = { spools };
+  if (bedType) options.bed_type = bedType;
+  let res: Response;
+  try {
+    res = await fetch(`${link.url}/project/update`, {
+      method: "POST", cache: "no-store", body: bytes as BodyInit,
+      headers: { "Content-Type": "application/octet-stream", "X-Filename": headerName(name),
+        "X-Slice-Options": JSON.stringify(options) },
+    });
+  } catch {
+    throw new DaemonError(`beambam is not reachable at ${link.url}`, true);
+  }
+  if (!res.ok) {
+    let said = "";
+    try {
+      const j = (await res.json()) as Json;
+      said = typeof j.error === "string" ? j.error : "";
+    } catch { /* not JSON */ }
+    throw new DaemonError(`beambam could not update the project: ${said || `HTTP ${res.status}`}`);
+  }
+  return res.blob();
+}
+
+/** The AMS trays in order (A1 … D4, then AMS HT) as `spools`: what "Use the printer's filaments" takes. */
+export function traySpools(ams: { slot: number; type: string; colour: string; filament_id?: string }[]): SpoolOption[] {
+  return ams.filter((a) => a.slot < 254).sort((a, b) => a.slot - b.slot)
+    .map((a) => ({ id: a.filament_id || null, type: a.type || null, colour: a.colour.slice(0, 7).toUpperCase() }));
 }
 
 /** A finished slice on the daemon's machine. */

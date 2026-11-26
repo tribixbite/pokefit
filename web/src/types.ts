@@ -453,6 +453,8 @@ export interface AmsSlot {
   name: string;
   /** Nozzle the AMS unit feeds (firmware id: 0 right, 1 left); null = either (track switch) or unknown. */
   extruder?: number | null;
+  /** Bambu filament id of the spool (tray_info_idx, e.g. GFL99 = Generic PLA); "" when unknown. */
+  filament_id?: string;
 }
 
 /** What the printer is doing (pokefit/printer.py PrintProgress). */
@@ -574,6 +576,8 @@ export interface Config {
   project_sync?: ProjectSync | null;
   /** The build plate marker the printer read (X2D device.plate.cur_id), not decoded into a type. */
   printer_plate?: string | null;
+  /** The plate on the printer by Bambu's name, when its marker is a known one (printer.PLATE_MARKERS). */
+  printer_plate_name?: string | null;
   /** The printer has a Filament Track Switch: any AMS spool can feed either nozzle. */
   track_switch?: boolean;
   /** The printer's loaded AMS filaments (once read): the slots colours are matched to. */

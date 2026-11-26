@@ -106,11 +106,14 @@ the same device (`web/src/beambam.ts`; opt-in under Print → "Connect to beamba
    becomes tray i: its preset, material, colour; the project's slots past the spools stay, so objects assigned to
    them still have a filament) and "Download the updated project" (a copy of the user's .3mf with the new
    settings, else a project .json). The plate is Print settings → Plate (`Params.bed_type` → `curr_bed_type`);
-   the printer's plate marker (`device.plate.cur_id`, e.g. P0301) is shown, not decoded: no public mapping, and
-   this X2D's marker did not match the plate its jobs use.
+   the printer's plate marker (`device.plate.cur_id`) is named when it is a confirmed one (`printer.PLATE_MARKERS`:
+   P0301 = SuperTack, the same table as beambam's), and a project set up for another plate is flagged; taking the
+   printer's filaments takes its plate too. On the site, with beambam's "project-sync", the slots get the spools'
+   system presets from beambam (POST /project/update), which has the printer's profiles.
 
 The site probes nothing until the user connects: probing 127.0.0.1 for every visitor would show them Chrome's
-prompt. The daemon has no camera route, so the Printer card shows status only there.
+prompt. With beambam's "camera" capability the Printer card shows the daemon's camera relay (GET /camera.mjpeg)
+there too; without it, status only.
 
 ## Next steps (need the user / the printer)
 

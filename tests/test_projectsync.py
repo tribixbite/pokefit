@@ -61,3 +61,15 @@ def test_updated_project_copies_the_users_file_with_the_new_settings(tmp_path: P
         assert z.read("3D/3dmodel.model") == b"<model/>"
     name, data = updated_project(None, new, "x2d_petg_printed_ball_shells.json")
     assert name == "x2d_petg_printed_ball_shells_printer.json" and json.loads(data)["from"] == "project"
+
+
+def test_the_printers_plate_is_named_only_for_known_markers():
+    """P0301 is the SuperTack plate (an X2D owner's, 2026-11-26); another marker stays a marker."""
+    from pokefit.printer import plate_id, plate_name
+    on = lambda cur: {"print": {"device": {"plate": {"base": 9, "cur_id": cur, "mat": 1, "tar_id": ""}}}}  # noqa: E731
+    assert (plate_id(on("P0301")), plate_name(on("P0301"))) == ("P0301", "Supertack Plate")
+    assert (plate_id(on("P0999")), plate_name(on("P0999"))) == ("P0999", None)
+    assert plate_name({"print": {}}) is None
+    from pokefit.projectsync import BED_TYPES
+    from pokefit.printer import PLATE_MARKERS
+    assert set(PLATE_MARKERS.values()) <= set(BED_TYPES)

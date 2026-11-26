@@ -43,14 +43,18 @@ exist only on the original Windows machine (ask the user for the files).
      (code -51 "Too small line width"): those lines now widen to layer + 0.02 mm.
    - 2026-11-26: headed run in Edge Canary on the phone (pokefit.party + beambam 1.7.0): Edge asked "pokefit.party
      wants to access other apps and services on this device" (allowed), then connect → slice → nozzles → re-slice
-     all worked. "Project vs printer" added (projectsync); the plate marker P0301 is not decoded yet — ask the user
-     which plate is on the printer to add the first entry.
+     all worked. "Project vs printer" added (projectsync). The plate marker P0301 is the SuperTack plate (the
+     owner, 2026-11-26): `printer.PLATE_MARKERS`, the same table as beambam's.
    - Needs beambam ≥ 1.7.0 (released 2026-11-26) for the nozzle switch (/healthz "plan-sliced-nozzles"); with an
      older one the panel says to update. Before d57bf47: older ones label Bambu's own split all "left" (they read
      project_settings' `filament_map`, all 1 in Auto For Flush), so the first Left/Right pick starts from that
      wrong split. A manual map reads correctly on any version. Verified 2026-11-25 from the site: yellow + brown
      left, white + black right started on the X2D (PREPARE → RUNNING in 8 s) and was stopped before the bed heated.
-   - The daemon has no camera route: the Printer card shows status only on the site.
+   - 2026-11-26: with beambam's "camera" (GET /camera.mjpeg, `daemon --camera`) the site's Printer card shows the
+     live camera too; checked headed in Edge on the phone. With "project-sync", "Use the printer's filaments" on
+     the site asks beambam (POST /project/update) to give each slot its spool's system preset: the browser
+     engine has no Bambu profiles, so a PETG spool used to get the project's Generic PLA slot (0 → 12 of 16
+     matched; now 16 of 16). Loading a project while linked no longer hides the Printer card and AMS row.
    - The daemon runs from a shell on the phone and dies with Termux under memory pressure: it needs a service
      entry (operad / boot script) before the site can rely on it.
    - TODO: re-measure `has_filament_switcher` 0 vs 1 with `--has-filament-switcher=1` (the CLI forced 0 before).

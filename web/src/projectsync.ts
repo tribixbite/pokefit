@@ -3,11 +3,26 @@
  * "Use my printer's AMS" locally), compare the project's filament list, slot by slot, with the AMS trays in order
  * (the engine's projectsync.compare) and offer what Bambu Studio offers after it connects to a printer: take the
  * printer's filaments as the project's (its slices and exports use them; slots past the spools stay), and
- * download the updated project to keep. The plate the project prints on is shown with the plate marker the
- * printer reports; Print settings → Plate changes it (the marker is not decoded: no public mapping).
+ * download the updated project to keep. The plate the project prints on is compared with the plate on the
+ * printer when its marker is a known one (printer.PLATE_MARKERS), else the marker is shown; Print settings → Plate
+ * changes it, and taking the printer's filaments takes its known plate too.
  */
 import { textOn } from "./colour";
 import type { Config, ProjectSync } from "./types";
+
+/** "SuperTack plate", "Textured PEI plate": a Bambu plate name in its maker's words. */
+export function plateText(name: string): string {
+  return name.replace(/^Supertack/, "SuperTack").replace(/ Plate$/, " plate");
+}
+
+/** The plate line: the project's plate against the printer's (named when known, else its marker). */
+export function plateLine(project: string | null, printerName: string | null | undefined, marker: string | null | undefined): { text: string; differs: boolean } {
+  const differs = !!project && !!printerName && project !== printerName;
+  const head = project ? `The project prints on the ${plateText(project)}` : "The project names no plate";
+  const tail = printerName ? `; the printer has the ${plateText(printerName)} on`
+    : marker ? `; the printer reports plate marker ${marker} (not known yet)` : "";
+  return { text: `${head}${tail}.${differs || !printerName ? " Change it under Print settings → Plate if that is not the plate on the printer." : ""}`, differs };
+}
 
 export interface ProjectSyncHost {
   /** Take the printer's filaments (and the plate chosen in Print settings, if any) as the project's. */
@@ -63,14 +78,15 @@ export function renderProjectSync(box: HTMLElement, cfg: Config, host: ProjectSy
     }
     parts.push(list);
   }
-  const plate = s.plate ? `The project prints on the ${s.plate}` : "The project names no plate";
-  parts.push(el("div", "muted", `${plate}${cfg.printer_plate ? `; the printer reports plate marker ${cfg.printer_plate}` : ""}. ` +
-    "Change it under Print settings → Plate if that is not the plate on the printer."));
+  const plate = plateLine(s.plate, cfg.printer_plate_name, cfg.printer_plate);
+  parts.push(el("div", plate.differs ? "warn-text" : "muted", plate.text));
   const buttons = el("div", "row");
-  if (s.differs) {
-    const use = el("button", "btn", "Use the printer's filaments");
+  if (s.differs || plate.differs) {
+    const use = el("button", "btn", s.differs ? "Use the printer's filaments" : `Use the ${plateText(cfg.printer_plate_name ?? "")}`);
     use.type = "button";
-    use.title = "The project's filament i becomes the printer's tray i (A1, A2, …): its material, preset and colour";
+    use.title = (s.differs ? "The project's filament i becomes the printer's tray i (A1, A2, …): its material, preset and colour"
+      : "The project prints on the plate that is on the printer") +
+      (cfg.printer_plate_name ? `; the plate becomes the ${plateText(cfg.printer_plate_name)}` : "");
     use.addEventListener("click", () => void run(use, host.adopt));
     buttons.append(use);
   }

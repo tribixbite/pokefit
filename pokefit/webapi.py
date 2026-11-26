@@ -20,7 +20,7 @@ from .pipeline import (Params, Session, analyse, app_config, auto_simplify, expo
                        print_project as _print_project, reopened,
                        prepare_paint, preview_faces, preview_glb, safe_stem, steel_table)
 from .presets import PresetLibrary, load_settings_file
-from .printer import AmsSlot, ams_slots, plate_id, print_progress as _print_progress, track_switch
+from .printer import PLATE_MARKERS, AmsSlot, ams_slots, plate_id, print_progress as _print_progress, track_switch
 
 WORK = Path("/tmp/pokefit")
 _sessions: dict[str, Session] = {}
@@ -62,7 +62,8 @@ def _session(sid: str) -> Session:
 
 def config() -> str:
     return _dump({**app_config(None, _reference, _reference_name, _presets, _ams), "engine": "browser",
-                  "track_switch": _track_switch, "printer_plate": _plate_id})
+                  "track_switch": _track_switch, "printer_plate": _plate_id,
+                  "printer_plate_name": PLATE_MARKERS.get(_plate_id or "")})
 
 
 def set_printer(state_json: str) -> str:

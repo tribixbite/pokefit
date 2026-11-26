@@ -1206,7 +1206,8 @@ async function linkBeambam(on: boolean, quiet: boolean): Promise<void> {
 async function adoptPrinter(): Promise<void> {
   busy(true, "Taking the printer's filaments…");
   try {
-    state.config = await api.adoptPrinter(state.params.bed_type ?? "");
+    // The plate chosen in Print settings, else the plate on the printer when its marker is a known one.
+    state.config = await api.adoptPrinter(state.params.bed_type ?? state.config?.printer_plate_name ?? "");
     renderSlots(state.config);
     renderPrinter(state.config);
     syncControls();

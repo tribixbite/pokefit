@@ -48,3 +48,13 @@ describe("print confirm", () => {
     expect(nozzlesWith(sparse, 4, 2)).toEqual([1, 2, 1, 2]);
   });
 });
+
+describe("print-wide warnings", () => {
+  test("the plate warning is shown apart from the filament rows' own", async () => {
+    const { printWarnings } = await import("./printconfirm");
+    const m = { filaments: [], errors: [], notes: [], warnings: [
+      "this file was sliced for the Textured PEI Plate, but the printer has the Supertack Plate on: swap the plate, or slice again for the plate that is on",
+      "filament 1: colour differs (ΔE 12)"] };
+    expect(printWarnings(m as never)).toEqual([m.warnings[0]]);
+  });
+});

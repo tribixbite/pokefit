@@ -133,6 +133,11 @@ export async function connectBeambam(url: string): Promise<Config> {
 
 /** The connected daemon's `/healthz` capabilities (beambam.ts `capabilities`). */
 let daemonCaps: string[] = [];
+/** Why the live view stopped, in beambam's words (null: a frame comes through, try again). Local version: null. */
+export async function cameraProblem(): Promise<string | null> {
+  return viaDaemon() ? bb.cameraProblem(link) : null;
+}
+
 export function daemonCan(capability: string): boolean {
   return viaDaemon() && daemonCaps.includes(capability);
 }
@@ -231,7 +236,9 @@ export async function setReference(file: File): Promise<Config> {
     return (await res.json()) as Config;
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  return json<Config>(await call("setReference", [file.name, bytes], [bytes.buffer]));
+  const cfg = json<Config>(await call("setReference", [file.name, bytes], [bytes.buffer]));
+  // Still linked to the beambam daemon: keep the printer's card and AMS row (the engine's config does not say so).
+  return viaDaemon() ? linked(cfg) : cfg;
 }
 
 /** Browser engine: the user's copy of the ball model, so exports include the steel-seat shell. */
@@ -339,7 +346,15 @@ export async function readPrinter(clear = false): Promise<Config> {
 /** Take the printer's loaded spools as the project's filament list (and `bedType` as its plate; "" keeps it). */
 export async function adoptPrinter(bedType = ""): Promise<Config> {
   if (mode === "local") return postJson<Config>("/api/printer/adopt", { bed_type: bedType });
-  return linked(json<Config>(await call("adoptPrinter", [bedType])));
+  const cfg = linked(json<Config>(await call("adoptPrinter", [bedType])));
+  if (!viaDaemon() || !daemonCan("project-sync")) return cfg;
+  // The engine has no Bambu system profiles in the browser, so a spool of a material the project lacks got a slot of
+  // another material (a PETG spool, Generic PLA). beambam has the printer's profiles: it gives each slot its spool's
+  // preset, material and colour (POST /project/update, beambam/project_sync.py), and that becomes the project.
+  const [name, bytes] = await call<[string, Uint8Array]>("updatedProject", []);
+  if (!/\.3mf$/i.test(name)) return cfg;                 // a presets-only project: nothing for beambam to rewrite
+  const blob = await bb.updateProject(link, name, bytes, bb.traySpools(cfg.ams ?? []), bedType);
+  return setReference(new File([blob], name.replace(/_printer(\.3mf)$/i, "$1")));
 }
 
 /** The project with the filament list and plate now in use, to keep (a copy of the user's .3mf, else .json). */
@@ -361,9 +376,16 @@ export async function printerStatus(): Promise<PrintProgress> {
   return (await postJson<{ progress: PrintProgress }>("/api/printer/status", {})).progress;
 }
 
-/** Start (`on`) or stop the printer's live view; returns its MJPEG URL when on. */
+/**
+ * Start (`on`) or stop the printer's live view; returns its MJPEG URL when on. Through the beambam daemon (the
+ * site) it is the daemon's relay, when it has one ("camera"); the local version runs a `beambam camera` child.
+ */
 export async function printerCamera(on: boolean): Promise<string | null> {
-  if (viaDaemon()) return null;          // the live view is the local version's (beambam camera child)
+  if (viaDaemon()) {
+    if (!on) return null;                // dropping the <img> closes the stream
+    if (!daemonCan("camera")) throw new Error("this beambam cannot show the camera: update it and start the daemon with --camera");
+    return bb.cameraUrl(link);
+  }
   if (mode !== "local") throw new Error("Watching the printer needs beambam: connect to it under Print.");
   return (await postJson<{ url: string | null }>("/api/printer/camera", { on })).url;
 }

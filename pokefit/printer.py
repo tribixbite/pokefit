@@ -181,12 +181,22 @@ def _unit_extruder(info: Any) -> int | None:
 
 # TODO: without a switch, pass each colour's allowed nozzle (its matched slot's `extruder`) to
 # `toolchange.plan(allowed=...)`; needs the firmware-id -> Bambu `filament_map` (1-based) side mapping verified.
+# Build plate markers confirmed against a known plate -> Bambu Studio's `curr_bed_type`. No public table exists, so
+# only checked markers are listed (P0301 = the SuperTack plate, an X2D owner's, 2026-11-26); the same table as
+# beambam's filament_mapping.PLATE_MARKERS.
+PLATE_MARKERS: dict[str, str] = {"P0301": "Supertack Plate"}
+
+
 def plate_id(state: dict[str, Any]) -> str | None:
-    """The build plate's marker id the printer read (X2D `device.plate.cur_id`, e.g. "P0301"), if it reports one.
-    Not decoded into a plate type: no public mapping, and one X2D's id did not match the plate its jobs use."""
+    """The build plate's marker id the printer read (X2D `device.plate.cur_id`, e.g. "P0301"), if it reports one."""
     pr = state.get("print") or state
     cur = ((pr.get("device") or {}).get("plate") or {}).get("cur_id")
     return str(cur) if cur else None
+
+
+def plate_name(state: dict[str, Any]) -> str | None:
+    """The plate on the printer as Bambu Studio names it (`curr_bed_type`), when its marker is a known one."""
+    return PLATE_MARKERS.get(plate_id(state) or "")
 
 
 def track_switch(state: dict[str, Any]) -> bool:
